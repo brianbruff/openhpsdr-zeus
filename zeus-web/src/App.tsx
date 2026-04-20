@@ -127,6 +127,12 @@ export default function App() {
   const qrzLookup = useQrzStore((s) => s.lastLookup);
   const qrzHasXml = useQrzStore((s) => s.hasXmlSubscription);
   const qrzActive = !!qrzHome && qrzHasXml;
+
+  // Live rotator heading — drives the map's beam lines when rotctld is up so
+  // the beam shows the actual antenna direction, not the great-circle bearing
+  // to the current QRZ lookup.
+  const rotStatus = useRotatorStore((s) => s.status);
+  const rotLiveAz = rotStatus?.connected ? rotStatus.currentAz : null;
   const contact: Contact | null = qrzActive
     ? qrzStationToContact(qrzLookup, qrzHome)
     : (CONTACTS[callsign.toUpperCase()] ?? null);
@@ -447,7 +453,7 @@ export default function App() {
                     inputMode="decimal"
                     value={beamInputStr}
                     onChange={(e) => setBeamInputStr(e.target.value)}
-                    placeholder={(beamOverrideDeg ?? sp).toFixed(0)}
+                    placeholder={(((rotLiveAz ?? beamOverrideDeg ?? sp) % 360 + 360) % 360).toFixed(0)}
                     style={{
                       width: 40,
                       background: 'transparent',
@@ -501,7 +507,14 @@ export default function App() {
                       }
                     : null
                 }
-                beamBearing={beamOverrideDeg ?? undefined}
+                beamBearing={
+                  // Priority: rotctld live azimuth (ground truth — where the
+                  // antenna is actually pointing, including mid-rotation); then
+                  // the manual Go override (used when rotator is offline);
+                  // finally undefined, so LeafletWorldMap falls back to the
+                  // great-circle bearing to the target.
+                  rotLiveAz ?? beamOverrideDeg ?? undefined
+                }
                 active={terminatorActive}
                 interactive={mapInteractive}
                 onRotateToBearing={(brg) => {

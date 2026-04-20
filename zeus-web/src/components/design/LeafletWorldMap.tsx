@@ -20,6 +20,10 @@ type LeafletWorldMapProps = {
   beamBearing?: number;
   /** Beam range in km — Log4YM uses 5000 km to reach across oceans. */
   beamRangeKm?: number;
+  /** Half-angle of the beam span rendered as side-lobe lines either side of
+   *  the centre bearing, in degrees. Default 15° (≈ 30° total span) matches
+   *  a medium-gain yagi; set to 0 to draw just the single centre beam. */
+  beamHalfWidthDeg?: number;
   /** When true, arcs and markers are drawn; otherwise the map renders empty-ish. */
   active: boolean;
   /** When true, user can drag/zoom the map (zoom control appears). Off by
@@ -174,6 +178,7 @@ export function LeafletWorldMap({
   target,
   beamBearing,
   beamRangeKm = 5000,
+  beamHalfWidthDeg = 15,
   active,
   interactive = false,
   onRotateToBearing,
@@ -331,26 +336,37 @@ export function LeafletWorldMap({
         };
       });
 
-      // Beam heading from home — cyan dashed, Log4YM style. Defaults to the
-      // initial great-circle bearing; the user's manual override (or the
-      // rotator's commanded azimuth upstream) replaces it.
+      // Beam lines — great-circle paths rather than straight Mercator lines
+      // so the beam follows the same curvature as the home→target arc above.
+      // Three parallel paths (centre + ±halfWidth) visualise the antenna's
+      // approximate 3 dB span: the outer pair make it obvious how much sky
+      // the beam covers at long range (think of looking west from Ireland
+      // and seeing the whole NE corridor light up). Cyan dashed keeps the
+      // semantic separate from the amber home→target arc.
       const beam = beamBearing ?? bear;
-      const beamEnd = destinationPoint(home.lat, home.lon, beam, beamRangeKm);
-      L.polyline(
-        [
-          [home.lat, home.lon],
-          beamEnd,
-        ],
-        {
-          color: COLOR_CYAN,
-          weight: 3,
-          opacity: 0.7,
-          dashArray: '10, 5',
-          lineCap: 'round',
-        },
-      ).addTo(layer);
+      const offsets = beamHalfWidthDeg > 0
+        ? [-beamHalfWidthDeg, 0, beamHalfWidthDeg]
+        : [0];
+      for (const offset of offsets) {
+        const bearingForLine = beam + offset;
+        const endpoint = destinationPoint(home.lat, home.lon, bearingForLine, beamRangeKm);
+        const segments = greatCircleSegments(
+          { lat: home.lat, lon: home.lon },
+          { lat: endpoint[0], lon: endpoint[1] },
+        );
+        const isCentre = offset === 0;
+        for (const seg of segments) {
+          L.polyline(seg, {
+            color: COLOR_CYAN,
+            weight: isCentre ? 3 : 2,
+            opacity: isCentre ? 0.75 : 0.35,
+            dashArray: '10, 5',
+            lineCap: 'round',
+          }).addTo(layer);
+        }
+      }
     }
-  }, [home, target, beamBearing, beamRangeKm, active]);
+  }, [home, target, beamBearing, beamRangeKm, beamHalfWidthDeg, active]);
 
   return (
     <div

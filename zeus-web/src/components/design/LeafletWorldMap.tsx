@@ -3,9 +3,19 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { bearingDeg, destinationPoint, distanceKm, greatCircleSegments } from './geo';
 
+type MapStation = {
+  call: string;
+  lat: number;
+  lon: number;
+  grid?: string | null;
+  /** QRZ portrait URL. When present the marker renders as a circular photo
+   *  avatar (Log4YM MapPlugin style); otherwise falls back to a radio emoji. */
+  imageUrl?: string | null;
+};
+
 type LeafletWorldMapProps = {
-  home: { call: string; lat: number; lon: number; grid?: string | null };
-  target: { call: string; lat: number; lon: number; grid?: string | null } | null;
+  home: MapStation;
+  target: MapStation | null;
   /** Beam bearing (deg, 0=N, CW). Defaults to initial great-circle bearing when target is set. */
   beamBearing?: number;
   /** Beam range in km — Log4YM uses 5000 km to reach across oceans. */
@@ -34,7 +44,6 @@ const TILE_ATTRIBUTION =
 // theme rework only needs to touch one block.
 const COLOR_AMBER = '#ffb432';
 const COLOR_CYAN = '#00ddff';
-const COLOR_CYAN_DIM = '#00bbdd';
 const COLOR_BG_DARK = '#1a1e26';
 const COLOR_TEXT_MUTED = '#a5b4c8';
 
@@ -44,27 +53,79 @@ function escapeHtml(s: string): string {
   );
 }
 
-// divIcon factories — matches Log4YM's stationIcon / targetIcon visuals.
-function homeIcon(): L.DivIcon {
-  const html = `
-    <div style="
-      width: 24px; height: 24px; border-radius: 50%;
-      background: linear-gradient(135deg, ${COLOR_CYAN}, ${COLOR_CYAN_DIM});
-      border: 3px solid #ffffff;
-      box-shadow: 0 0 10px rgba(0, 221, 255, 0.6);
-    "></div>`;
-  return L.divIcon({ className: 'lf-marker', html, iconSize: [24, 24], iconAnchor: [12, 12] });
+// divIcon factories — matches Log4YM's MapPlugin `createCallsignImageIcon`
+// pattern: circular photo avatar with a callsign chip underneath. Home uses
+// cyan borders; target uses amber. If the operator has no QRZ portrait the
+// inner image falls back to a radio emoji.
+const AVATAR_SIZE = 56;
+const CHIP_OFFSET = 4; // gap between avatar and callsign chip
+const CHIP_HEIGHT = 18;
+
+function escapeAttr(s: string): string {
+  return s.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-function targetIcon(): L.DivIcon {
+function callsignAvatarIcon(station: MapStation, tone: 'home' | 'target'): L.DivIcon {
+  const isHome = tone === 'home';
+  const ring = isHome ? COLOR_CYAN : COLOR_AMBER;
+  const glow = isHome ? 'rgba(0, 221, 255, 0.55)' : 'rgba(168, 221, 255, 0.55)';
+  const chipBg = isHome ? 'rgba(0, 221, 255, 0.15)' : 'rgba(255, 180, 50, 0.15)';
+  const chipBorder = isHome ? 'rgba(0, 221, 255, 0.6)' : 'rgba(255, 180, 50, 0.6)';
+  const chipText = isHome ? COLOR_CYAN : COLOR_AMBER;
+
+  const img = station.imageUrl
+    ? `<img src="${escapeAttr(station.imageUrl)}"
+        alt="" loading="lazy" referrerpolicy="no-referrer"
+        onerror="this.style.display='none';this.parentNode.querySelector('.lf-avatar-fallback').style.display='flex';"
+        style="
+          position: absolute; inset: 3px; width: ${AVATAR_SIZE - 6}px; height: ${AVATAR_SIZE - 6}px;
+          border-radius: 50%; object-fit: cover;
+        " />`
+    : '';
+  const fallbackDisplay = station.imageUrl ? 'none' : 'flex';
+  const call = escapeAttr(station.call);
+
   const html = `
-    <div style="
-      width: 20px; height: 20px; border-radius: 50%;
-      background: linear-gradient(135deg, ${COLOR_AMBER}, #ff4466);
-      border: 2px solid #ffffff;
-      box-shadow: 0 0 8px rgba(255, 180, 50, 0.6);
-    "></div>`;
-  return L.divIcon({ className: 'lf-marker', html, iconSize: [20, 20], iconAnchor: [10, 10] });
+    <div style="position: relative; width: ${AVATAR_SIZE}px; height: ${AVATAR_SIZE + CHIP_OFFSET + CHIP_HEIGHT}px;">
+      <div style="
+        position: absolute; top: 0; left: 0;
+        width: ${AVATAR_SIZE}px; height: ${AVATAR_SIZE}px;
+        border-radius: 50%;
+        background: ${COLOR_BG_DARK};
+        border: 3px solid ${ring};
+        box-shadow: 0 0 10px ${glow};
+      ">
+        ${img}
+        <div class="lf-avatar-fallback" style="
+          position: absolute; inset: 3px; border-radius: 50%;
+          display: ${fallbackDisplay};
+          align-items: center; justify-content: center;
+          font-size: 26px; line-height: 1;
+        ">📻</div>
+      </div>
+      <div style="
+        position: absolute;
+        top: ${AVATAR_SIZE + CHIP_OFFSET}px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 1px 6px;
+        border-radius: 3px;
+        background: ${chipBg};
+        border: 1px solid ${chipBorder};
+        color: ${chipText};
+        font: 700 10px/1.3 ui-monospace, SFMono-Regular, monospace;
+        letter-spacing: 0.06em;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+        white-space: nowrap;
+      ">${call}</div>
+    </div>`;
+
+  return L.divIcon({
+    className: 'lf-marker',
+    html,
+    iconSize: [AVATAR_SIZE, AVATAR_SIZE + CHIP_OFFSET + CHIP_HEIGHT],
+    iconAnchor: [AVATAR_SIZE / 2, AVATAR_SIZE / 2],
+  });
 }
 
 function buildTargetPopup(
@@ -220,10 +281,10 @@ export function LeafletWorldMap({
     layer.clearLayers();
     if (!active) return;
 
-    // Home marker — cyan gradient divIcon (Log4YM stationIcon style).
+    // Home marker — circular photo avatar (cyan ring) with callsign chip.
     const homeLabel = home.grid ? `${home.call} · ${home.grid}` : home.call;
-    L.marker([home.lat, home.lon], { icon: homeIcon() })
-      .bindTooltip(homeLabel, { permanent: true, direction: 'right', className: 'lf-tt lf-tt-home', offset: [14, 0] })
+    L.marker([home.lat, home.lon], { icon: callsignAvatarIcon(home, 'home') })
+      .bindTooltip(homeLabel, { direction: 'top', className: 'lf-tt lf-tt-home' })
       .addTo(layer);
 
     if (target) {
@@ -245,14 +306,9 @@ export function LeafletWorldMap({
         }).addTo(layer);
       }
 
-      // Target marker — amber gradient divIcon with permanent callsign label.
-      const marker = L.marker([target.lat, target.lon], { icon: targetIcon() })
-        .bindTooltip(target.call, {
-          permanent: true,
-          direction: 'left',
-          className: 'lf-tt lf-tt-target',
-          offset: [-12, 0],
-        })
+      // Target marker — circular photo avatar (amber ring) with callsign chip
+      // + click-to-reveal popup carrying grid / bearing / distance / Rotate.
+      const marker = L.marker([target.lat, target.lon], { icon: callsignAvatarIcon(target, 'target') })
         .bindPopup(buildTargetPopup(target, bear, dist, !!onRotateRef.current), {
           closeButton: true,
           className: 'lf-popup-wrap',

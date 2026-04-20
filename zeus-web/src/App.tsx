@@ -230,8 +230,14 @@ export default function App() {
   // takes precedence; otherwise the design-mock HOME constant keeps the
   // disconnected demo looking populated.
   const effectiveHome = qrzHome && qrzHome.lat != null && qrzHome.lon != null
-    ? { call: qrzHome.callsign, lat: qrzHome.lat, lon: qrzHome.lon, grid: qrzHome.grid ?? '' }
-    : { call: HOME.call, lat: HOME.lat, lon: HOME.lon, grid: HOME.grid };
+    ? {
+        call: qrzHome.callsign,
+        lat: qrzHome.lat,
+        lon: qrzHome.lon,
+        grid: qrzHome.grid ?? '',
+        imageUrl: qrzHome.imageUrl ?? null,
+      }
+    : { call: HOME.call, lat: HOME.lat, lon: HOME.lon, grid: HOME.grid, imageUrl: null as string | null };
 
   const sp = contact ? bearingDeg(effectiveHome.lat, effectiveHome.lon, contact.lat, contact.lon) : 0;
   const lp = (sp + 180) % 360;
@@ -477,10 +483,22 @@ export default function App() {
           <div className="panel-body hero-body">
             <div className={`map-layer ${terminatorActive ? 'visible' : ''}`}>
               <LeafletWorldMap
-                home={{ call: effectiveHome.call, lat: effectiveHome.lat, lon: effectiveHome.lon, grid: effectiveHome.grid }}
+                home={{
+                  call: effectiveHome.call,
+                  lat: effectiveHome.lat,
+                  lon: effectiveHome.lon,
+                  grid: effectiveHome.grid,
+                  imageUrl: effectiveHome.imageUrl,
+                }}
                 target={
                   contact
-                    ? { call: contact.callsign, lat: contact.lat, lon: contact.lon, grid: contact.grid }
+                    ? {
+                        call: contact.callsign,
+                        lat: contact.lat,
+                        lon: contact.lon,
+                        grid: contact.grid,
+                        imageUrl: contact.photoUrl ?? null,
+                      }
                     : null
                 }
                 beamBearing={beamOverrideDeg ?? undefined}

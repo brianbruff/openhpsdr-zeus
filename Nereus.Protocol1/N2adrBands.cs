@@ -1,0 +1,51 @@
+namespace Nereus.Protocol1;
+
+/// <summary>
+/// N2ADR 7-relay filter board band-to-OC-pin lookup. Returns the raw pin
+/// mask (bits 0..6 = pins 1..7) for a given VFO-A frequency. The caller is
+/// responsible for shifting into its final wire location — deskhpsdr writes
+/// <c>output_buffer[C2] |= rxband-&gt;OCrx &lt;&lt; 1</c> (old_protocol.c:2550).
+///
+/// Masks match the Thetis "HERMESLITE" defaults at setup.cs:14655-14699
+/// (line numbers from OpenHPSDR-Thetis commit on bek's machine 2026-04-15).
+/// The N2ADR board has 6 distinct LPFs sharing pin 7 as a common enable:
+/// <list type="bullet">
+/// <item>160m: pin 1 (alone, no pin 7)</item>
+/// <item>80m:  pins 2 + 7</item>
+/// <item>60m + 40m share pin 3 + 7</item>
+/// <item>30m + 20m share pin 4 + 7</item>
+/// <item>17m + 15m share pin 5 + 7</item>
+/// <item>12m + 10m share pin 6 + 7</item>
+/// </list>
+/// See docs/prd/09-n2adr-bands.md for the full band-edge rationale.
+/// </summary>
+public static class N2adrBands
+{
+    /// <summary>
+    /// Compute the N2ADR RX OC pin mask for <paramref name="vfoHz"/>.
+    /// Returns 0 for frequencies outside 160m..10m (no LPF engaged).
+    /// </summary>
+    public static byte RxOcMask(long vfoHz)
+    {
+        // Ranges are keyed on "lowest frequency above which this band is the
+        // active filter", matching the Thetis band table's lower edges. The
+        // gap between band edges (e.g. 4.0-5.3 MHz) falls into the previous
+        // band; that matches how real SDRs behave when the user parks between
+        // ham bands, and keeps the nearest useful LPF engaged.
+        return vfoHz switch
+        {
+            <   1_800_000 => (byte)0x00,   // below 160m — no filter
+            <   3_500_000 => (byte)0x01,   // 160m: pin 1
+            <   5_300_000 => (byte)0x42,   // 80m:  pins 2+7
+            <   7_000_000 => (byte)0x44,   // 60m:  pins 3+7
+            <  10_100_000 => (byte)0x44,   // 40m:  pins 3+7
+            <  14_000_000 => (byte)0x48,   // 30m:  pins 4+7
+            <  18_068_000 => (byte)0x48,   // 20m:  pins 4+7
+            <  21_000_000 => (byte)0x50,   // 17m:  pins 5+7
+            <  24_890_000 => (byte)0x50,   // 15m:  pins 5+7
+            <  28_000_000 => (byte)0x60,   // 12m:  pins 6+7
+            <= 29_700_000 => (byte)0x60,   // 10m:  pins 6+7
+            _             => (byte)0x00,   // 6m and up — no LPF on N2ADR
+        };
+    }
+}

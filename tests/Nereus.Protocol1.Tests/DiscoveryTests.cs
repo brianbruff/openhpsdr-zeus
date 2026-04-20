@@ -1,0 +1,194 @@
+using System.Net;
+using System.Net.NetworkInformation;
+using Nereus.Protocol1.Discovery;
+
+namespace Nereus.Protocol1.Tests;
+
+public class DiscoveryTests
+{
+    private static readonly IPAddress FromIp = IPAddress.Parse("192.168.1.42");
+
+    [Fact]
+    public void Parses_HermesLite2_Reply()
+    {
+        var reply = BuildReply(new ReplyFields(
+            Status: 0x02,
+            Mac: new byte[] { 0x00, 0x1C, 0xC0, 0xDE, 0xCA, 0xFE },
+            CodeVersion: 73,
+            BoardId: 0x06,
+            Hl2Flags: 0x00,
+            GatewareBuild: 19,
+            Hl2Minor: 2));
+
+        Assert.True(ReplyParser.TryParse(reply, FromIp, out var radio));
+        Assert.Equal(HpsdrBoardKind.HermesLite2, radio.Board);
+        Assert.Equal(new PhysicalAddress(new byte[] { 0x00, 0x1C, 0xC0, 0xDE, 0xCA, 0xFE }), radio.Mac);
+        Assert.Equal(FromIp, radio.Ip);
+        Assert.Equal((byte)73, radio.FirmwareVersion);
+        Assert.Equal("73.2", radio.FirmwareString);
+        Assert.Equal((byte?)2, radio.Details.HermesLite2MinorVersion);
+        Assert.False(radio.Details.FixedIpEnabled);
+        Assert.False(radio.Details.Busy);
+    }
+
+    [Fact]
+    public void Parses_Hermes_Reply()
+    {
+        var reply = BuildReply(new ReplyFields(
+            Status: 0x02,
+            Mac: new byte[] { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66 },
+            CodeVersion: 31,
+            BoardId: 0x01,
+            GatewareBuild: 7));
+
+        Assert.True(ReplyParser.TryParse(reply, FromIp, out var radio));
+        Assert.Equal(HpsdrBoardKind.Hermes, radio.Board);
+        Assert.Equal("3.1", radio.FirmwareString);
+        Assert.Null(radio.Details.HermesLite2MinorVersion);
+        Assert.False(radio.Details.FixedIpEnabled);
+        Assert.Equal((byte)0x01, radio.Details.RawBoardId);
+    }
+
+    [Fact]
+    public void Parses_Anan10_Or_Orion_Reply()
+    {
+        var reply = BuildReply(new ReplyFields(
+            Status: 0x02,
+            Mac: new byte[] { 0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE },
+            CodeVersion: 42,
+            BoardId: 0x05,
+            GatewareBuild: 11));
+
+        Assert.True(ReplyParser.TryParse(reply, FromIp, out var radio));
+        Assert.Equal(HpsdrBoardKind.Orion, radio.Board);
+        Assert.Equal("4.2", radio.FirmwareString);
+        Assert.False(radio.Details.Busy);
+    }
+
+    [Fact]
+    public void Parses_Busy_Reply_SetsBusyFlag()
+    {
+        var reply = BuildReply(new ReplyFields(
+            Status: 0x03,
+            Mac: new byte[] { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06 },
+            CodeVersion: 31,
+            BoardId: 0x01));
+
+        Assert.True(ReplyParser.TryParse(reply, FromIp, out var radio));
+        Assert.True(radio.Details.Busy);
+    }
+
+    [Fact]
+    public void Rejects_MalformedReply_ShortLength()
+    {
+        var buf = new byte[10];
+        buf[0] = 0xEF;
+        buf[1] = 0xFE;
+        buf[2] = 0x02;
+
+        Assert.False(ReplyParser.TryParse(buf, FromIp, out var radio));
+        Assert.Null(radio);
+    }
+
+    [Fact]
+    public void Rejects_BadSyncBytes()
+    {
+        var reply = BuildReply(new ReplyFields(
+            Status: 0x02,
+            Mac: new byte[] { 1, 2, 3, 4, 5, 6 },
+            CodeVersion: 31,
+            BoardId: 0x01));
+        reply[0] = 0x00;
+
+        Assert.False(ReplyParser.TryParse(reply, FromIp, out var radio));
+        Assert.Null(radio);
+    }
+
+    [Fact]
+    public void Rejects_BadStatusByte()
+    {
+        var reply = BuildReply(new ReplyFields(
+            Status: 0x99,
+            Mac: new byte[] { 1, 2, 3, 4, 5, 6 },
+            CodeVersion: 31,
+            BoardId: 0x01));
+
+        Assert.False(ReplyParser.TryParse(reply, FromIp, out _));
+    }
+
+    [Fact]
+    public void Dedupes_Identical_Replies()
+    {
+        var reply = BuildReply(new ReplyFields(
+            Status: 0x02,
+            Mac: new byte[] { 0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01 },
+            CodeVersion: 31,
+            BoardId: 0x01));
+
+        Assert.True(ReplyParser.TryParse(reply, FromIp, out var first));
+        Assert.True(ReplyParser.TryParse(reply, FromIp, out var second));
+
+        var byMac = new Dictionary<PhysicalAddress, DiscoveredRadio>
+        {
+            [first.Mac] = first,
+            [second.Mac] = second,
+        };
+
+        Assert.Single(byMac);
+        Assert.Equal(first.Mac, second.Mac);
+    }
+
+    [Fact]
+    public void Parses_HL2_WithFixedIpFlag()
+    {
+        var reply = BuildReply(new ReplyFields(
+            Status: 0x02,
+            Mac: new byte[] { 0x00, 0x1C, 0xC0, 0xAA, 0xBB, 0xCC },
+            CodeVersion: 73,
+            BoardId: 0x06,
+            Hl2Flags: 0xA0,
+            FixedIpBytes: new byte[] { 192, 168, 44, 50 },
+            Hl2MacOverride: new byte[] { 0xDE, 0xAD },
+            GatewareBuild: 19,
+            Hl2Minor: 2));
+
+        Assert.True(ReplyParser.TryParse(reply, FromIp, out var radio));
+        Assert.Equal(HpsdrBoardKind.HermesLite2, radio.Board);
+        Assert.True(radio.Details.FixedIpEnabled);
+        Assert.True(radio.Details.FixedIpOverridesDhcp);
+        Assert.Equal(IPAddress.Parse("192.168.44.50"), radio.Details.FixedIpAddress);
+        Assert.Equal("73.2", radio.FirmwareString);
+        Assert.Equal((byte?)2, radio.Details.HermesLite2MinorVersion);
+        Assert.Equal(FromIp, radio.Ip);
+    }
+
+    private sealed record ReplyFields(
+        byte Status,
+        byte[] Mac,
+        byte CodeVersion,
+        byte BoardId,
+        byte Hl2Flags = 0x00,
+        byte[]? FixedIpBytes = null,
+        byte[]? Hl2MacOverride = null,
+        byte GatewareBuild = 0,
+        byte Hl2Minor = 0);
+
+    private static byte[] BuildReply(ReplyFields f)
+    {
+        var buf = new byte[60];
+        buf[0] = 0xEF;
+        buf[1] = 0xFE;
+        buf[2] = f.Status;
+        Array.Copy(f.Mac, 0, buf, 3, 6);
+        buf[9] = f.CodeVersion;
+        buf[10] = f.BoardId;
+        buf[11] = f.Hl2Flags;
+        buf[12] = 0;
+        if (f.FixedIpBytes is { } ip) Array.Copy(ip, 0, buf, 13, 4);
+        if (f.Hl2MacOverride is { } mm) Array.Copy(mm, 0, buf, 17, 2);
+        buf[19] = f.GatewareBuild;
+        buf[20] = 1;
+        buf[21] = f.Hl2Minor;
+        return buf;
+    }
+}

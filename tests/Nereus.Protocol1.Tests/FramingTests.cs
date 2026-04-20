@@ -1,0 +1,173 @@
+using System.Buffers.Binary;
+
+namespace Nereus.Protocol1.Tests;
+
+public class FramingTests
+{
+    [Fact]
+    public void Int24BigEndian_PositiveMax_ScalesToNearOne()
+    {
+        // 0x7F_FF_FF = +8_388_607 → +8_388_607 / 8_388_608 ≈ +0.99999988.
+        int v = PacketParser.ReadInt24BigEndian(stackalloc byte[] { 0x7F, 0xFF, 0xFF });
+        Assert.Equal(8_388_607, v);
+        Assert.InRange(PacketParser.ScaleInt24(v), 0.9999998, 1.0);
+    }
+
+    [Fact]
+    public void Int24BigEndian_MidPositive_ScalesToHalf()
+    {
+        // 0x40_00_00 = +4_194_304 → +0.5 exactly.
+        int v = PacketParser.ReadInt24BigEndian(stackalloc byte[] { 0x40, 0x00, 0x00 });
+        Assert.Equal(4_194_304, v);
+        Assert.Equal(0.5, PacketParser.ScaleInt24(v), 10);
+    }
+
+    [Fact]
+    public void Int24BigEndian_NegativeValue_SignExtends()
+    {
+        // 0x80_00_00 = −8_388_608 → −1.0 exactly.
+        int v = PacketParser.ReadInt24BigEndian(stackalloc byte[] { 0x80, 0x00, 0x00 });
+        Assert.Equal(-8_388_608, v);
+        Assert.Equal(-1.0, PacketParser.ScaleInt24(v), 10);
+    }
+
+    [Fact]
+    public void Int24BigEndian_NegativeSmall_SignExtends()
+    {
+        // 0xFF_80_00 = −0x8000 = −32_768.
+        int v = PacketParser.ReadInt24BigEndian(stackalloc byte[] { 0xFF, 0x80, 0x00 });
+        Assert.Equal(-32_768, v);
+    }
+
+    [Fact]
+    public void ParsePacket_ExtractsIqSamples()
+    {
+        // Two USB frames with known IQ values.
+        var iqPairs = new (int i, int q)[PacketParser.ComplexSamplesPerPacket];
+        for (int n = 0; n < iqPairs.Length; n++)
+        {
+            // Pick distinct values that span signs and magnitudes.
+            iqPairs[n] = (i: (n - 63) * 1000, q: (63 - n) * 2000);
+        }
+
+        byte[] packet = BuildValidPacket(0xDEAD_BEEF, iqPairs);
+        var outBuf = new double[2 * PacketParser.ComplexSamplesPerPacket];
+
+        Assert.True(PacketParser.TryParsePacket(packet, outBuf, out uint seq, out int n2));
+        Assert.Equal(0xDEAD_BEEFu, seq);
+        Assert.Equal(PacketParser.ComplexSamplesPerPacket, n2);
+
+        for (int k = 0; k < iqPairs.Length; k++)
+        {
+            Assert.Equal(PacketParser.ScaleInt24(iqPairs[k].i), outBuf[2 * k], 12);
+            Assert.Equal(PacketParser.ScaleInt24(iqPairs[k].q), outBuf[2 * k + 1], 12);
+        }
+    }
+
+    [Fact]
+    public void ParsePacket_RejectsBadMetisMagic()
+    {
+        byte[] packet = BuildValidPacket(1, BuildZeroPairs());
+        packet[0] = 0x00;
+        var outBuf = new double[2 * PacketParser.ComplexSamplesPerPacket];
+        Assert.False(PacketParser.TryParsePacket(packet, outBuf, out _, out _));
+    }
+
+    [Fact]
+    public void ParsePacket_RejectsBadSyncBytes()
+    {
+        byte[] packet = BuildValidPacket(1, BuildZeroPairs());
+        packet[8] = 0x00; // first USB frame's sync[0]
+        var outBuf = new double[2 * PacketParser.ComplexSamplesPerPacket];
+        Assert.False(PacketParser.TryParsePacket(packet, outBuf, out _, out _));
+    }
+
+    [Fact]
+    public void ParsePacket_RejectsWrongLength()
+    {
+        var outBuf = new double[2 * PacketParser.ComplexSamplesPerPacket];
+        Assert.False(PacketParser.TryParsePacket(new byte[500], outBuf, out _, out _));
+    }
+
+    [Fact]
+    public void SequenceTracker_DetectsGapOfThree()
+    {
+        // Feed packets with sequence {0, 1, 2, 5}. Parser/client reports 2 drops.
+        var tracker = new PacketParser.SequenceTracker();
+        foreach (uint s in new uint[] { 0, 1, 2, 5 }) tracker.Observe(s);
+        Assert.Equal(2, tracker.DroppedFrames);
+        Assert.Equal(4, tracker.TotalFrames);
+    }
+
+    [Fact]
+    public void SequenceTracker_ResetOnRadioRestart()
+    {
+        var tracker = new PacketParser.SequenceTracker();
+        foreach (uint s in new uint[] { 100, 101, 0, 1 }) tracker.Observe(s);
+        Assert.Equal(0, tracker.DroppedFrames); // seq reset is not a drop
+        Assert.Equal(4, tracker.TotalFrames);
+    }
+
+    [Fact]
+    public void SampleCount_At192k_Is126()
+    {
+        // The brief calls out that the packet structure is identical across rates:
+        // 126 complex samples per packet at any rate (doc 02 §5).
+        Assert.Equal(126, PacketParser.ComplexSamplesPerPacket);
+
+        byte[] packet = BuildValidPacket(42, BuildZeroPairs());
+        var outBuf = new double[2 * PacketParser.ComplexSamplesPerPacket];
+        Assert.True(PacketParser.TryParsePacket(packet, outBuf, out _, out int samples));
+        Assert.Equal(126, samples);
+    }
+
+    // --- fixture helpers -------------------------------------------------
+
+    private static (int, int)[] BuildZeroPairs()
+    {
+        var arr = new (int, int)[PacketParser.ComplexSamplesPerPacket];
+        return arr; // zero-initialized
+    }
+
+    /// <summary>Build a 1032-byte Metis EP6 data packet carrying the given IQ pairs.</summary>
+    internal static byte[] BuildValidPacket(uint seq, (int i, int q)[] pairs)
+    {
+        if (pairs.Length != PacketParser.ComplexSamplesPerPacket)
+            throw new ArgumentException("need 126 IQ pairs", nameof(pairs));
+
+        var packet = new byte[PacketParser.PacketLength];
+        packet[0] = 0xEF;
+        packet[1] = 0xFE;
+        packet[2] = 0x01;
+        packet[3] = 0x06;
+        BinaryPrimitives.WriteUInt32BigEndian(packet.AsSpan(4, 4), seq);
+
+        int pairIdx = 0;
+        for (int f = 0; f < 2; f++)
+        {
+            int frameStart = 8 + f * 512;
+            packet[frameStart + 0] = 0x7F;
+            packet[frameStart + 1] = 0x7F;
+            packet[frameStart + 2] = 0x7F;
+            // C&C bytes 3..7 zero — parser ignores them on RX.
+
+            int payloadStart = frameStart + 8;
+            for (int s = 0; s < PacketParser.ComplexSamplesPerUsbFrame; s++)
+            {
+                int off = payloadStart + s * 8;
+                WriteInt24BigEndian(packet.AsSpan(off, 3), pairs[pairIdx].i);
+                WriteInt24BigEndian(packet.AsSpan(off + 3, 3), pairs[pairIdx].q);
+                // bytes off+6, off+7 = mic sample (left zero).
+                pairIdx++;
+            }
+        }
+        return packet;
+    }
+
+    private static void WriteInt24BigEndian(Span<byte> dst, int value)
+    {
+        dst[0] = (byte)((value >> 16) & 0xFF);
+        dst[1] = (byte)((value >> 8) & 0xFF);
+        dst[2] = (byte)(value & 0xFF);
+    }
+}

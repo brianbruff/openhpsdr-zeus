@@ -1,0 +1,124 @@
+using Microsoft.Extensions.Logging.Abstractions;
+using Nereus.Contracts;
+using Nereus.Server;
+using Xunit;
+
+namespace Nereus.Server.Tests;
+
+/// <summary>
+/// PRD FR-6 TX timeout: a single MOX or TUN transmission may not exceed 120 s.
+/// Drives the <see cref="TxMetersService.EvaluateTimeoutTrip(DateTime)"/> seam
+/// with synthetic timestamps so the tests don't wait 2 minutes of wall-clock.
+/// </summary>
+public class TxTimeoutTests
+{
+    private static TxMetersService BuildService(out TxService tx)
+    {
+        var loggerFactory = NullLoggerFactory.Instance;
+        var radio = new RadioService(loggerFactory);
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        var pipeline = new DspPipelineService(radio, hub, loggerFactory);
+        tx = new TxService(radio, pipeline, hub, new NullLogger<TxService>());
+        return new TxMetersService(hub, radio, tx, pipeline, new NullLogger<TxMetersService>());
+    }
+
+    [Fact]
+    public void Mox_KeyedFor119s_DoesNotTrip()
+    {
+        var svc = BuildService(out var tx);
+        var t0 = new DateTime(2026, 4, 18, 12, 0, 0, DateTimeKind.Utc);
+        tx.SetMoxStartedAtForTest(t0);
+
+        Assert.Null(svc.EvaluateTimeoutTrip(t0.AddSeconds(119)));
+    }
+
+    [Fact]
+    public void Mox_KeyedFor121s_Trips()
+    {
+        var svc = BuildService(out var tx);
+        var t0 = new DateTime(2026, 4, 18, 12, 0, 0, DateTimeKind.Utc);
+        tx.SetMoxStartedAtForTest(t0);
+
+        var reason = svc.EvaluateTimeoutTrip(t0.AddSeconds(121));
+        Assert.NotNull(reason);
+        Assert.Contains("MOX", reason);
+    }
+
+    [Fact]
+    public void Mox_Exactly120s_Trips()
+    {
+        var svc = BuildService(out var tx);
+        var t0 = new DateTime(2026, 4, 18, 12, 0, 0, DateTimeKind.Utc);
+        tx.SetMoxStartedAtForTest(t0);
+
+        var reason = svc.EvaluateTimeoutTrip(t0.AddSeconds(120));
+        Assert.NotNull(reason);
+    }
+
+    [Fact]
+    public void Mox_ReKeyedAt100s_ResetsTheWindow()
+    {
+        var svc = BuildService(out var tx);
+        var t0 = new DateTime(2026, 4, 18, 12, 0, 0, DateTimeKind.Utc);
+        tx.SetMoxStartedAtForTest(t0);
+
+        // At t0+100s operator unkeys — TrySetMox(false) clears the timestamp.
+        var unkeyAt = t0.AddSeconds(100);
+        tx.SetMoxStartedAtForTest(null);
+        Assert.Null(svc.EvaluateTimeoutTrip(unkeyAt));
+
+        // Operator re-keys at t0+100s. A full 120 s window runs from the NEW
+        // key-down, so no trip at (new start + 119 s).
+        var newStart = unkeyAt;
+        tx.SetMoxStartedAtForTest(newStart);
+        Assert.Null(svc.EvaluateTimeoutTrip(newStart.AddSeconds(119)));
+        Assert.NotNull(svc.EvaluateTimeoutTrip(newStart.AddSeconds(120)));
+    }
+
+    [Fact]
+    public void Tun_KeyedFor120s_Trips()
+    {
+        var svc = BuildService(out var tx);
+        var t0 = new DateTime(2026, 4, 18, 12, 0, 0, DateTimeKind.Utc);
+        tx.SetTunStartedAtForTest(t0);
+
+        var reason = svc.EvaluateTimeoutTrip(t0.AddSeconds(120));
+        Assert.NotNull(reason);
+        Assert.Contains("TUN", reason);
+    }
+
+    [Fact]
+    public void Tun_KeyedFor60s_DoesNotTrip()
+    {
+        var svc = BuildService(out var tx);
+        var t0 = new DateTime(2026, 4, 18, 12, 0, 0, DateTimeKind.Utc);
+        tx.SetTunStartedAtForTest(t0);
+
+        Assert.Null(svc.EvaluateTimeoutTrip(t0.AddSeconds(60)));
+    }
+
+    [Fact]
+    public void Neither_Keyed_NoTrip()
+    {
+        var svc = BuildService(out _);
+        Assert.Null(svc.EvaluateTimeoutTrip(DateTime.UtcNow));
+    }
+
+    [Fact]
+    public void TryTripForAlert_ClearsKeyedAtTimestamps()
+    {
+        var svc = BuildService(out var tx);
+        var t0 = new DateTime(2026, 4, 18, 12, 0, 0, DateTimeKind.Utc);
+        tx.SetMoxStartedAtForTest(t0);
+
+        // Pre-condition: a timeout WOULD fire.
+        Assert.NotNull(svc.EvaluateTimeoutTrip(t0.AddSeconds(121)));
+
+        // TryTripForAlert on a non-keyed service is a no-op (no MOX/TUN to
+        // drop), but even in that path we want the keyed-at timestamps cleared
+        // so a stale _moxStartedAt can't keep re-firing the timeout check.
+        tx.TryTripForAlert(AlertKind.TxTimeout, "probe");
+        Assert.Null(tx.MoxStartedAt);
+        Assert.Null(svc.EvaluateTimeoutTrip(t0.AddSeconds(121)));
+    }
+}

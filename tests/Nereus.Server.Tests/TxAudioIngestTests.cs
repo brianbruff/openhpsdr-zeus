@@ -1,0 +1,146 @@
+using System.Buffers.Binary;
+using Microsoft.Extensions.Logging.Abstractions;
+using Nereus.Contracts;
+using Nereus.Dsp;
+using Nereus.Protocol1;
+using Nereus.Server;
+
+namespace Nereus.Server.Tests;
+
+public class TxAudioIngestTests
+{
+    private const int MicBlockSamples = 960;
+    private const int MicBlockBytes = 1 + MicBlockSamples * 4; // StreamingHub strips the type byte before dispatch
+
+    // Test-only stub engine: records mic blocks handed to ProcessTxBlock and
+    // writes a deterministic IQ so the ring-feed path can be asserted.
+    private sealed class StubEngine : IDspEngine
+    {
+        public int BlockSize { get; set; } = 1024;
+        public int TxBlockSamples => BlockSize;
+        public int ProcessedBlocks { get; private set; }
+
+        public int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved)
+        {
+            if (micMono.Length != BlockSize) throw new ArgumentException("mic length");
+            if (iqInterleaved.Length != 2 * BlockSize) throw new ArgumentException("iq length");
+            // Copy mic into I, Q = 0 so tests can trace a specific block end-to-end.
+            for (int i = 0; i < BlockSize; i++)
+            {
+                iqInterleaved[2 * i] = micMono[i];
+                iqInterleaved[2 * i + 1] = 0f;
+            }
+            ProcessedBlocks++;
+            return BlockSize;
+        }
+
+        // --- Unused-for-test members ---
+        public int OpenChannel(int sampleRateHz, int pixelWidth) => 0;
+        public void CloseChannel(int channelId) { }
+        public void FeedIq(int channelId, ReadOnlySpan<double> interleavedIqSamples) { }
+        public void SetMode(int channelId, RxMode mode) { }
+        public void SetFilter(int channelId, int lowHz, int highHz) { }
+        public void SetVfoHz(int channelId, long vfoHz) { }
+        public void SetAgcTop(int channelId, double topDb) { }
+        public void SetNoiseReduction(int channelId, NrConfig cfg) { }
+        public void SetZoom(int channelId, int level) { }
+        public int ReadAudio(int channelId, Span<float> output) => 0;
+        public bool TryGetDisplayPixels(int channelId, DisplayPixout which, Span<float> dbOut) => false;
+        public int OpenTxChannel() => 0;
+        public void SetMox(bool moxOn) { }
+        public double GetRxaSignalDbm(int channelId) => -140.0;
+        public void SetTxMode(RxMode mode) { }
+        public void SetTxPanelGain(double linearGain) { }
+        public void SetTxTune(bool on) { }
+        public TxStageMeters GetTxStageMeters() => TxStageMeters.Silent;
+        public void Dispose() { }
+    }
+
+    private static byte[] BuildMicPcmPayload(Func<int, float> sampleAt)
+    {
+        // Payload *after* StreamingHub strips the type byte.
+        var buf = new byte[MicBlockBytes - 1];
+        for (int i = 0; i < MicBlockSamples; i++)
+            BinaryPrimitives.WriteSingleLittleEndian(buf.AsSpan(i * 4, 4), sampleAt(i));
+        return buf;
+    }
+
+    [Fact]
+    public void BlocksBelowWdspSize_AreAccumulated_NotDropped()
+    {
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>());
+
+        var payload = BuildMicPcmPayload(_ => 0.5f);
+        ingest.OnMicPcmBytes(payload);                    // 960 < 1024: no block yet
+        Assert.Equal(0, engine.ProcessedBlocks);
+        Assert.Equal(0, ring.Count);
+
+        ingest.OnMicPcmBytes(payload);                    // 1920 ≥ 1024: one block flushed
+        Assert.Equal(1, engine.ProcessedBlocks);
+        Assert.Equal(1024, ring.Count);
+
+        ingest.OnMicPcmBytes(payload);                    // 2880: one more block (2048 cumulative)
+        Assert.Equal(2, engine.ProcessedBlocks);
+        // 2 blocks × 1024 = 2048 pairs in the ring
+        Assert.Equal(2048, ring.Count);
+    }
+
+    [Fact]
+    public void MoxOff_DrainsAccumulatorAndRing()
+    {
+        var engine = new StubEngine();
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        bool mox = true;
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => mox, hub, new NullLogger<TxAudioIngest>());
+
+        var payload = BuildMicPcmPayload(_ => 0.25f);
+        ingest.OnMicPcmBytes(payload);                    // 960 in accumulator
+        ingest.OnMicPcmBytes(payload);                    // flushes to ring
+        Assert.True(ring.Count > 0);
+
+        mox = false;
+        ingest.OnMicPcmBytes(payload);                    // should drain
+        Assert.Equal(0, ring.Count);
+        Assert.Equal(1, engine.ProcessedBlocks);           // no additional block processed
+    }
+
+    [Fact]
+    public void WrongSizedPayload_IsDropped()
+    {
+        var engine = new StubEngine();
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>());
+
+        ingest.OnMicPcmBytes(new byte[100]);
+        Assert.Equal(1, ingest.DroppedFrames);
+        Assert.Equal(0, engine.ProcessedBlocks);
+    }
+
+    [Fact]
+    public void Hub_DispatchesMicPcmFrame_ToIngest()
+    {
+        var engine = new StubEngine();
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>());
+
+        // Build a real on-the-wire frame (with the 0x20 type byte) and route
+        // it through the hub the same way the recv loop does.
+        var wire = new byte[MicBlockBytes];
+        wire[0] = 0x20;
+        for (int i = 0; i < MicBlockSamples; i++)
+            BinaryPrimitives.WriteSingleLittleEndian(wire.AsSpan(1 + i * 4, 4), 0.3f);
+
+        hub.DispatchInbound(wire);
+        Assert.Equal(960, ingest.TotalMicSamples);
+    }
+}

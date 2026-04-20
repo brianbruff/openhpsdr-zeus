@@ -1,0 +1,104 @@
+import { useCallback, useRef } from 'react';
+import { useDisplaySettingsStore } from '../state/display-settings-store';
+
+// Tick stride in dB. Thetis defaults to 5 dB; our smaller canvas reads
+// cleaner at 10 dB. Tick label rendered at every stride, minor line between.
+const TICK_STRIDE_DB = 10;
+
+// Draggable dB scale along the left edge of the panadapter. Vertical
+// pointer drag shifts both dbMin and dbMax in lockstep — Thetis-style, see
+// PanDisplay.cs:3684-3700. No independent min/max scaling; just an offset.
+// Sits inside the Panadapter container as an absolutely-positioned column.
+export function DbScale() {
+  const dbMin = useDisplaySettingsStore((s) => s.dbMin);
+  const dbMax = useDisplaySettingsStore((s) => s.dbMax);
+  const shiftDbRange = useDisplaySettingsStore((s) => s.shiftDbRange);
+
+  const dragState = useRef<{
+    startY: number;
+    startDbMin: number;
+    startDbMax: number;
+    pointerId: number;
+    containerHeight: number;
+  } | null>(null);
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const rect = e.currentTarget.getBoundingClientRect();
+      dragState.current = {
+        startY: e.clientY,
+        startDbMin: dbMin,
+        startDbMax: dbMax,
+        pointerId: e.pointerId,
+        containerHeight: rect.height,
+      };
+      e.currentTarget.setPointerCapture(e.pointerId);
+    },
+    [dbMin, dbMax],
+  );
+
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const d = dragState.current;
+      if (!d || e.pointerId !== d.pointerId) return;
+      const dySig = e.clientY - d.startY;
+      // Content-follows-finger: drag DOWN (dy > 0) moves the trace DOWN on
+      // the canvas, which means raising both dbMin and dbMax (a fixed signal
+      // then sits lower in the visible range). Adding deltaDb achieves this.
+      const dbPerPixel = (d.startDbMax - d.startDbMin) / d.containerHeight;
+      const deltaDb = dySig * dbPerPixel;
+      const nextMin = d.startDbMin + deltaDb;
+      const targetShift = nextMin - dbMin;
+      if (Math.abs(targetShift) > 0.5) shiftDbRange(targetShift);
+    },
+    [dbMin, shiftDbRange],
+  );
+
+  const onPointerUp = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const d = dragState.current;
+      if (!d || e.pointerId !== d.pointerId) return;
+      e.currentTarget.releasePointerCapture(e.pointerId);
+      dragState.current = null;
+    },
+    [],
+  );
+
+  // Tick labels: every TICK_STRIDE_DB in the visible [dbMin..dbMax] range.
+  // Placed as top% where top 0% = dbMax (visually at top), 100% = dbMin.
+  const firstTick = Math.ceil(dbMin / TICK_STRIDE_DB) * TICK_STRIDE_DB;
+  const lastTick = Math.floor(dbMax / TICK_STRIDE_DB) * TICK_STRIDE_DB;
+  const ticks: { db: number; topPct: number }[] = [];
+  for (let db = firstTick; db <= lastTick; db += TICK_STRIDE_DB) {
+    const topPct = ((dbMax - db) / (dbMax - dbMin)) * 100;
+    ticks.push({ db, topPct });
+  }
+
+  return (
+    <div
+      role="slider"
+      aria-label="dB scale"
+      aria-valuemin={Math.round(dbMin)}
+      aria-valuemax={Math.round(dbMax)}
+      aria-valuenow={Math.round((dbMin + dbMax) / 2)}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      className="absolute left-0 top-5 bottom-0 z-10 w-10 cursor-ns-resize touch-none select-none bg-neutral-950/60"
+    >
+      {ticks.map((t) => (
+        <div
+          key={t.db}
+          className="absolute left-0 right-0 flex items-center gap-1"
+          style={{ top: `${t.topPct}%`, transform: 'translateY(-50%)' }}
+        >
+          <div className="h-px w-1.5 bg-neutral-500" />
+          <div className="font-mono text-[9px] leading-none text-neutral-400">
+            {t.db}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}

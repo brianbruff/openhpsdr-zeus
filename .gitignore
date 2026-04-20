@@ -1,0 +1,44 @@
+# Dependencies
+client/node_modules/
+client/dist/
+nereus-web/node_modules/
+nereus-web/dist/
+nereus-web/dev-dist/
+Nereus.Server/wwwroot/
+
+# .NET
+**/bin/
+**/obj/
+**/*.user
+**/*.suo
+**/*.lscache
+*.nupkg
+
+# IDE
+.vs/
+.vscode/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log
+tools/demo-server/bin/
+tools/demo-server/obj/
+.claude/
+
+# Native WDSP build cache. The staged library under
+# Nereus.Dsp/runtimes/<rid>/native/ IS committed so managed-side tests
+# don't need to run CMake before executing.
+native/build/
+
+# Playwright-MCP accessibility snapshots and console logs — regenerated
+# on every browser-automation run; do not track.
+.playwright-mcp/
+
+# Ad-hoc screenshot captures (debug PNGs) in the repo root. Real docs
+# imagery lives under docs/ when we need it.
+/*.png

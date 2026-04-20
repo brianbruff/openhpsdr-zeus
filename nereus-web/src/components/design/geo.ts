@@ -1,0 +1,114 @@
+// Spherical geometry helpers — haversine distance, initial bearing, great-circle
+// interpolation, and destination-point from bearing+range. Same math as
+// Log4YM/src/Log4YM.Web/src/utils/maidenhead.ts and MapPlugin.tsx, rewritten
+// here so Nereus stays free of cross-repo source dependencies.
+
+const R_EARTH_KM = 6371;
+
+const toRad = (deg: number) => (deg * Math.PI) / 180;
+const toDeg = (rad: number) => (rad * 180) / Math.PI;
+
+/** Haversine great-circle distance in kilometres. */
+export function distanceKm(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+): number {
+  const φ1 = toRad(lat1);
+  const φ2 = toRad(lat2);
+  const Δφ = toRad(lat2 - lat1);
+  const Δλ = toRad(lon2 - lon1);
+  const a =
+    Math.sin(Δφ / 2) ** 2 +
+    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+  return 2 * R_EARTH_KM * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/** Initial bearing from (lat1,lon1) to (lat2,lon2) in degrees, 0 = N, CW. */
+export function bearingDeg(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number,
+): number {
+  const φ1 = toRad(lat1);
+  const φ2 = toRad(lat2);
+  const Δλ = toRad(lon2 - lon1);
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x =
+    Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+/**
+ * Destination point given start, bearing (deg CW from N), and range (km).
+ * Vincenty-style forward formula on a sphere — good enough for HF beam hints.
+ */
+export function destinationPoint(
+  lat: number,
+  lon: number,
+  bearingDeg_: number,
+  rangeKm: number,
+): [number, number] {
+  const δ = rangeKm / R_EARTH_KM;
+  const θ = toRad(bearingDeg_);
+  const φ1 = toRad(lat);
+  const λ1 = toRad(lon);
+  const φ2 = Math.asin(
+    Math.sin(φ1) * Math.cos(δ) + Math.cos(φ1) * Math.sin(δ) * Math.cos(θ),
+  );
+  const λ2 =
+    λ1 +
+    Math.atan2(
+      Math.sin(θ) * Math.sin(δ) * Math.cos(φ1),
+      Math.cos(δ) - Math.sin(φ1) * Math.sin(φ2),
+    );
+  return [toDeg(φ2), ((toDeg(λ2) + 540) % 360) - 180];
+}
+
+/**
+ * Interpolate N points along the great-circle from a→b. Splits into multiple
+ * polyline segments at the ±180° antimeridian so Leaflet doesn't draw a wrap
+ * line across the whole world.
+ */
+export function greatCircleSegments(
+  a: { lat: number; lon: number },
+  b: { lat: number; lon: number },
+  steps = 64,
+): [number, number][][] {
+  const φ1 = toRad(a.lat);
+  const λ1 = toRad(a.lon);
+  const φ2 = toRad(b.lat);
+  const λ2 = toRad(b.lon);
+  const Δφ = φ2 - φ1;
+  const Δλ = λ2 - λ1;
+  const aa =
+    Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+  const d = 2 * Math.atan2(Math.sqrt(aa), Math.sqrt(1 - aa));
+  if (d === 0) return [[[a.lat, a.lon]]];
+
+  const pts: [number, number][] = [];
+  for (let i = 0; i <= steps; i++) {
+    const f = i / steps;
+    const A = Math.sin((1 - f) * d) / Math.sin(d);
+    const B = Math.sin(f * d) / Math.sin(d);
+    const x = A * Math.cos(φ1) * Math.cos(λ1) + B * Math.cos(φ2) * Math.cos(λ2);
+    const y = A * Math.cos(φ1) * Math.sin(λ1) + B * Math.cos(φ2) * Math.sin(λ2);
+    const z = A * Math.sin(φ1) + B * Math.sin(φ2);
+    const φ = Math.atan2(z, Math.sqrt(x * x + y * y));
+    const λ = Math.atan2(y, x);
+    pts.push([toDeg(φ), toDeg(λ)]);
+  }
+
+  // Split at antimeridian crossings so Leaflet renders each segment cleanly.
+  const segments: [number, number][][] = [[]];
+  let prev: [number, number] | null = null;
+  for (const p of pts) {
+    if (prev && Math.abs(p[1] - prev[1]) > 180) segments.push([]);
+    const seg = segments[segments.length - 1]!;
+    seg.push(p);
+    prev = p;
+  }
+  return segments.filter((s) => s.length > 1);
+}

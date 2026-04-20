@@ -1,0 +1,217 @@
+using System.Buffers.Binary;
+using Microsoft.Extensions.Logging;
+using Nereus.Dsp;
+using Nereus.Protocol1;
+
+namespace Nereus.Server;
+
+/// <summary>
+/// Bridges browser-side mic audio to WDSP TXA and onward to the EP2 IQ
+/// payload. Inputs are 960-sample f32le blocks from the /ws MicPcm frame
+/// (20 ms @ 48 kHz mono); the service accumulates into WDSP's native block
+/// size, calls <see cref="IDspEngine.ProcessTxBlock"/>, and pushes the
+/// resulting modulated IQ into <see cref="TxIqRing"/> for
+/// <see cref="Protocol1Client"/> to pull at EP2 packet rate.
+///
+/// Threading: <see cref="OnMicPcmBytes"/> runs on the StreamingHub receive
+/// loop thread. We hold <see cref="_sync"/> for the duration of the flush
+/// so back-to-back mic frames don't interleave into the same WDSP block
+/// half-written.
+///
+/// Lifecycle: constructed via DI (singleton), subscribes to
+/// <see cref="StreamingHub.MicPcmReceived"/> immediately. Drops input
+/// silently when the engine is Synthetic (no TXA available) or MOX is off —
+/// the ring stays empty in those cases so the EP2 packer emits silence.
+/// </summary>
+public sealed class TxAudioIngest : IDisposable
+{
+    private const int MicBlockSamples = 960;   // 20 ms @ 48 kHz (matches front-end worklet)
+    private const int MicBlockBytes = MicBlockSamples * 4;
+
+    private readonly TxIqRing _ring;
+    private readonly Func<IDspEngine?> _engineProvider;
+    private readonly Func<bool> _isMoxOn;
+    private readonly ILogger<TxAudioIngest> _log;
+    private readonly StreamingHub _hub;
+    private readonly Action<ReadOnlyMemory<byte>> _handler;
+
+    private readonly object _sync = new();
+    // Accumulator scratch — sized to at least one WDSP block plus one frontend
+    // block (1024 + 960 = 1984) so we can always append a new arrival before
+    // draining. The excess gets shifted back after each flush.
+    private readonly float[] _accumulator = new float[2048];
+    private int _accumulatorFill;
+    private readonly float[] _scratchMic = new float[1024];
+    private readonly float[] _scratchIq = new float[2048];
+
+    private long _totalMicSamples;
+    private long _totalTxBlocks;
+    private long _droppedFrames;
+    // Tracks the last-seen MOX state so Clear() fires exactly once per MOX
+    // falling edge instead of on every mic frame that happens to arrive while
+    // MOX is off. The hot-loop Clear caused a race with the MOX rising edge:
+    // client-optimistic mic frames can reach the hub before /api/tx/mox has
+    // flipped the server's IsMoxOn, and the pre-flip frames were wiping the
+    // ring of IQ Protocol1Client had just produced.
+    private bool _lastSeenMox;
+    // Diagnostic: log peak of mic-in and IQ-out once per second of TX. If
+    // mic-peak is high but iq-peak is ~0, WDSP TXA is producing silence
+    // despite good input. If mic-peak itself is ~0, the uplink is broken.
+    private DateTime _lastPeakLogUtc;
+    private float _peakMicAccum;
+    private float _peakIqAccum;
+    private int _peakBlocksAccum;
+
+    public TxAudioIngest(
+        TxIqRing ring,
+        DspPipelineService pipeline,
+        TxService tx,
+        StreamingHub hub,
+        ILogger<TxAudioIngest> log)
+        : this(ring, () => pipeline.CurrentEngine, () => tx.IsMoxOn, hub, log)
+    {
+    }
+
+    /// <summary>Test-only constructor that wires the engine + MOX lookups
+    /// through plain delegates so unit tests don't need a live pipeline.</summary>
+    internal TxAudioIngest(
+        TxIqRing ring,
+        Func<IDspEngine?> engineProvider,
+        Func<bool> isMoxOn,
+        StreamingHub hub,
+        ILogger<TxAudioIngest> log)
+    {
+        _ring = ring;
+        _engineProvider = engineProvider;
+        _isMoxOn = isMoxOn;
+        _hub = hub;
+        _log = log;
+        _handler = OnMicPcmBytes;
+        _hub.MicPcmReceived += _handler;
+    }
+
+    public long TotalMicSamples { get { lock (_sync) return _totalMicSamples; } }
+    public long TotalTxBlocks { get { lock (_sync) return _totalTxBlocks; } }
+    public long DroppedFrames { get { lock (_sync) return _droppedFrames; } }
+
+    public void Dispose()
+    {
+        _hub.MicPcmReceived -= _handler;
+    }
+
+    // Internal so tests can drive the ingest directly without standing up a WS.
+    internal void OnMicPcmBytes(ReadOnlyMemory<byte> f32lePayload)
+    {
+        if (f32lePayload.Length != MicBlockBytes)
+        {
+            lock (_sync) _droppedFrames++;
+            return;
+        }
+
+        // Gate: only accumulate while MOX is asserted. Mic samples arriving
+        // outside a transmit window would otherwise leak into the first WDSP
+        // block of the next key-down. The ring is cleared exactly once per
+        // MOX falling edge — clearing on every non-MOX frame caused a race at
+        // the rising edge where client-optimistic mic frames (client thinks
+        // MOX is on before /api/tx/mox completes) wiped IQ the server had
+        // already produced.
+        bool moxNow = _isMoxOn();
+        if (!moxNow)
+        {
+            lock (_sync)
+            {
+                if (_accumulatorFill > 0) _accumulatorFill = 0;
+                if (_lastSeenMox)
+                {
+                    // MOX fell since our last frame — drain the IQ ring so the
+                    // next keyed TX starts clean, without the tail of this one.
+                    _ring.Clear();
+                    _lastSeenMox = false;
+                }
+            }
+            return;
+        }
+        // Latch the rising edge so the next falling edge will drain the ring.
+        if (!_lastSeenMox) { lock (_sync) _lastSeenMox = true; }
+
+        var engine = _engineProvider();
+        int blockSize = engine?.TxBlockSamples ?? 0;
+        if (engine is null || blockSize <= 0 || blockSize > _scratchMic.Length)
+        {
+            // Synthetic engine or no TXA open. Swallow samples quietly.
+            return;
+        }
+
+        lock (_sync)
+        {
+            // Decode f32le into accumulator. WDSP wants -1..+1 range; browser
+            // ships the same convention.
+            var src = f32lePayload.Span;
+            int need = MicBlockSamples;
+            if (_accumulatorFill + need > _accumulator.Length)
+            {
+                // Should only happen if BlockSamples grew unexpectedly. Treat
+                // as a protocol mismatch — drop the accumulator to avoid
+                // writing past the array bound.
+                _accumulatorFill = 0;
+                _droppedFrames++;
+                return;
+            }
+            for (int i = 0; i < MicBlockSamples; i++)
+            {
+                _accumulator[_accumulatorFill + i] = BinaryPrimitives.ReadSingleLittleEndian(src.Slice(i * 4, 4));
+            }
+            _accumulatorFill += MicBlockSamples;
+            _totalMicSamples += MicBlockSamples;
+
+            while (_accumulatorFill >= blockSize)
+            {
+                Array.Copy(_accumulator, 0, _scratchMic, 0, blockSize);
+                int produced = engine.ProcessTxBlock(
+                    new ReadOnlySpan<float>(_scratchMic, 0, blockSize),
+                    new Span<float>(_scratchIq, 0, 2 * blockSize));
+                if (produced > 0)
+                {
+                    _ring.Write(new ReadOnlySpan<float>(_scratchIq, 0, 2 * produced));
+                    _totalTxBlocks++;
+
+                    // Accumulate peaks for the 1 Hz diagnostic log.
+                    float micPeak = 0f;
+                    for (int s = 0; s < blockSize; s++)
+                    {
+                        float a = _scratchMic[s];
+                        if (a < 0) a = -a;
+                        if (a > micPeak) micPeak = a;
+                    }
+                    float iqPeak = 0f;
+                    for (int s = 0; s < 2 * produced; s++)
+                    {
+                        float a = _scratchIq[s];
+                        if (a < 0) a = -a;
+                        if (a > iqPeak) iqPeak = a;
+                    }
+                    if (micPeak > _peakMicAccum) _peakMicAccum = micPeak;
+                    if (iqPeak > _peakIqAccum) _peakIqAccum = iqPeak;
+                    _peakBlocksAccum++;
+                    var now = DateTime.UtcNow;
+                    if (now - _lastPeakLogUtc >= TimeSpan.FromSeconds(1))
+                    {
+                        _log.LogInformation(
+                            "tx.peaks blocks={Blocks} mic={Mic:F4} iq={Iq:F4}",
+                            _peakBlocksAccum, _peakMicAccum, _peakIqAccum);
+                        _lastPeakLogUtc = now;
+                        _peakMicAccum = 0f;
+                        _peakIqAccum = 0f;
+                        _peakBlocksAccum = 0;
+                    }
+                }
+                // Shift remainder down — typically ~64 leftover samples (960 %
+                // 1024 carry). Array.Copy handles overlapping source/dest.
+                int remainder = _accumulatorFill - blockSize;
+                if (remainder > 0)
+                    Array.Copy(_accumulator, blockSize, _accumulator, 0, remainder);
+                _accumulatorFill = remainder;
+            }
+        }
+    }
+}

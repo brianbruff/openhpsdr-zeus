@@ -1,0 +1,160 @@
+import { useEffect } from 'react';
+import {
+  setMox,
+  setVfo,
+  setZoom,
+  ZOOM_MAX,
+  ZOOM_MIN,
+  type ZoomLevel,
+} from '../api/client';
+import { useConnectionStore } from '../state/connection-store';
+import { useTxStore } from '../state/tx-store';
+
+// Matches the pan-drag gesture step in use-pan-tune-gesture.ts. If that
+// becomes user-settable, lift this into a shared setting.
+const TUNE_STEP_HZ = 500;
+const MAX_HZ = 60_000_000;
+
+function snapHz(hz: number): number {
+  if (!Number.isFinite(hz)) return 0;
+  const snapped = Math.round(hz / TUNE_STEP_HZ) * TUNE_STEP_HZ;
+  return Math.min(MAX_HZ, Math.max(0, snapped));
+}
+
+function isEditableTarget(el: EventTarget | null): boolean {
+  if (!(el instanceof HTMLElement)) return false;
+  const tag = el.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  return el.isContentEditable;
+}
+
+/**
+ * Window-scoped arrow-key shortcuts:
+ *   ←/→ nudge the VFO down/up by TUNE_STEP_HZ
+ *   ↑/↓ step zoom in/out by one level
+ *   Space (press-and-hold) keys MOX; release drops back to RX.
+ *
+ * Skips editable targets so typing into an <input> still works, and requires
+ * a live connection so arrows don't fire POSTs against a disconnected server.
+ * Tune presses coalesce to one POST per animation frame (key autorepeat can
+ * fire 30+ Hz); zoom POSTs abort their predecessor the same way ZoomControl
+ * does when the user drags the slider. Space uses e.repeat to fire MOX-on
+ * exactly once per physical press; releasing always drops MOX off.
+ */
+export function useKeyboardShortcuts() {
+  useEffect(() => {
+    let pendingHz: number | null = null;
+    let pendingRaf = 0;
+    let tuneAbort: AbortController | null = null;
+    let zoomAbort: AbortController | null = null;
+    let moxAbort: AbortController | null = null;
+
+    const flushTune = () => {
+      pendingRaf = 0;
+      const hz = pendingHz;
+      pendingHz = null;
+      if (hz == null) return;
+      tuneAbort?.abort();
+      const ctrl = new AbortController();
+      tuneAbort = ctrl;
+      setVfo(hz, ctrl.signal)
+        .then((s) => {
+          if (!ctrl.signal.aborted) useConnectionStore.getState().applyState(s);
+        })
+        .catch(() => {});
+    };
+
+    const bumpTune = (direction: -1 | 1) => {
+      // Accumulate from the queued value so held-down arrows step cleanly
+      // rather than re-reading the (potentially stale) store each frame.
+      const base = pendingHz ?? useConnectionStore.getState().vfoHz;
+      const next = snapHz(base + direction * TUNE_STEP_HZ);
+      useConnectionStore.setState({ vfoHz: next });
+      pendingHz = next;
+      if (pendingRaf === 0) pendingRaf = requestAnimationFrame(flushTune);
+    };
+
+    const bumpZoom = (direction: -1 | 1) => {
+      const { zoomLevel } = useConnectionStore.getState();
+      const next = Math.min(
+        ZOOM_MAX,
+        Math.max(ZOOM_MIN, zoomLevel + direction),
+      ) as ZoomLevel;
+      if (next === zoomLevel) return;
+      useConnectionStore.setState({ zoomLevel: next });
+      zoomAbort?.abort();
+      const ctrl = new AbortController();
+      zoomAbort = ctrl;
+      setZoom(next, ctrl.signal)
+        .then((s) => {
+          if (!ctrl.signal.aborted) useConnectionStore.getState().applyState(s);
+        })
+        .catch(() => {});
+    };
+
+    const driveMox = (on: boolean) => {
+      const tx = useTxStore.getState();
+      if (tx.moxOn === on) return;
+      tx.setMoxOn(on);
+      moxAbort?.abort();
+      const ctrl = new AbortController();
+      moxAbort = ctrl;
+      setMox(on, ctrl.signal).catch(() => {
+        if (!ctrl.signal.aborted) useTxStore.getState().setMoxOn(!on);
+      });
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isEditableTarget(e.target)) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (useConnectionStore.getState().status !== 'Connected') return;
+
+      switch (e.key) {
+        case 'ArrowLeft':
+          e.preventDefault();
+          bumpTune(-1);
+          break;
+        case 'ArrowRight':
+          e.preventDefault();
+          bumpTune(1);
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          bumpZoom(1);
+          break;
+        case 'ArrowDown':
+          e.preventDefault();
+          bumpZoom(-1);
+          break;
+        case ' ':
+        case 'Spacebar':
+          // e.repeat filters native autorepeat so we fire MOX-on exactly
+          // once per physical press; release-handled MOX-off runs on keyup.
+          e.preventDefault();
+          if (!e.repeat) driveMox(true);
+          break;
+      }
+    };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (isEditableTarget(e.target)) return;
+      if (e.key === ' ' || e.key === 'Spacebar') {
+        e.preventDefault();
+        // Drop MOX regardless of connection state — if we somehow keyed
+        // during a brief reconnect window, releasing still clears the latch.
+        driveMox(false);
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      if (pendingRaf !== 0) cancelAnimationFrame(pendingRaf);
+      tuneAbort?.abort();
+      zoomAbort?.abort();
+      moxAbort?.abort();
+    };
+  }, []);
+}

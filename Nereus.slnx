@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/tests/">
+    <Project Path="tests/Nereus.Contracts.Tests/Nereus.Contracts.Tests.csproj" />
+    <Project Path="tests/Nereus.Dsp.Tests/Nereus.Dsp.Tests.csproj" />
+    <Project Path="tests/Nereus.Protocol1.Tests/Nereus.Protocol1.Tests.csproj" />
+    <Project Path="tests/Nereus.Server.Tests/Nereus.Server.Tests.csproj" />
+  </Folder>
+  <Project Path="Nereus.Contracts/Nereus.Contracts.csproj" />
+  <Project Path="Nereus.Dsp/Nereus.Dsp.csproj" />
+  <Project Path="Nereus.Protocol1/Nereus.Protocol1.csproj" />
+  <Project Path="Nereus.Server/Nereus.Server.csproj" />
+</Solution>

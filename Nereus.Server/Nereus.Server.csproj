@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Nereus.Contracts\Nereus.Contracts.csproj" />
+    <ProjectReference Include="..\Nereus.Protocol1\Nereus.Protocol1.csproj" />
+    <ProjectReference Include="..\Nereus.Dsp\Nereus.Dsp.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <SpaRoot>$(MSBuildThisFileDirectory)..\nereus-web</SpaRoot>
+    <SpaBuildOutput>$(MSBuildThisFileDirectory)wwwroot\index.html</SpaBuildOutput>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Nereus.Contracts.Tests" />
+    <InternalsVisibleTo Include="Nereus.Server.Tests" />
+  </ItemGroup>
+
+  <Target Name="BuildSpa" BeforeTargets="Publish" Condition="!Exists('$(SpaBuildOutput)') Or '$(ForceSpaBuild)' == 'true'">
+    <Message Importance="high" Text="Building React frontend in $(SpaRoot)" />
+    <Exec Command="npm ci" WorkingDirectory="$(SpaRoot)" />
+    <Exec Command="npm run build" WorkingDirectory="$(SpaRoot)" />
+  </Target>
+
+</Project>

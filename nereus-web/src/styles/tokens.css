@@ -1,0 +1,113 @@
+/* ===========================================================
+   Nereus SDR — Design tokens (pulled from Hermes Lite 2 reference)
+   Near-black chrome, mid-gray workspace, classic SDR colors
+   =========================================================== */
+
+@font-face { font-display: swap; }
+
+:root {
+  /* ----- Workspace ----- */
+  --bg-app:       #657486;  /* mid blue-gray behind panels */
+  --bg-workspace: #575e6b;  /* slightly darker for contrast */
+
+  /* ----- Panels / chrome (near-black like ref) ----- */
+  --bg-0: #1a1b1e;
+  --bg-1: #2a2b2e;
+  --bg-2: #323236;
+  --bg-3: #3a3b3f;
+
+  /* Panel head bar — matches the "Hermes Lite 2" top bar in ref */
+  --panel-head-top: #3a3b3f;
+  --panel-head-bot: #232427;
+  --panel-border:   #0d0d10;
+  --panel-hl-top:   rgba(255,255,255,0.10);
+
+  /* ----- Foreground ----- */
+  --fg-0: #ffffff;
+  --fg-1: #d4d5d8;
+  --fg-2: #9a9b9f;
+  --fg-3: #6b6c70;
+
+  /* ----- Accents (reference exact) ----- */
+  --accent:      #4a9eff;   /* LSB/USB blue text (like "FAST" blue & frequency blue) */
+  --accent-soft: rgba(74,158,255,0.15);
+  --tx:          #e63a2b;   /* TX red (like "TX: OFF" red) */
+  --tx-soft:     rgba(230,58,43,0.18);
+  --power:       #ffc93a;   /* yellow digits like "20W" */
+  --orange:      #f28524;   /* Lookup button top */
+  --orange-dk:   #6b1100;   /* Lookup button shadow edge */
+
+  /* ----- Button chrome (matches the ref's chunky dark buttons) ----- */
+  --btn-top:     #4a4b4f;
+  --btn-bot:     #26272a;
+  --btn-hl:      rgba(255,255,255,0.14);
+  --btn-edge:    #0a0a0c;
+  --btn-text:    #e8e9ec;
+
+  --btn-active-top: #5a9cd8;
+  --btn-active-bot: #2e5a8a;
+  --btn-active-text: #ffffff;
+
+  /* ----- Spectrum + waterfall ----- */
+  --spec-bg:     #151a20;   /* dark nearly-black blue */
+  --spec-grid:   rgba(255,255,255,0.08);
+  --spec-line:   #7fd4ff;
+  --spec-fill:   rgba(100,180,255,0.25);
+
+  /* classic SDR waterfall ramp: black → dark blue → blue → cyan → yellow → orange → red */
+  --wf-0: #000814;
+  --wf-1: #0a1267;
+  --wf-2: #0d22b2;
+  --wf-3: #1a7ccd;
+  --wf-4: #d4d466;
+  --wf-5: #e89b2a;
+  --wf-6: #c23030;
+
+  /* ----- Meters ----- */
+  --meter-bg:    #0d0e10;
+  --meter-fill:  linear-gradient(90deg, #2e7a2e 0%, #4aa04a 55%, #d4a42a 80%, #d04040 100%);
+
+  /* ----- Type ----- */
+  --font-sans: 'Archivo Narrow', 'Arial Narrow', sans-serif;
+  --font-mono: 'Archivo Narrow', 'Arial Narrow', sans-serif;
+  --font-display: 'Archivo Narrow', sans-serif;
+
+  /* ----- Spacing / radius ----- */
+  --r-xs: 2px;
+  --r-sm: 3px;
+  --r-md: 4px;
+  --r-lg: 6px;
+
+  /* ----- Easing ----- */
+  --ease-out: cubic-bezier(.22,.61,.36,1);
+  --ease-in:  cubic-bezier(.55,.06,.68,.19);
+  --dur-fast: 120ms;
+  --dur-med:  240ms;
+
+  /* ----- Aliases for panel chrome (used across layout.css) ----- */
+  --panel-top:    var(--panel-head-top);
+  --panel-bot:    var(--panel-head-bot);
+  --panel-edge:   var(--panel-border);
+  --panel-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 1px 0 rgba(0,0,0,0.6), 0 2px 4px rgba(0,0,0,0.4);
+}
+
+/* Font swapping via [data-fonts] — keep all mapped to Archivo Narrow by default */
+html[data-fonts="geist"] { --font-sans: 'Archivo Narrow', sans-serif; --font-mono: 'Archivo Narrow', sans-serif; --font-display: 'Archivo Narrow', sans-serif; }
+
+/* ===========================================================
+   Base resets
+   =========================================================== */
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg-app);
+  color: var(--fg-0);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+button { font-family: inherit; color: inherit; border: 0; background: transparent; cursor: pointer; }
+input { font-family: inherit; color: inherit; }

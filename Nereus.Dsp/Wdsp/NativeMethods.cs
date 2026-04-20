@@ -1,0 +1,547 @@
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+
+namespace Nereus.Dsp.Wdsp;
+
+internal static partial class NativeMethods
+{
+    internal const string LibraryName = "wdsp";
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void OpenChannel(
+        int channel,
+        int in_size,
+        int dsp_size,
+        int input_samplerate,
+        int dsp_rate,
+        int output_samplerate,
+        int type,
+        int state,
+        double tdelayup,
+        double tslewup,
+        double tdelaydown,
+        double tslewdown,
+        int bfo);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void CloseChannel(int channel);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetInputSamplerate(int channel, int samplerate);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetOutputSamplerate(int channel, int samplerate);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAMode(int channel, int mode);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXABandpassFreqs(int channel, double f_low, double f_high);
+
+    // SetRXABandpassFreqs alone only updates bp1 (bypassed for SSB). The SSB
+    // passband is enforced by nbp0 (notch-bandpass), which is set by
+    // RXANBPSetFreqs. SNBA tracks the output bandwidth. Thetis rxa.cs:110-124
+    // calls all three together whenever the filter edges change — so do we.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void RXANBPSetFreqs(int channel, double f_low, double f_high);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASNBAOutputBandwidth(int channel, double f_low, double f_high);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXABandpassRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXABandpassWindow(int channel, int wintype);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAPanelRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAPanelGain1(int channel, double gain);
+
+    // select=3 routes both I and Q into the RXA chain — without it WDSP gets
+    // a real-valued signal and cannot separate sidebands (LSB/USB sound identical).
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAPanelSelect(int channel, int select);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAPanelBinaural(int channel, int bin);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAAMDSBMode(int channel, int sbmode);
+
+    // AGC bindings — mode 3 (MED) is Thetis/deskhpsdr default; without this the
+    // WDSP output stays near the raw post-demod level (HL2 signals ~2e-5 peak),
+    // which reaches the browser as near-silence or whisper-quiet hiss.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAAGCMode(int channel, int mode);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAAGCSlope(int channel, int slope);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAAGCTop(int channel, double max_agc);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAAGCAttack(int channel, int attack);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAAGCHang(int channel, int hang);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAAGCDecay(int channel, int decay);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAAGCHangThreshold(int channel, int hangthreshold);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAAGCFixed(int channel, double fixed_agc);
+
+    [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void XCreateAnalyzer(
+        int disp,
+        out int success,
+        int m_size,
+        int m_LO,
+        int m_stitch,
+        string? app_data_path);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void DestroyAnalyzer(int disp);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetAnalyzer(
+        int disp,
+        int n_pixout,
+        int n_fft,
+        int typ,
+        ref int flp,
+        int sz,
+        int bf_sz,
+        int win_type,
+        double pi_alpha,
+        int ovrlp,
+        int clp,
+        double fscLin,
+        double fscHin,
+        int n_pix,
+        int n_stch,
+        int calset,
+        double fmin,
+        double fmax,
+        int max_w);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void Spectrum0(int run, int disp, int ss, int LO, ref double pbuff);
+
+    // Averaging trio. Mode 3 = log-recursive (EMA in dB space) — the Thetis
+    // default. Backmult is the per-frame retention factor (0 = no smoothing,
+    // 1 = frozen). NumAverage matters for modes 2/4; we're on mode 3 so it
+    // just caps the analyzer's internal ring buffer.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetDisplayAverageMode(int disp, int pixout, int mode);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetDisplayNumAverage(int disp, int pixout, int num);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetDisplayAvBackmult(int disp, int pixout, double mult);
+
+    // deskhpsdr's GetPixels has no pixel_ref out-parameter — doc 03 predicted a 5th
+    // argument but the shipped ABI is 4-parameter. Writes float[num_pixels] in place.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void GetPixels(int disp, int pixout, ref float pix, out int flag);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void fexchange0(
+        int channel,
+        ref double inInterleavedIq,
+        ref double outInterleavedAudio,
+        out int error);
+
+    // Noise reduction (post-RXA surface — mirrors the exact subset Thetis exposes).
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAANRRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAANRVals(int channel, int taps, int delay, double gain, double leakage);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAANRPosition(int channel, int position);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAANFRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAANFVals(int channel, int taps, int delay, double gain, double leakage);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAANFPosition(int channel, int position);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAEMNRRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAEMNRPosition(int channel, int position);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAEMNRgainMethod(int channel, int method);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAEMNRnpeMethod(int channel, int method);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAEMNRaeRun(int channel, int run);
+
+    // Auto-enhancement tuning. emnr.c:1415,1422 — both take double. Not exposed
+    // in Thetis UI; defaults inside create_emnr() apply unless overridden.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAEMNRaeZetaThresh(int channel, double zetathresh);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAEMNRaePsi(int channel, double psi);
+
+    // EMNR post-processing (post2). Comfort-noise injection that masks
+    // residual EMNR artifacts — the psychoacoustic mechanism behind Thetis's
+    // smoother-sounding NR2 hiss. emnr.c:1026,1033,1040,1047,1056. Run/Taper
+    // are int; Factor/Nlevel/Rate are double.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAEMNRpost2Run(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAEMNRpost2Factor(int channel, double factor);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAEMNRpost2Nlevel(int channel, double nlevel);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAEMNRpost2Taper(int channel, int taper);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAEMNRpost2Rate(int channel, double tc);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASNBARun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void RXANBPSetNotchesRun(int channel, int run);
+
+    // NB1 (EXTANB) — pre-RXA time-domain noise blanker. Setters dereference
+    // panb[id] so create_anbEXT MUST be called before any SetEXTANB*/xanbEXT.
+    // Buffsize is complex samples (matches WDSP InSize), not doubles.
+    [LibraryImport(LibraryName, EntryPoint = "create_anbEXT")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void CreateAnbEXT(
+        int id,
+        int run,
+        int buffsize,
+        double samplerate,
+        double tau,
+        double hangtime,
+        double advtime,
+        double backtau,
+        double threshold);
+
+    [LibraryImport(LibraryName, EntryPoint = "destroy_anbEXT")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void DestroyAnbEXT(int id);
+
+    [LibraryImport(LibraryName, EntryPoint = "flush_anbEXT")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void FlushAnbEXT(int id);
+
+    [LibraryImport(LibraryName, EntryPoint = "xanbEXT")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void XanbEXT(int id, ref double @in, ref double @out);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetEXTANBRun(int id, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetEXTANBBuffsize(int id, int size);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetEXTANBSamplerate(int id, int rate);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetEXTANBTau(int id, double tau);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetEXTANBHangtime(int id, double time);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetEXTANBAdvtime(int id, double time);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetEXTANBBacktau(int id, double tau);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetEXTANBThreshold(int id, double thresh);
+
+    // NB2 (EXTNOB) — pre-RXA impulse-sequence blanker. Same ordering rule as
+    // EXTANB: create_nobEXT before any SetEXTNOB*/xnobEXT. create_nobEXT's
+    // `slewtime` parameter is applied to both adv_slewtime and hang_slewtime
+    // inside wdsp (see nobII.c:636-637).
+    [LibraryImport(LibraryName, EntryPoint = "create_nobEXT")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void CreateNobEXT(
+        int id,
+        int run,
+        int mode,
+        int buffsize,
+        double samplerate,
+        double slewtime,
+        double hangtime,
+        double advtime,
+        double backtau,
+        double threshold);
+
+    [LibraryImport(LibraryName, EntryPoint = "destroy_nobEXT")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void DestroyNobEXT(int id);
+
+    [LibraryImport(LibraryName, EntryPoint = "flush_nobEXT")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void FlushNobEXT(int id);
+
+    [LibraryImport(LibraryName, EntryPoint = "xnobEXT")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void XnobEXT(int id, ref double @in, ref double @out);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetEXTNOBRun(int id, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetEXTNOBMode(int id, int mode);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetEXTNOBBuffsize(int id, int size);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetEXTNOBSamplerate(int id, int rate);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetEXTNOBTau(int id, double tau);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetEXTNOBHangtime(int id, double time);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetEXTNOBAdvtime(int id, double time);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetEXTNOBBacktau(int id, double tau);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetEXTNOBThreshold(int id, double thresh);
+
+    // =================================================================
+    // TX bindings — mirror of the RXA subset. TXA is WDSP channel type=1
+    // (RXA is type=0) per OpenChannel's `type` param. SetChannelState is
+    // channel-generic: state 1=on / 0=off, dmp 1=damp buffers on transition.
+    // =================================================================
+
+    // channel.h:82 — returns previous state (int). We usually ignore the return.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int SetChannelState(int channel, int state, int dmp);
+
+    // fexchange2 (iobuffs.h:91) — TX-side frame exchange. Iin carries mono mic
+    // samples, Qin stays silent, Iout/Qout receive modulated I/Q for the P1 EP2
+    // outbound packer. INREAL/OUTREAL are `float` (wdsp.h:7-8) — NOT `double`
+    // like fexchange0's interleaved buffers.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void fexchange2(
+        int channel,
+        ref float Iin,
+        ref float Qin,
+        ref float Iout,
+        ref float Qout,
+        out int error);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAMode(int channel, int mode);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXABandpassFreqs(int channel, double f_low, double f_high);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXABandpassRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXABandpassWindow(int channel, int wintype);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAPanelRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAPanelGain1(int channel, double gain);
+
+    // ALC (Automatic Level Control) must be on for the SSB modulator to emit
+    // non-zero IQ. deskhpsdr transmitter.c:1476 comment: "TX ALC on (never
+    // switch it off!)". When the ALC is disabled the mic reaches TXA but the
+    // modulator outputs 0.0 — confirmed on an HL2 live rig 2026-04-18.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAALCSt(int channel, int state);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAALCAttack(int channel, int attackMs);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAALCDecay(int channel, int decayMs);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAALCMaxGain(int channel, double maxGainDb);
+
+    // Microphone noise gate — we don't want it shaping SSB audio.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAAMSQRun(int channel, int run);
+
+    // TX chain stage enables. WDSP ships these "off" at channel-create time
+    // (see native/wdsp/TXA.c) but we assert them explicitly in OpenTxChannel
+    // so our TX baseline is deterministic, not a byproduct of library
+    // defaults. Enabling/tuning Leveler/Compressor is operator-controlled
+    // follow-up work; this worktree only locks in the clean-slate state.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXALevelerSt(int channel, int state);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXACompressorRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXACFCOMPRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAPHROTRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAosctrlRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAEQRun(int channel, int run);
+
+    // TUN carrier generator (wdsp.h:586-589) injected post-DSP. Thetis
+    // console.cs:18648 uses SetTXAPostGenMode(1) + SetTXAPostGenToneFreq(0.0)
+    // + SetTXAPostGenToneMag(mag) to key a steady tone for antenna matching.
+    // Same sequence here (see docs/prd/12-tx-feature.md §FR-7).
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAPostGenRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAPostGenMode(int channel, int mode);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAPostGenToneMag(int channel, double mag);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAPostGenToneFreq(int channel, double freq);
+
+    // meter.h:67 — returns a dBm value from RXA's internal meter ring. `mt` is
+    // the rxaMeterType ordinal: 0 = RXA_S_PK, 1 = RXA_S_AV (what the S-meter
+    // uses), 2 = RXA_ADC_PK, … See Thetis console/dsp.cs:876-884 for the full
+    // enum. Thread-safe — WDSP holds a per-meter CRITICAL_SECTION internally.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial double GetRXAMeter(int channel, int mt);
+
+    // TXA side. Indices per Thetis TXA.h:49-68 txaMeterType — MIC_AV=1,
+    // EQ_AV=3, LVLR_AV=5, LVLR_GAIN=6, CFC_AV=8, CFC_GAIN=9, COMP_AV=11,
+    // ALC_AV=13, ALC_GAIN=14, OUT_AV=16. Used for per-stage TX diagnostics
+    // to localize where the signal is dropping.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial double GetTXAMeter(int channel, int mt);
+}

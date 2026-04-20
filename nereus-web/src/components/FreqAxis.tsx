@@ -1,0 +1,71 @@
+import { useDisplayStore } from '../state/display-store';
+
+function pickStrideHz(spanHz: number, targetTicks: number): number {
+  if (spanHz <= 0) return 1;
+  const rough = spanHz / targetTicks;
+  const pow = Math.pow(10, Math.floor(Math.log10(rough)));
+  const n = rough / pow;
+  let nice: number;
+  if (n < 1.5) nice = 1;
+  else if (n < 3.5) nice = 2;
+  else if (n < 7.5) nice = 5;
+  else nice = 10;
+  return nice * pow;
+}
+
+function formatMHz(hz: number, strideHz: number): string {
+  const mhz = hz / 1e6;
+  if (strideHz >= 100_000) return mhz.toFixed(2);
+  if (strideHz >= 10_000) return mhz.toFixed(3);
+  if (strideHz >= 1_000) return mhz.toFixed(4);
+  if (strideHz >= 100) return mhz.toFixed(5);
+  return mhz.toFixed(6);
+}
+
+// Overlay rendered inside Panadapter's container. Positions ticks by
+// percentage of the total span so it stays aligned without measuring DOM
+// width: spanHz = panDb.length * hzPerPixel; centerHz lands at 50%.
+export function FreqAxis() {
+  const centerHz = useDisplayStore((s) => s.centerHz);
+  const hzPerPixel = useDisplayStore((s) => s.hzPerPixel);
+  const width = useDisplayStore((s) => s.panDb?.length ?? 0);
+
+  if (!width || hzPerPixel <= 0) return null;
+
+  const spanHz = width * hzPerPixel;
+  const stride = pickStrideHz(spanHz, 6);
+  const center = Number(centerHz);
+  const startHz = center - spanHz / 2;
+  const endHz = center + spanHz / 2;
+
+  const firstIdx = Math.ceil(startHz / stride);
+  const lastIdx = Math.floor(endHz / stride);
+  const ticks: { hz: number; pct: number }[] = [];
+  for (let i = firstIdx; i <= lastIdx; i++) {
+    const hz = i * stride;
+    ticks.push({ hz, pct: ((hz - startHz) / spanHz) * 100 });
+  }
+
+  return (
+    <>
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-5 bg-neutral-950/70">
+        {ticks.map((t) => (
+          <div
+            key={t.hz}
+            className="absolute top-0 -translate-x-1/2 font-mono text-[10px] leading-none text-neutral-300"
+            style={{ left: `${t.pct}%` }}
+          >
+            <div className="mx-auto h-1.5 w-px bg-neutral-400" />
+            <div className="mt-0.5 px-1 whitespace-nowrap">
+              {formatMHz(t.hz, stride)}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div
+        className="pointer-events-none absolute inset-y-0 z-10 w-px bg-amber-400/60"
+        style={{ left: '50%' }}
+      />
+    </>
+  );
+}

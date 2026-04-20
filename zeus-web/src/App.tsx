@@ -12,6 +12,7 @@ import { MoxButton } from './components/MoxButton';
 import { Panadapter } from './components/Panadapter';
 import { PreampButton } from './components/PreampButton';
 import { QrzStatusPill } from './components/QrzStatusPill';
+import { RotatorStatusPill } from './components/RotatorStatusPill';
 import { SMeterLive } from './components/SMeterLive';
 import { TxStageMeters } from './components/TxStageMeters';
 import { TunButton } from './components/TunButton';
@@ -34,6 +35,7 @@ import { useMicUplink } from './audio/use-mic-uplink';
 import { fetchState } from './api/client';
 import { useConnectionStore } from './state/connection-store';
 import { useQrzStore } from './state/qrz-store';
+import { useRotatorStore } from './state/rotator-store';
 import { useTxStore } from './state/tx-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
 import type { QrzStation } from './api/qrz';
@@ -246,6 +248,12 @@ export default function App() {
     if (!Number.isFinite(parsed)) return;
     const normalized = ((parsed % 360) + 360) % 360;
     setBeamOverrideDeg(normalized);
+    // Also command the rotator if it's enabled — visual override + physical
+    // rotation in one click, same UX as Log4YM's map beam control.
+    const rot = useRotatorStore.getState();
+    if (rot.config.enabled && rot.status?.connected) {
+      void rot.setAzimuth(normalized);
+    }
   }
 
   // --- Hero title
@@ -369,6 +377,7 @@ export default function App() {
             polls. */}
         {connected && <ConnectPanel />}
 
+        <RotatorStatusPill />
         <QrzStatusPill />
 
         <button

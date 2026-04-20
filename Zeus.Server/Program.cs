@@ -51,6 +51,12 @@ builder.Services.AddHostedService<TxTuneDriver>();
 builder.Services.AddHttpClient("Qrz", c => c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddSingleton<QrzService>();
 
+// rotctld (hamlib rotator daemon) client. BackgroundService with persistent
+// TCP and reconnect-on-failure. Singleton so config/state survive across
+// requests; hosted-service registration runs ExecuteAsync.
+builder.Services.AddSingleton<RotctldService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<RotctldService>());
+
 var app = builder.Build();
 
 app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(20) });
@@ -292,6 +298,37 @@ app.MapPost("/api/qrz/lookup", async (QrzLookupRequest req, QrzService qrz, Http
 });
 
 app.MapPost("/api/qrz/logout", (QrzService qrz) => { qrz.Logout(); return Results.Ok(qrz.GetStatus()); });
+
+app.MapGet("/api/rotator/status", (RotctldService rot) => rot.GetStatus());
+
+app.MapPost("/api/rotator/config", async (RotctldConfig req, RotctldService rot, HttpContext ctx) =>
+{
+    log.LogInformation("api.rotator.config enabled={En} host={Host} port={Port}", req.Enabled, req.Host, req.Port);
+    var status = await rot.SetConfigAsync(req, ctx.RequestAborted);
+    return Results.Ok(status);
+});
+
+app.MapPost("/api/rotator/set", async (RotctldSetAzRequest req, RotctldService rot, HttpContext ctx) =>
+{
+    if (!double.IsFinite(req.Azimuth)) return Results.BadRequest(new { error = "azimuth must be finite" });
+    var status = await rot.SetAzAsync(req.Azimuth, ctx.RequestAborted);
+    if (!status.Connected) return Results.Json(status, statusCode: StatusCodes.Status503ServiceUnavailable);
+    return Results.Ok(status);
+});
+
+app.MapPost("/api/rotator/stop", async (RotctldService rot, HttpContext ctx) =>
+{
+    var status = await rot.StopRotatorAsync(ctx.RequestAborted);
+    return Results.Ok(status);
+});
+
+app.MapPost("/api/rotator/test", async (RotctldTestRequest req, RotctldService rot, HttpContext ctx) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Host) || req.Port is <= 0 or >= 65536)
+        return Results.BadRequest(new { error = "host and port required" });
+    var result = await rot.TestAsync(req.Host.Trim(), req.Port, ctx.RequestAborted);
+    return Results.Ok(result);
+});
 
 app.Map("/ws", async (HttpContext ctx, StreamingHub hub) =>
 {

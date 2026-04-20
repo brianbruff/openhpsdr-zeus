@@ -1,6 +1,6 @@
 # openhpsdr-zeus
 
-A modern SDR console for OpenHPSDR-protocol radios (Hermes Lite 2, ANAN, etc.) — .NET 10 backend with a React + WebGL frontend served over WebSocket.
+A modern SDR console for the Hermes Lite 2 — .NET 10 backend with a React + WebGL frontend served over WebSocket. Other OpenHPSDR Protocol-1 radios (ANAN, etc.) aren't supported yet.
 
 ## About the name
 

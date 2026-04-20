@@ -19,8 +19,8 @@ Thetis, which made him a fitting nod to the long-running
 DSP heritage traces back to.
 
 The problem: somebody else was already shipping a C++ AetherSDR-flavoured
-project called **nereusSDR**. Two HPSDR-adjacent projects sharing a name got
-confusing fast, so we moved on.
+project called **nereusSDR**. Two adjacent projects sharing a name got
+confusing fast, so we moved on and up.
 
 Meet **Zeus** — king of the gods. It doesn't really get more regal than that.
 

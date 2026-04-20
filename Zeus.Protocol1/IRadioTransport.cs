@@ -1,4 +1,4 @@
-namespace Nereus.Protocol1;
+namespace Zeus.Protocol1;
 
 public interface IRadioTransport : IAsyncDisposable
 {

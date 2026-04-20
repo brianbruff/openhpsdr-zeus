@@ -1,7 +1,7 @@
 # native/ — WDSP cross-platform build
 
 This directory vendors the WDSP DSP engine (Warren Pratt, GPLv3) and builds it
-as a shared library that `Nereus.Dsp` loads via P/Invoke.
+as a shared library that `Zeus.Dsp` loads via P/Invoke.
 
 Source baseline: **`deskhpsdr/wdsp-1.29/`**. deskhpsdr already ported WDSP off
 MSVC with a `linux_port.{c,h}` shim and `#ifdef _WIN32` guards. Thetis's own
@@ -15,7 +15,7 @@ native/
   wdsp/stubs/           # minimal headers + no-op rnnr/sbnr for MVP
   wdsp/wdsp_export.h    # WDSP_EXPORT visibility macro (replaces PORT)
   wdsp/CMakeLists.txt   # the real build
-  build.sh              # convenience wrapper -> stages .dylib into Nereus.Dsp
+  build.sh              # convenience wrapper -> stages .dylib into Zeus.Dsp
   build/                # generated CMake cache (gitignored)
 ```
 
@@ -23,12 +23,12 @@ native/
 
 ```sh
 brew install fftw cmake
-./native/build.sh                # Release, output -> Nereus.Dsp/runtimes/<rid>/native/
+./native/build.sh                # Release, output -> Zeus.Dsp/runtimes/<rid>/native/
 ./native/build.sh Debug          # optional: Debug build
 ```
 
 The script auto-detects `osx-arm64` vs `osx-x64` and stages `libwdsp.dylib`
-into the matching `Nereus.Dsp/runtimes/<rid>/native/` directory. .NET's default
+into the matching `Zeus.Dsp/runtimes/<rid>/native/` directory. .NET's default
 native library resolution picks it up with no extra configuration.
 
 ## Build on Linux (x86_64 / arm64)
@@ -39,7 +39,7 @@ sudo dnf install fftw-devel cmake gcc pkgconf                      # Fedora/RHEL
 ./native/build.sh
 ```
 
-Produces `Nereus.Dsp/runtimes/linux-x64/native/libwdsp.so` (or `linux-arm64`).
+Produces `Zeus.Dsp/runtimes/linux-x64/native/libwdsp.so` (or `linux-arm64`).
 
 ## Build on Windows (x64)
 
@@ -54,7 +54,7 @@ winget install Microsoft.VisualStudio.2022.BuildTools   # or full VS
 # point CMake at them via -DCMAKE_PREFIX_PATH.
 cmake -S native\wdsp -B native\build -G "Visual Studio 17 2022" -A x64
 cmake --build native\build --config Release
-copy native\build\Release\wdsp.dll Nereus.Dsp\runtimes\win-x64\native\
+copy native\build\Release\wdsp.dll Zeus.Dsp\runtimes\win-x64\native\
 ```
 
 Known Windows TODOs:
@@ -70,13 +70,13 @@ Known Windows TODOs:
 `-fvisibility=hidden` is set at the compiler level, so only the functions
 marked `PORT` (→ `WDSP_EXPORT`) in the upstream WDSP headers are exported.
 That's ~500 symbols on the current build — a proper superset of the ~20 the
-C# wrapper in `Nereus.Dsp/` uses. The wrapper only P/Invokes names that
+C# wrapper in `Zeus.Dsp/` uses. The wrapper only P/Invokes names that
 actually exist.
 
 Verify the MVP surface after a build:
 
 ```sh
-nm -gU Nereus.Dsp/runtimes/osx-arm64/native/libwdsp.dylib \
+nm -gU Zeus.Dsp/runtimes/osx-arm64/native/libwdsp.dylib \
   | grep -E 'OpenChannel|CloseChannel|SetRXAMode|XCreateAnalyzer|SetAnalyzer|GetPixels|Spectrum0|fexchange0|DestroyAnalyzer'
 ```
 

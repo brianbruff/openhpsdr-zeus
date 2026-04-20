@@ -1,8 +1,8 @@
 using System.Net;
 using System.Net.NetworkInformation;
-using Nereus.Protocol1.Discovery;
+using Zeus.Protocol1.Discovery;
 
-namespace Nereus.Protocol1.Tests;
+namespace Zeus.Protocol1.Tests;
 
 public class DiscoveryTests
 {

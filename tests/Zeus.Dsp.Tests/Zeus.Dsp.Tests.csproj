@@ -20,8 +20,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\Nereus.Dsp\Nereus.Dsp.csproj" />
-    <ProjectReference Include="..\..\Nereus.Contracts\Nereus.Contracts.csproj" />
+    <ProjectReference Include="..\..\Zeus.Dsp\Zeus.Dsp.csproj" />
+    <ProjectReference Include="..\..\Zeus.Contracts\Zeus.Contracts.csproj" />
   </ItemGroup>
 
 </Project>

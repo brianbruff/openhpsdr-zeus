@@ -1,12 +1,12 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using Nereus.Contracts;
-using Nereus.Dsp;
-using Nereus.Protocol1;
-using Nereus.Server;
+using Zeus.Contracts;
+using Zeus.Dsp;
+using Zeus.Protocol1;
+using Zeus.Server;
 using Xunit;
 
-namespace Nereus.Server.Tests;
+namespace Zeus.Server.Tests;
 
 /// <summary>
 /// PRD FR-6 SWR auto-trip: TxMetersService must drop MOX/TUN if SWR &gt; 2.5

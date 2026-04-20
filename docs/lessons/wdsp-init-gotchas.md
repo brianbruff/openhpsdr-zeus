@@ -1,6 +1,6 @@
 # WDSP channel & meter init gotchas
 
-Load-bearing patterns for anyone touching `Nereus.Dsp.Wdsp.WdspDspEngine` or the channel lifecycle in `native/wdsp/`. These are costly to rediscover — bookmark this file if you're doing meter / TXA / lifecycle work.
+Load-bearing patterns for anyone touching `Zeus.Dsp.Wdsp.WdspDspEngine` or the channel lifecycle in `native/wdsp/`. These are costly to rediscover — bookmark this file if you're doing meter / TXA / lifecycle work.
 
 ## TL;DR
 
@@ -44,7 +44,7 @@ NativeMethods.SetChannelState(id, 1, 0);  // flip AFTER worker is live
 
 References:
 - Thetis `Project Files/Source/Console/rxa.cs:63` — `// main rcvr ON`.
-- Nereus commit `bcfc1e3` — the fix.
+- Zeus commit `bcfc1e3` — the fix.
 
 ## The `-400` sentinel
 

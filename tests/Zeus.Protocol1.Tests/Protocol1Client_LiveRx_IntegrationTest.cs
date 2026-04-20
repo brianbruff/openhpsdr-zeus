@@ -1,10 +1,10 @@
 using System.Net;
 using Xunit;
 
-namespace Nereus.Protocol1.Tests;
+namespace Zeus.Protocol1.Tests;
 
 /// <summary>
-/// Live HL2 / ANAN regression harness. Skipped unless <c>NEREUS_LIVE_RADIO=ip[:port]</c>
+/// Live HL2 / ANAN regression harness. Skipped unless <c>ZEUS_LIVE_RADIO=ip[:port]</c>
 /// is set in the environment. Do NOT auto-connect to the user's radio in CI.
 /// </summary>
 public class Protocol1Client_LiveRx_IntegrationTest
@@ -14,7 +14,7 @@ public class Protocol1Client_LiveRx_IntegrationTest
     {
         var endpoint = ResolveEndpointFromEnv();
         Skip.If(endpoint is null,
-            "Set NEREUS_LIVE_RADIO=ip[:port] to exercise this harness. Default port 1024.");
+            "Set ZEUS_LIVE_RADIO=ip[:port] to exercise this harness. Default port 1024.");
 
         using var client = new Protocol1Client();
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -43,7 +43,7 @@ public class Protocol1Client_LiveRx_IntegrationTest
 
     private static IPEndPoint? ResolveEndpointFromEnv()
     {
-        var raw = Environment.GetEnvironmentVariable("NEREUS_LIVE_RADIO");
+        var raw = Environment.GetEnvironmentVariable("ZEUS_LIVE_RADIO");
         if (string.IsNullOrWhiteSpace(raw)) return null;
         var parts = raw.Split(':', 2);
         if (!IPAddress.TryParse(parts[0], out var ip)) return null;

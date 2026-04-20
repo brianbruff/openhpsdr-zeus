@@ -1,4 +1,4 @@
-/* rnnr_stub.c — Nereus NR3 stub
+/* rnnr_stub.c — Zeus NR3 stub
  *
  * No-op replacement for rnnr.c used by the MVP build. Upstream rnnr.c
  * links against RNNoise; we defer that dependency and compile this file

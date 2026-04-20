@@ -99,19 +99,19 @@ export default function App() {
 
   // --- Variant / fonts (Tweaks panel) ---
   const [variant, setVariant] = useState<string>(
-    () => localStorage.getItem('nereus.variant') || 'console',
+    () => localStorage.getItem('zeus.variant') || 'console',
   );
   const [fonts, setFonts] = useState<string>(
-    () => localStorage.getItem('nereus.fonts') || 'geist',
+    () => localStorage.getItem('zeus.fonts') || 'geist',
   );
   const [tweaksOpen, setTweaksOpen] = useState(false);
   useEffect(() => {
     document.documentElement.setAttribute('data-variant', variant);
-    localStorage.setItem('nereus.variant', variant);
+    localStorage.setItem('zeus.variant', variant);
   }, [variant]);
   useEffect(() => {
     document.documentElement.setAttribute('data-fonts', fonts);
-    localStorage.setItem('nereus.fonts', fonts);
+    localStorage.setItem('zeus.fonts', fonts);
   }, [fonts]);
 
   // --- Design-mock state (QRZ, DSP grid toggles, CW WPM, memories) ---
@@ -273,7 +273,7 @@ export default function App() {
             </svg>
           </div>
           <div className="brand-text">
-            <div className="brand-name mono">NEREUS</div>
+            <div className="brand-name mono">ZEUS</div>
             <div className="brand-sub label-xs">HERMES LITE 2 · 0.1–54 MHz</div>
           </div>
         </div>

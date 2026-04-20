@@ -1,7 +1,7 @@
 using System.Buffers;
 using System.Buffers.Binary;
 
-namespace Nereus.Contracts;
+namespace Zeus.Contracts;
 
 // Compact RX-meter frame: [0x14][rxDbm : f32 LE] = 5 bytes.
 // Broadcast at ~5 Hz from DspPipelineService while an engine is live.

@@ -1,4 +1,4 @@
-namespace Nereus.Protocol1;
+namespace Zeus.Protocol1;
 
 /// <summary>
 /// Server-side single-frequency sinewave IQ generator used to prove the TX

@@ -2,7 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.NetworkInformation;
 
-namespace Nereus.Protocol1.Discovery;
+namespace Zeus.Protocol1.Discovery;
 
 public static class ReplyParser
 {

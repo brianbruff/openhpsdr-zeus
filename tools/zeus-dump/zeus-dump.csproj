@@ -5,12 +5,12 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <RootNamespace>Nereus.Tools.NereusDump</RootNamespace>
-    <AssemblyName>nereus-dump</AssemblyName>
+    <RootNamespace>Zeus.Tools.ZeusDump</RootNamespace>
+    <AssemblyName>zeus-dump</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\Nereus.Protocol1\Nereus.Protocol1.csproj" />
+    <ProjectReference Include="..\..\Zeus.Protocol1\Zeus.Protocol1.csproj" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
   </ItemGroup>
 

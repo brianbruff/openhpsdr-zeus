@@ -1,4 +1,4 @@
-# CMakeLists.txt — Nereus WDSP shared library build
+# CMakeLists.txt — Zeus WDSP shared library build
 #
 # Produces:
 #   macOS   : libwdsp.dylib  (arm64, x86_64)
@@ -21,7 +21,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(wdsp
     VERSION 1.29.0
-    DESCRIPTION "WDSP DSP engine, packaged for Nereus"
+    DESCRIPTION "WDSP DSP engine, packaged for Zeus"
     LANGUAGES C
 )
 

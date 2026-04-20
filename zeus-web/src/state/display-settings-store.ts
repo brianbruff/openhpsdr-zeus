@@ -9,7 +9,7 @@ import type { ColormapId } from '../gl/colormap';
 export const FIXED_DB_MIN = -140;
 export const FIXED_DB_MAX = -50;
 
-const STORAGE_KEY = 'nereus.display.dbRange';
+const STORAGE_KEY = 'zeus.display.dbRange';
 
 function readSavedRange(): { dbMin: number; dbMax: number } {
   try {

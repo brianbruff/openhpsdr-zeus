@@ -8,8 +8,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Nereus.Contracts\Nereus.Contracts.csproj" />
-    <InternalsVisibleTo Include="Nereus.Dsp.Tests" />
+    <ProjectReference Include="..\Zeus.Contracts\Zeus.Contracts.csproj" />
+    <InternalsVisibleTo Include="Zeus.Dsp.Tests" />
   </ItemGroup>
 
   <ItemGroup>

@@ -21,10 +21,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\Nereus.Server\Nereus.Server.csproj" />
-    <ProjectReference Include="..\..\Nereus.Protocol1\Nereus.Protocol1.csproj" />
-    <ProjectReference Include="..\..\Nereus.Contracts\Nereus.Contracts.csproj" />
-    <ProjectReference Include="..\..\Nereus.Dsp\Nereus.Dsp.csproj" />
+    <ProjectReference Include="..\..\Zeus.Server\Zeus.Server.csproj" />
+    <ProjectReference Include="..\..\Zeus.Protocol1\Zeus.Protocol1.csproj" />
+    <ProjectReference Include="..\..\Zeus.Contracts\Zeus.Contracts.csproj" />
+    <ProjectReference Include="..\..\Zeus.Dsp\Zeus.Dsp.csproj" />
   </ItemGroup>
 
 </Project>

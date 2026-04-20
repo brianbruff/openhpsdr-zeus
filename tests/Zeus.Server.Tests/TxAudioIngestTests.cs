@@ -1,11 +1,11 @@
 using System.Buffers.Binary;
 using Microsoft.Extensions.Logging.Abstractions;
-using Nereus.Contracts;
-using Nereus.Dsp;
-using Nereus.Protocol1;
-using Nereus.Server;
+using Zeus.Contracts;
+using Zeus.Dsp;
+using Zeus.Protocol1;
+using Zeus.Server;
 
-namespace Nereus.Server.Tests;
+namespace Zeus.Server.Tests;
 
 public class TxAudioIngestTests
 {

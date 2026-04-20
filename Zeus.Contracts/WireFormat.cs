@@ -1,9 +1,9 @@
 // Web-side wire is deliberately little-endian: JS DataView/TypedArrays are LE-by-default
 // on all target machines. Big-endian is only used on the HPSDR radio side (Protocol 1 UDP),
-// which is a distinct concern handled inside Nereus.Protocol1.
+// which is a distinct concern handled inside Zeus.Protocol1.
 using System.Buffers.Binary;
 
-namespace Nereus.Contracts;
+namespace Zeus.Contracts;
 
 public static class WireFormat
 {

@@ -46,7 +46,7 @@ describe('normalizeMode', () => {
     expect(normalizeMode('USB')).toBe('USB');
     expect(normalizeMode('DIGU')).toBe('DIGU');
   });
-  it('maps numeric enum values to RxMode in Nereus.Contracts order', () => {
+  it('maps numeric enum values to RxMode in Zeus.Contracts order', () => {
     expect(normalizeMode(0)).toBe('LSB');
     expect(normalizeMode(1)).toBe('USB');
     expect(normalizeMode(4)).toBe('AM');

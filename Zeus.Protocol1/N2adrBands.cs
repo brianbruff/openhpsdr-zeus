@@ -1,4 +1,4 @@
-namespace Nereus.Protocol1;
+namespace Zeus.Protocol1;
 
 /// <summary>
 /// N2ADR 7-relay filter board band-to-OC-pin lookup. Returns the raw pin

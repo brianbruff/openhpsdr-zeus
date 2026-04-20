@@ -1,4 +1,4 @@
-namespace Nereus.Protocol1;
+namespace Zeus.Protocol1;
 
 /// <summary>
 /// Supplies one (I, Q) s16 pair per call for the EP2 TX payload. Two concrete

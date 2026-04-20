@@ -1,11 +1,11 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Nereus.Contracts;
-using Nereus.Dsp;
-using Nereus.Dsp.Wdsp;
+using Zeus.Contracts;
+using Zeus.Dsp;
+using Zeus.Dsp.Wdsp;
 using Xunit;
 
-namespace Nereus.Dsp.Tests;
+namespace Zeus.Dsp.Tests;
 
 [Collection("Wdsp")]
 public class NoiseReductionTests

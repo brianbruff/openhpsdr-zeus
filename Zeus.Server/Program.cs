@@ -1,10 +1,10 @@
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Http.Json;
-using Nereus.Contracts;
-using Nereus.Dsp;
-using Nereus.Protocol1;
-using Nereus.Protocol1.Discovery;
-using Nereus.Server;
+using Zeus.Contracts;
+using Zeus.Dsp;
+using Zeus.Protocol1;
+using Zeus.Protocol1.Discovery;
+using Zeus.Server;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -28,9 +28,9 @@ builder.WebHost.ConfigureKestrel(k => k.ListenAnyIP(6060));
 builder.Services.AddSingleton<IRadioDiscovery, RadioDiscoveryService>();
 // TxIqRing is shared: TxAudioIngest writes modulated IQ into it, Protocol1Client
 // (constructed inside RadioService) reads from it for the EP2 payload.
-builder.Services.AddSingleton<Nereus.Protocol1.TxIqRing>();
-builder.Services.AddSingleton<Nereus.Protocol1.ITxIqSource>(sp =>
-    sp.GetRequiredService<Nereus.Protocol1.TxIqRing>());
+builder.Services.AddSingleton<Zeus.Protocol1.TxIqRing>();
+builder.Services.AddSingleton<Zeus.Protocol1.ITxIqSource>(sp =>
+    sp.GetRequiredService<Zeus.Protocol1.TxIqRing>());
 builder.Services.AddSingleton<RadioService>();
 builder.Services.AddSingleton<StreamingHub>();
 builder.Services.AddSingleton<DspPipelineService>();
@@ -63,7 +63,7 @@ app.MapGet("/api/state", (RadioService r) => r.Snapshot());
 // (Protocol1Client via ITxIqSource) stats. Useful for "is the mic reaching
 // TXA, and is the EP2 packer actually reading the ring" questions without
 // hunting through logs. Free to call, exposes no secrets.
-app.MapGet("/api/tx/diag", (Nereus.Protocol1.TxIqRing ring, Nereus.Protocol1.ITxIqSource src, TxAudioIngest ingest) =>
+app.MapGet("/api/tx/diag", (Zeus.Protocol1.TxIqRing ring, Zeus.Protocol1.ITxIqSource src, TxAudioIngest ingest) =>
 {
     return Results.Ok(new
     {

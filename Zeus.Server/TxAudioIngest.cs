@@ -1,9 +1,9 @@
 using System.Buffers.Binary;
 using Microsoft.Extensions.Logging;
-using Nereus.Dsp;
-using Nereus.Protocol1;
+using Zeus.Dsp;
+using Zeus.Protocol1;
 
-namespace Nereus.Server;
+namespace Zeus.Server;
 
 /// <summary>
 /// Bridges browser-side mic audio to WDSP TXA and onward to the EP2 IQ

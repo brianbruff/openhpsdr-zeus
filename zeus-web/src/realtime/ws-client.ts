@@ -10,7 +10,7 @@ const MAX_BACKOFF_MS = 8000;
 
 // Binary WS frame type for TX meters: 1 type byte + 9 × f32 LE
 // (fwdWatts, refWatts, swr, micDbfs, eqPk, lvlrPk, alcPk, alcGr, outPk).
-// Contract locked with the server team in Nereus.Contracts/TxMetersFrame.cs —
+// Contract locked with the server team in Zeus.Contracts/TxMetersFrame.cs —
 // the last 5 floats are TXA per-stage peak readings added for the TX-quality
 // diagnostic strip; they read −∞ / 0 while idle.
 export const MSG_TYPE_TX_METERS = 0x11;

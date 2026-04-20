@@ -1,4 +1,4 @@
-namespace Nereus.Dsp;
+namespace Zeus.Dsp;
 
 /// <summary>
 /// Per-block peak readings from the WDSP TXA metering ring. Values are in

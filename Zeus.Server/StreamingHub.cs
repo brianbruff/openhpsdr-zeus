@@ -2,9 +2,9 @@ using System.Buffers;
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Threading.Channels;
-using Nereus.Contracts;
+using Zeus.Contracts;
 
-namespace Nereus.Server;
+namespace Zeus.Server;
 
 public sealed class StreamingHub
 {

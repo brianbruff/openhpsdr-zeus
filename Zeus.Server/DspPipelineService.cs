@@ -1,11 +1,11 @@
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
-using Nereus.Contracts;
-using Nereus.Dsp;
-using Nereus.Dsp.Wdsp;
-using Nereus.Protocol1;
+using Zeus.Contracts;
+using Zeus.Dsp;
+using Zeus.Dsp.Wdsp;
+using Zeus.Protocol1;
 
-namespace Nereus.Server;
+namespace Zeus.Server;
 
 public class DspPipelineService : BackgroundService
 {

@@ -1,8 +1,8 @@
-using Nereus.Contracts;
-using Nereus.Server;
+using Zeus.Contracts;
+using Zeus.Server;
 using Xunit;
 
-namespace Nereus.Contracts.Tests;
+namespace Zeus.Contracts.Tests;
 
 public class TxMetersMathTests
 {

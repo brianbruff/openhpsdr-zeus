@@ -1,14 +1,14 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Nereus.Dsp;
-using Nereus.Protocol1;
+using Zeus.Dsp;
+using Zeus.Protocol1;
 
-namespace Nereus.Server;
+namespace Zeus.Server;
 
 /// <summary>
 /// Keeps WDSP TXA's sample pump running when TUN is on but the mic uplink
 /// isn't. TUN's post-generator tone lives inside the TXA chain
-/// (<see cref="Nereus.Dsp.Wdsp.WdspDspEngine.SetTxTune"/>), so it only emits
+/// (<see cref="Zeus.Dsp.Wdsp.WdspDspEngine.SetTxTune"/>), so it only emits
 /// IQ when <c>fexchange2</c> is called at the block rate. During MOX that
 /// call is driven by <see cref="TxAudioIngest"/> as mic frames arrive; during
 /// TUN we have no mic, so this service synthesises silent mic input at the

@@ -1,8 +1,8 @@
 using System.Net;
 using System.Threading.Channels;
-using Nereus.Protocol1.Discovery;
+using Zeus.Protocol1.Discovery;
 
-namespace Nereus.Protocol1;
+namespace Zeus.Protocol1;
 
 /// <summary>
 /// Surface of the Protocol-1 streaming client. One instance per radio.

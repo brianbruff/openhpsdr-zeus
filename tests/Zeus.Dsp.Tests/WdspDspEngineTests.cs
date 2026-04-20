@@ -1,9 +1,9 @@
 using System.Runtime.InteropServices;
-using Nereus.Contracts;
-using Nereus.Dsp;
-using Nereus.Dsp.Wdsp;
+using Zeus.Contracts;
+using Zeus.Dsp;
+using Zeus.Dsp.Wdsp;
 
-namespace Nereus.Dsp.Tests;
+namespace Zeus.Dsp.Tests;
 
 // WDSP's FFTW planner state is process-global and its wisdom cache asserts
 // SLVNDX(slot) == slvndx when two threads enter create_fftplan at once (see

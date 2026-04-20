@@ -1,7 +1,7 @@
-using Nereus.Contracts;
+using Zeus.Contracts;
 using Xunit;
 
-namespace Nereus.Contracts.Tests;
+namespace Zeus.Contracts.Tests;
 
 public class AlertFrameTests
 {

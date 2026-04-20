@@ -4,7 +4,7 @@ using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
 
-namespace Nereus.Protocol1.Discovery;
+namespace Zeus.Protocol1.Discovery;
 
 public sealed class RadioDiscoveryService : IRadioDiscovery
 {

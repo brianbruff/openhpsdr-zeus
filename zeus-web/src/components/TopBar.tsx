@@ -16,7 +16,7 @@ export function TopBar() {
   return (
     <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-neutral-800 px-3 py-2 sm:px-4">
       <div className="flex items-center gap-3">
-        <span className="font-semibold tracking-wider">NEREUS</span>
+        <span className="font-semibold tracking-wider">ZEUS</span>
         <span className="hidden text-xs text-neutral-500 sm:inline">Phase 0</span>
       </div>
       <span

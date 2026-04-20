@@ -5,9 +5,9 @@ using System.Net.Sockets;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using Nereus.Protocol1.Discovery;
+using Zeus.Protocol1.Discovery;
 
-namespace Nereus.Protocol1;
+namespace Zeus.Protocol1;
 
 public sealed class Protocol1Client : IProtocol1Client
 {
@@ -43,7 +43,7 @@ public sealed class Protocol1Client : IProtocol1Client
 
     // TX IQ source: WDSP-TXA-driven ring in the live path (task #7/#8), or
     // the built-in test-tone when caller wants a bring-up carrier. Default is
-    // the tone so legacy callers (tests, tools/nereus-dump) keep working.
+    // the tone so legacy callers (tests, tools/zeus-dump) keep working.
     private readonly ITxIqSource _txIqSource;
 
     public Protocol1Client(ILogger<Protocol1Client>? logger = null, ITxIqSource? iqSource = null)
@@ -111,7 +111,7 @@ public sealed class Protocol1Client : IProtocol1Client
         _rxThread = new Thread(RxLoop)
         {
             IsBackground = true,
-            Name = "Nereus.Protocol1.Rx",
+            Name = "Zeus.Protocol1.Rx",
         };
         _rxThread.Start();
 
@@ -322,7 +322,7 @@ public sealed class Protocol1Client : IProtocol1Client
     // follows QSY, and TxFreq shows up in 2 of every 4 packets so a QSY
     // while keyed takes effect within a couple of ms. deskhpsdr reuses the
     // RX VFO for TxFreq when Split/RIT are off; we do the same here since
-    // Nereus has no separate TX VFO yet.
+    // Zeus has no separate TX VFO yet.
     internal static (ControlFrame.CcRegister first, ControlFrame.CcRegister second) PhaseRegisters(int phase, bool mox)
     {
         int p = phase & 0x3;

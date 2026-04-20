@@ -1,7 +1,7 @@
 using System.Buffers;
 using System.Text;
 
-namespace Nereus.Contracts;
+namespace Zeus.Contracts;
 
 /// <summary>
 /// Alert frame carrying a kind byte (0 = SWR trip, others reserved) and a

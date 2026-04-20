@@ -118,7 +118,7 @@ export const useTxStore = create<TxState>()(
       setAlert: (a) => set({ alert: a }),
     }),
     {
-      name: 'nereus-tx',
+      name: 'zeus-tx',
       // Only persist the two fields the operator repeatedly sets. Everything
       // else (mox/tun/meters/alert) is transient per-session.
       partialize: (s) => ({

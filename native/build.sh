@@ -5,7 +5,7 @@
 #   ./native/build.sh                 # Release, osx-arm64 layout
 #   ./native/build.sh Debug           # pass build type as arg
 #
-# Run from the repo root. Output goes to Nereus.Dsp/runtimes/<rid>/native/ so
+# Run from the repo root. Output goes to Zeus.Dsp/runtimes/<rid>/native/ so
 # `dotnet publish` / `NativeLibrary.Load("wdsp")` picks it up automatically.
 
 set -euo pipefail
@@ -40,7 +40,7 @@ case "$(uname -s)" in
         ;;
 esac
 
-DEST_DIR="${REPO_ROOT}/Nereus.Dsp/runtimes/${RID}/native"
+DEST_DIR="${REPO_ROOT}/Zeus.Dsp/runtimes/${RID}/native"
 mkdir -p "${DEST_DIR}"
 
 echo "==> Configuring (${BUILD_TYPE}, ${RID})"

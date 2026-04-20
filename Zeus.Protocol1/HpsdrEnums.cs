@@ -1,6 +1,6 @@
-using Nereus.Protocol1.Discovery;
+using Zeus.Protocol1.Discovery;
 
-namespace Nereus.Protocol1;
+namespace Zeus.Protocol1;
 
 /// <summary>
 /// Protocol-1 RX sample rate selector — encoded in C1 bits [1:0] of the

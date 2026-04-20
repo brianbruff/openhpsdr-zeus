@@ -1,10 +1,10 @@
 # Dependencies
 client/node_modules/
 client/dist/
-nereus-web/node_modules/
-nereus-web/dist/
-nereus-web/dev-dist/
-Nereus.Server/wwwroot/
+zeus-web/node_modules/
+zeus-web/dist/
+zeus-web/dev-dist/
+Zeus.Server/wwwroot/
 
 # .NET
 **/bin/
@@ -31,7 +31,7 @@ tools/demo-server/obj/
 .claude/
 
 # Native WDSP build cache. The staged library under
-# Nereus.Dsp/runtimes/<rid>/native/ IS committed so managed-side tests
+# Zeus.Dsp/runtimes/<rid>/native/ IS committed so managed-side tests
 # don't need to run CMake before executing.
 native/build/
 

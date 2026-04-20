@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace Nereus.Dsp.Wdsp;
+namespace Zeus.Dsp.Wdsp;
 
 internal static partial class NativeMethods
 {

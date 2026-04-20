@@ -1,4 +1,4 @@
-namespace Nereus.Contracts;
+namespace Zeus.Contracts;
 
 public enum MsgType : byte
 {

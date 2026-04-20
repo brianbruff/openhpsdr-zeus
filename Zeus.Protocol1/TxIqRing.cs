@@ -1,4 +1,4 @@
-namespace Nereus.Protocol1;
+namespace Zeus.Protocol1;
 
 /// <summary>
 /// SPSC-ish ring buffer of (I, Q) s16 pairs linking the WDSP TXA producer

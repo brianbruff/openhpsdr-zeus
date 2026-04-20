@@ -94,7 +94,7 @@ Once the failing row is identified, the fix is one of:
 
 ## Files for the next person
 
-- Regression coverage: `tests/Nereus.Dsp.Tests/WdspDspEngineTests.cs` — three new `ReadAudio_Drains…` / `GetRXAMeter_SAv_Escapes…` tests (all pass on `fix/rxa-audio-pipeline`).
+- Regression coverage: `tests/Zeus.Dsp.Tests/WdspDspEngineTests.cs` — three new `ReadAudio_Drains…` / `GetRXAMeter_SAv_Escapes…` tests (all pass on `fix/rxa-audio-pipeline`).
 - Suspect files to instrument: `WdspDspEngine.cs`, `DspPipelineService.cs`, `Protocol1Client.cs`.
 - WDSP internals referenced: `native/wdsp/meter.c`, `native/wdsp/channel.c`, `native/wdsp/iobuffs.c`, `native/wdsp/main.c`, `native/wdsp/RXA.c`.
 
@@ -124,5 +124,5 @@ In a plain unit test the timing lines up by luck: worker starts, first IQ frame 
 ### What this means for the future
 
 - **Do not trust `OpenChannel(..., state: 1, ...)` as a one-shot init for RXA.** Always open at 0 and flip via `SetChannelState(id, 1, 0)` after the worker is live. This is captured in `docs/lessons/wdsp-init-gotchas.md`.
-- The regression tests in `tests/Nereus.Dsp.Tests/WdspDspEngineTests.cs` and the new `GetRXAMeter_SAv_EscapesSentinel_AfterIqFlows_WithTxChannelAndProductionState` test are now load-bearing: they pin the fix.
+- The regression tests in `tests/Zeus.Dsp.Tests/WdspDspEngineTests.cs` and the new `GetRXAMeter_SAv_EscapesSentinel_AfterIqFlows_WithTxChannelAndProductionState` test are now load-bearing: they pin the fix.
 - The +0.98 dB HL2 cal offset is a default — real HL2 units have per-unit cal. Revisit when we have multiple radios under test.

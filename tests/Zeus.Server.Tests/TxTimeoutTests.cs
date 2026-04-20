@@ -1,9 +1,9 @@
 using Microsoft.Extensions.Logging.Abstractions;
-using Nereus.Contracts;
-using Nereus.Server;
+using Zeus.Contracts;
+using Zeus.Server;
 using Xunit;
 
-namespace Nereus.Server.Tests;
+namespace Zeus.Server.Tests;
 
 /// <summary>
 /// PRD FR-6 TX timeout: a single MOX or TUN transmission may not exceed 120 s.

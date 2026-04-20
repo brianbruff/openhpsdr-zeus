@@ -2,7 +2,7 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 
-namespace Nereus.Contracts;
+namespace Zeus.Contracts;
 
 [Flags]
 public enum DisplayBodyFlags : byte

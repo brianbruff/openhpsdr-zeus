@@ -1,4 +1,4 @@
-// Static data mirrored from the Claude Design handoff for Nereus SDR.
+// Static data mirrored from the Claude Design handoff for Zeus SDR.
 // These are design-time mocks for the panels that aren't yet backend-wired
 // (QRZ lookup, logbook, memory channels, CW keyer macros).
 

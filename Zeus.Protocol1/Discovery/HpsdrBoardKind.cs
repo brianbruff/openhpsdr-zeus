@@ -1,4 +1,4 @@
-namespace Nereus.Protocol1.Discovery;
+namespace Zeus.Protocol1.Discovery;
 
 public enum HpsdrBoardKind : byte
 {

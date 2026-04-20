@@ -1,6 +1,6 @@
-using Nereus.Contracts;
+using Zeus.Contracts;
 
-namespace Nereus.Dsp;
+namespace Zeus.Dsp;
 
 public enum DisplayPixout : byte
 {

@@ -1,8 +1,8 @@
 using System.Buffers.Binary;
 using System.Net;
-using Nereus.Protocol1.Discovery;
+using Zeus.Protocol1.Discovery;
 
-namespace Nereus.Protocol1;
+namespace Zeus.Protocol1;
 
 /// <summary>
 /// Encodes Protocol-1 outbound packets: the 8-byte Metis header, the per-USB-frame

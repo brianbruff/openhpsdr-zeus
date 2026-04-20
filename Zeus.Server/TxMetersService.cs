@@ -1,9 +1,9 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Nereus.Contracts;
-using Nereus.Dsp;
+using Zeus.Contracts;
+using Zeus.Dsp;
 
-namespace Nereus.Server;
+namespace Zeus.Server;
 
 /// <summary>
 /// Consumes raw FWD/REF ADC readings from Protocol1, smooths them with an
@@ -74,7 +74,7 @@ public sealed class TxMetersService : BackgroundService
 
     // Holds the last subscribed client so OnDisconnected can detach the
     // TelemetryReceived handler once the Protocol1 surface lands.
-    private Nereus.Protocol1.IProtocol1Client? _subscribedClient;
+    private Zeus.Protocol1.IProtocol1Client? _subscribedClient;
 
     // HL2 C&C-echo addresses that carry the alex FWD/REF ADCs
     // (deskhpsdr old_protocol.c:1847-1867; see TelemetryReading docs).
@@ -89,10 +89,10 @@ public sealed class TxMetersService : BackgroundService
 
     /// <summary>
     /// Entry point for telemetry consumers. FWD and REF live on different
-    /// C&amp;C echo slots (0x08 and 0x10), so one <see cref="Nereus.Protocol1.TelemetryReading"/>
+    /// C&amp;C echo slots (0x08 and 0x10), so one <see cref="Zeus.Protocol1.TelemetryReading"/>
     /// updates at most one axis per call.
     /// </summary>
-    public void OnTelemetry(Nereus.Protocol1.TelemetryReading reading)
+    public void OnTelemetry(Zeus.Protocol1.TelemetryReading reading)
     {
         switch (reading.C0Address & C0AddrMask)
         {
@@ -309,7 +309,7 @@ public sealed class TxMetersService : BackgroundService
         return (fwdW, refW, swr);
     }
 
-    private void OnConnected(Nereus.Protocol1.IProtocol1Client client)
+    private void OnConnected(Zeus.Protocol1.IProtocol1Client client)
     {
         _subscribedClient = client;
         client.TelemetryReceived += OnTelemetry;

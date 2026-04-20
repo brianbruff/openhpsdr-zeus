@@ -1,7 +1,7 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
 
-namespace Nereus.Dsp.Wdsp;
+namespace Zeus.Dsp.Wdsp;
 
 internal static class WdspNativeLoader
 {

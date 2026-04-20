@@ -11,9 +11,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'mic-uplink-worklet.js'],
       manifest: {
-        name: 'Nereus',
-        short_name: 'Nereus',
-        description: 'Nereus WebSDR control surface',
+        name: 'Zeus',
+        short_name: 'Zeus',
+        description: 'Zeus WebSDR control surface',
         theme_color: '#0a1220',
         background_color: '#0a1220',
         display: 'standalone',
@@ -21,10 +21,10 @@ export default defineConfig({
         start_url: '/',
         scope: '/',
         icons: [
-          { src: 'nereus-icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
-          { src: 'nereus-icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
-          { src: 'nereus-icon-512-maskable.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
-          { src: 'nereus-icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
+          { src: 'zeus-icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: 'zeus-icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: 'zeus-icon-512-maskable.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+          { src: 'zeus-icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
         ],
       },
       workbox: {
@@ -59,7 +59,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: '../Nereus.Server/wwwroot',
+    outDir: '../Zeus.Server/wwwroot',
     emptyOutDir: true,
   },
 });

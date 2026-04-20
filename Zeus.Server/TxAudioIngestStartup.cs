@@ -1,4 +1,4 @@
-namespace Nereus.Server;
+namespace Zeus.Server;
 
 // Hosted-service shim whose sole purpose is to force TxAudioIngest to be
 // resolved at startup. TxAudioIngest's constructor subscribes to

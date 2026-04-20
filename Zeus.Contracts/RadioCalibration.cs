@@ -1,4 +1,4 @@
-namespace Nereus.Contracts;
+namespace Zeus.Contracts;
 
 /// <summary>
 /// Per-radio-model constants for TX forward / reflected power calibration and

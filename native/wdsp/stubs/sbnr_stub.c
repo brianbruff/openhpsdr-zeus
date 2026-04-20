@@ -1,4 +1,4 @@
-/* sbnr_stub.c — Nereus NR4 stub
+/* sbnr_stub.c — Zeus NR4 stub
  *
  * No-op replacement for sbnr.c used by the MVP build. Upstream sbnr.c
  * links against libspecbleach; we defer that dependency and compile this

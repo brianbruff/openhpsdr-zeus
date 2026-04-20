@@ -1,7 +1,7 @@
 using System.Buffers;
 using System.Buffers.Binary;
 
-namespace Nereus.Contracts;
+namespace Zeus.Contracts;
 
 // Compact TX-telemetry frame. 37 bytes total:
 //

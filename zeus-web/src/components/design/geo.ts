@@ -1,7 +1,7 @@
 // Spherical geometry helpers — haversine distance, initial bearing, great-circle
 // interpolation, and destination-point from bearing+range. Same math as
 // Log4YM/src/Log4YM.Web/src/utils/maidenhead.ts and MapPlugin.tsx, rewritten
-// here so Nereus stays free of cross-repo source dependencies.
+// here so Zeus stays free of cross-repo source dependencies.
 
 const R_EARTH_KM = 6371;
 

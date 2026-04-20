@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
-using Nereus.Contracts;
+using Zeus.Contracts;
 
-namespace Nereus.Dsp;
+namespace Zeus.Dsp;
 
 public sealed class SyntheticDspEngine : IDspEngine
 {

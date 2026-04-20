@@ -6,11 +6,11 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Nereus.Contracts;
-using Nereus.Dsp;
-using Nereus.Server;
+using Zeus.Contracts;
+using Zeus.Dsp;
+using Zeus.Server;
 
-namespace Nereus.Server.Tests;
+namespace Zeus.Server.Tests;
 
 /// <summary>
 /// End-to-end endpoint test for <c>POST /api/mic-gain</c>: drives the real

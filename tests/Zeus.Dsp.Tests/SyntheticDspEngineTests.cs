@@ -1,7 +1,7 @@
-using Nereus.Dsp;
+using Zeus.Dsp;
 using Xunit;
 
-namespace Nereus.Dsp.Tests;
+namespace Zeus.Dsp.Tests;
 
 public class SyntheticDspEngineTests
 {

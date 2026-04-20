@@ -1,9 +1,9 @@
 using Microsoft.Extensions.Logging.Abstractions;
-using Nereus.Contracts;
-using Nereus.Protocol1;
-using Nereus.Server;
+using Zeus.Contracts;
+using Zeus.Protocol1;
+using Zeus.Server;
 
-namespace Nereus.Contracts.Tests;
+namespace Zeus.Contracts.Tests;
 
 /// <summary>
 /// Unit tests for the auto-ATT control loop in <see cref="RadioService"/>.

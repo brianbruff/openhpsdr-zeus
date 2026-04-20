@@ -1,9 +1,9 @@
 using System.Net;
 using Microsoft.Extensions.Logging;
-using Nereus.Contracts;
-using Nereus.Protocol1;
+using Zeus.Contracts;
+using Zeus.Protocol1;
 
-namespace Nereus.Server;
+namespace Zeus.Server;
 
 public sealed class RadioService : IDisposable
 {
@@ -62,9 +62,9 @@ public sealed class RadioService : IDisposable
     // writes into the same instance; this is the seam between "mic arrived
     // over WS" and "EP2 packet got real IQ". When null the client falls back
     // to its internal test-tone generator (dev / tests without a hub).
-    private readonly Nereus.Protocol1.ITxIqSource? _txIqSource;
+    private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
-    public RadioService(ILoggerFactory loggerFactory, Nereus.Protocol1.ITxIqSource? txIqSource = null)
+    public RadioService(ILoggerFactory loggerFactory, Zeus.Protocol1.ITxIqSource? txIqSource = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();

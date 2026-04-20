@@ -1,8 +1,8 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using Nereus.Dsp.Wdsp;
+using Zeus.Dsp.Wdsp;
 
-namespace Nereus.Dsp;
+namespace Zeus.Dsp;
 
 public enum DspEngineKind { Auto, Wdsp, Synthetic }
 

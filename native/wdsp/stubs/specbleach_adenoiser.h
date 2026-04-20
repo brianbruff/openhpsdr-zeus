@@ -1,4 +1,4 @@
-/* specbleach_adenoiser.h — Nereus stub
+/* specbleach_adenoiser.h — Zeus stub
  *
  * Minimal stand-in for the libspecbleach header used when building WDSP
  * without the libspecbleach (NR4) backend. Only SpectralBleachHandle is
@@ -6,8 +6,8 @@
  * sbnr_stub.c.
  */
 
-#ifndef NEREUS_SPECBLEACH_STUB_H
-#define NEREUS_SPECBLEACH_STUB_H
+#ifndef ZEUS_SPECBLEACH_STUB_H
+#define ZEUS_SPECBLEACH_STUB_H
 
 typedef void *SpectralBleachHandle;
 

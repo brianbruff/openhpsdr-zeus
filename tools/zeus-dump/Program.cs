@@ -6,8 +6,8 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using Microsoft.Extensions.Logging.Abstractions;
-using Nereus.Protocol1;
-using Nereus.Protocol1.Discovery;
+using Zeus.Protocol1;
+using Zeus.Protocol1.Discovery;
 
 int durationSec = 60;
 HpsdrSampleRate rate = HpsdrSampleRate.Rate192k;
@@ -34,7 +34,7 @@ for (int i = 0; i < args.Length; i++)
             forcedIp = args[++i];
             break;
         case "--help" or "-h":
-            Console.WriteLine("nereus-dump [--seconds N] [--rate 48|96|192|384] [--ip 192.168.x.y]");
+            Console.WriteLine("zeus-dump [--seconds N] [--rate 48|96|192|384] [--ip 192.168.x.y]");
             return 0;
     }
 }

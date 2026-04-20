@@ -1,7 +1,7 @@
 using System.Buffers;
 using System.Buffers.Binary;
 
-namespace Nereus.Protocol1;
+namespace Zeus.Protocol1;
 
 /// <summary>
 /// EP6 C&amp;C echo slot that carries one of the HL2/Hermes ADC pairs. The raw

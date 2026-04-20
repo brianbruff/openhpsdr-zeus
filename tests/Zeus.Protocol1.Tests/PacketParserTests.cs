@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace Nereus.Protocol1.Tests;
+namespace Zeus.Protocol1.Tests;
 
 public class PacketParserTests
 {

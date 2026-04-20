@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\Nereus.Contracts\Nereus.Contracts.csproj" />
+    <ProjectReference Include="..\Zeus.Contracts\Zeus.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -19,11 +19,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\Nereus.Contracts\Nereus.Contracts.csproj" />
+    <ProjectReference Include="..\..\Zeus.Contracts\Zeus.Contracts.csproj" />
     <!-- Pulled in so the watts/SWR math on TxMetersService can be unit-tested
          here without introducing a server-side test project for the v0.1 slice
          (team-lead guidance in task #2). -->
-    <ProjectReference Include="..\..\Nereus.Server\Nereus.Server.csproj" />
+    <ProjectReference Include="..\..\Zeus.Server\Zeus.Server.csproj" />
   </ItemGroup>
 
 </Project>

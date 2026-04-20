@@ -3,7 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using Xunit;
 
-namespace Nereus.Protocol1.Tests;
+namespace Zeus.Protocol1.Tests;
 
 /// <summary>
 /// Loopback test for <see cref="Protocol1Client.AdcOverloadObserved"/>. Stands up a

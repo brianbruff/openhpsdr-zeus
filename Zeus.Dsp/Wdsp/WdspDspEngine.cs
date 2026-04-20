@@ -2,9 +2,9 @@ using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using Nereus.Contracts;
+using Zeus.Contracts;
 
-namespace Nereus.Dsp.Wdsp;
+namespace Zeus.Dsp.Wdsp;
 
 public sealed class WdspDspEngine : IDspEngine
 {

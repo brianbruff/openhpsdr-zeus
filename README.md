@@ -1,5 +1,7 @@
 # openhpsdr-zeus
 
+![Zeus](docs/pics/zeus1.webp)
+
 A browser-based SDR console for the **Hermes Lite 2**. .NET 10 backend talks
 OpenHPSDR Protocol-1 to the radio and streams IQ / audio / meter data to a
 React + WebGL frontend over WebSocket.

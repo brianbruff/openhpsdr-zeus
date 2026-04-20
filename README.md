@@ -12,17 +12,9 @@ React + WebGL frontend over WebSocket.
 
 ## About the name
 
-The project started life as **openhpsdr-nereus**. Nereus is a nice bit of
-lore — in Greek mythology he's the "Old Man of the Sea" and the father of
-Thetis, which made him a fitting nod to the long-running
-[Thetis](https://github.com/TAPR/OpenHPSDR-Thetis) project that a lot of the
-DSP heritage traces back to.
-
-The problem: somebody else was already shipping a C++ AetherSDR-flavoured
-project called **nereusSDR**. Two adjacent projects sharing a name got
-confusing fast, so we moved on and up.
-
-Meet **Zeus** — king of the gods. It doesn't really get more regal than that.
+**Zeus** — king of the gods. It doesn't really get more regal than that. The
+name is also a nod to [Thetis](https://github.com/TAPR/OpenHPSDR-Thetis), the
+long-running project a lot of the DSP heritage traces back to.
 
 ## What's in the box
 

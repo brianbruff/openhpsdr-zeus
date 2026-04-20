@@ -143,6 +143,28 @@ Shipping surfaces are being added one at a time, slowly:
 - A Hermes Lite 2 on the local network
 - macOS / Linux (Windows untested); WDSP native lib ships for osx-arm64
 
+## Acknowledgements
+
+Zeus stands on the shoulders of the OpenHPSDR community. A huge thank-you to:
+
+- **Richard Samphire (MW0LGE)** and **Reid (MI0BOT)** — Thetis is an awesome
+  starting point. Much of what Zeus knows about Protocol-1 framing, WDSP init
+  ordering, meter pipelines, and TX behaviour was learned by reading the
+  [Thetis source](https://github.com/TAPR/OpenHPSDR-Thetis). Zeus is an
+  independent reimplementation in .NET — not a fork — but Thetis is the sole
+  authoritative reference for how a Protocol-1 client should behave.
+- **Warren Pratt (NR0V)** — for [WDSP](https://github.com/TAPR/OpenHPSDR-Thetis/tree/master/Project%20Files/Source/wdsp),
+  the DSP engine Zeus loads via P/Invoke.
+
 ## License
 
-TBD.
+Zeus is free software: you can redistribute it and/or modify it under the
+terms of the **GNU General Public License v2 or (at your option) any later
+version**, as published by the Free Software Foundation. See
+[`LICENSE`](LICENSE) for the full text.
+
+This licensing aligns Zeus with its two direct upstreams — Thetis (GPL v2)
+and WDSP (GPL v3) — so that derivative work and linked distributions remain
+licence-compatible.
+
+Zeus is distributed WITHOUT ANY WARRANTY; see the GPL for details.

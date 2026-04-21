@@ -22,7 +22,7 @@ jobs:
           private-key: ${{ secrets.ZEUS_AGENT_PRIVATE_KEY }}
 
       - name: Run Zeus-Agent
-        uses: anthropics/claude-code-base-action@v1
+        uses: anthropics/claude-code-base-action@v0.0.63
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         with:

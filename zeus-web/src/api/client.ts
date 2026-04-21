@@ -535,6 +535,63 @@ export async function setTun(
   }
 }
 
+// Per-band memory: last-used (hz, mode) persisted server-side in LiteDB.
+// Shared across any browser hitting the same backend — localStorage would
+// trap the state in one device.
+export type BandMemoryEntry = {
+  band: string;
+  hz: number;
+  mode: RxMode;
+};
+
+function normalizeBandMemoryEntry(raw: unknown): BandMemoryEntry | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const band = typeof r.band === 'string' ? r.band : null;
+  const hz = typeof r.hz === 'number' ? r.hz : null;
+  if (!band || hz === null) return null;
+  return { band, hz, mode: normalizeMode(r.mode) };
+}
+
+export function fetchBandMemory(
+  signal?: AbortSignal,
+): Promise<BandMemoryEntry[]> {
+  return jsonFetch('/api/bands/memory', { signal }, (raw) => {
+    if (!Array.isArray(raw)) return [];
+    const out: BandMemoryEntry[] = [];
+    for (const entry of raw) {
+      const n = normalizeBandMemoryEntry(entry);
+      if (n) out.push(n);
+    }
+    return out;
+  });
+}
+
+export function saveBandMemory(
+  band: string,
+  hz: number,
+  mode: RxMode,
+  signal?: AbortSignal,
+): Promise<BandMemoryEntry> {
+  // Mode travels as a numeric ordinal, matching the setMode convention the
+  // server already validates against. The server's JsonStringEnumConverter
+  // accepts both strings and ordinals on the read path.
+  const modeIndex = MODE_ORDER.indexOf(mode);
+  return jsonFetch(
+    `/api/bands/memory/${encodeURIComponent(band)}`,
+    {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ hz, mode: modeIndex }),
+      signal,
+    },
+    (raw) => {
+      const n = normalizeBandMemoryEntry(raw);
+      return n ?? { band, hz, mode };
+    },
+  );
+}
+
 // Mic-gain endpoint: POST /api/mic-gain { db }. Returns { micGainDb }.
 // Backend may not have landed the handler yet — a 404 is downgraded to a
 // silent warnOnce so the console doesn't fill with noise during the

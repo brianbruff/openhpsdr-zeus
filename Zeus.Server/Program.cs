@@ -59,6 +59,7 @@ builder.Services.AddHostedService<TxTuneDriver>();
 // hung login surfaces quickly in the UI.
 builder.Services.AddHttpClient("Qrz", c => c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddSingleton<CredentialStore>();
+builder.Services.AddSingleton<BandMemoryStore>();
 builder.Services.AddSingleton<QrzService>();
 builder.Services.AddSingleton<LogService>();
 
@@ -298,6 +299,21 @@ app.MapPost("/api/rx/zoom", (ZoomSetRequest req, RadioService r) =>
     if (req.Level < SyntheticDspEngine.MinZoomLevel || req.Level > SyntheticDspEngine.MaxZoomLevel)
         return Results.BadRequest(new { error = $"zoom level must be in [{SyntheticDspEngine.MinZoomLevel},{SyntheticDspEngine.MaxZoomLevel}]; got {req.Level}" });
     return Results.Ok(r.SetZoom(req.Level));
+});
+
+// Band memory: last-used (hz, mode) per HF band. GET returns the full map so
+// the BandButtons UI can restore on load with one round-trip. PUT upserts one
+// entry — the web debounces writes so tuning doesn't hammer LiteDB.
+app.MapGet("/api/bands/memory", (BandMemoryStore store) => Results.Ok(store.GetAll()));
+
+app.MapPut("/api/bands/memory/{band}", (string band, BandMemorySetRequest req, BandMemoryStore store) =>
+{
+    if (string.IsNullOrWhiteSpace(band))
+        return Results.BadRequest(new { error = "band name required" });
+    if (req.Hz <= 0)
+        return Results.BadRequest(new { error = "hz must be positive" });
+    store.Upsert(band, req.Hz, req.Mode);
+    return Results.Ok(new BandMemoryDto(band, req.Hz, req.Mode));
 });
 
 app.MapGet("/api/qrz/status", (QrzService qrz) => qrz.GetStatus());

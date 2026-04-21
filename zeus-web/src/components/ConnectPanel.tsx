@@ -275,6 +275,8 @@ export function ConnectPanel() {
           {sortedRadios.map((r) => {
             const ep = endpointFor(r);
             const isLast = !!ep && ep === lastConnectedEndpoint;
+            const protocol = r.details?.protocol ?? 'P1';
+            const isP2 = protocol === 'P2';
             return (
               <li
                 key={r.macAddress || r.ipAddress}
@@ -295,6 +297,13 @@ export function ConnectPanel() {
                     <span className="label-xs" style={{ color: 'var(--fg-3)' }}>
                       fw {r.firmwareVersion || '?'}
                     </span>
+                    <span
+                      className="chip"
+                      style={{ marginLeft: 6 }}
+                      title={`Discovered via Protocol ${protocol === 'P2' ? '2' : '1'}`}
+                    >
+                      <span className="v">{protocol}</span>
+                    </span>
                     {isLast && (
                       <span className="chip accent" style={{ marginLeft: 6 }} title="Last connected radio">
                         <span className="v">LAST</span>
@@ -308,23 +317,27 @@ export function ConnectPanel() {
                 <button
                   type="button"
                   onClick={() => handleConnect(r)}
-                  disabled={r.busy || inflight || dspPreparing}
+                  disabled={r.busy || inflight || dspPreparing || isP2}
                   title={
-                    r.busy
-                      ? 'Radio is busy (in use by another client)'
-                      : dspPreparing
-                        ? 'DSP is preparing FFTW plans (first-run only, up to ~2 min)'
-                        : undefined
+                    isP2
+                      ? 'Protocol 2 support is in progress — connect not yet available'
+                      : r.busy
+                        ? 'Radio is busy (in use by another client)'
+                        : dspPreparing
+                          ? 'DSP is preparing FFTW plans (first-run only, up to ~2 min)'
+                          : undefined
                   }
-                  className={`btn sm ${r.busy ? '' : 'active'} ${dspPreparing ? 'pulsing' : ''}`}
+                  className={`btn sm ${r.busy || isP2 ? '' : 'active'} ${dspPreparing ? 'pulsing' : ''}`}
                 >
-                  {r.busy
-                    ? 'Busy'
-                    : dspPreparing
-                      ? 'Preparing DSP…'
-                      : inflight
-                        ? 'Connecting…'
-                        : 'Connect'}
+                  {isP2
+                    ? 'P2 (WIP)'
+                    : r.busy
+                      ? 'Busy'
+                      : dspPreparing
+                        ? 'Preparing DSP…'
+                        : inflight
+                          ? 'Connecting…'
+                          : 'Connect'}
                 </button>
               </li>
             );

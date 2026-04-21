@@ -3,6 +3,7 @@
     <Project Path="tests/Zeus.Contracts.Tests/Zeus.Contracts.Tests.csproj" />
     <Project Path="tests/Zeus.Dsp.Tests/Zeus.Dsp.Tests.csproj" />
     <Project Path="tests/Zeus.Protocol1.Tests/Zeus.Protocol1.Tests.csproj" />
+    <Project Path="tests/Zeus.Protocol2.Tests/Zeus.Protocol2.Tests.csproj" />
     <Project Path="tests/Zeus.Server.Tests/Zeus.Server.Tests.csproj" />
   </Folder>
   <Project Path="Zeus.Contracts/Zeus.Contracts.csproj" />

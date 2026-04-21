@@ -1,6 +1,6 @@
-# RCA — RXA audio pipeline silent on master (fb56e4f)
+# RCA — RXA audio pipeline silent on main (fb56e4f)
 
-**Status:** resolved. Fix in commit `bcfc1e3` (master). See §"Resolution" at the bottom.
+**Status:** resolved. Fix in commit `bcfc1e3` (main). See §"Resolution" at the bottom.
 
 ## Symptom (restated)
 

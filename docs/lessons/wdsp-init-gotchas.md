@@ -74,6 +74,6 @@ For RXA S-meter and ADC-meter, `a->run` is hard-coded to 1 and `prun` is null (`
 ## References
 
 - RCA: `docs/rca/2026-04-17-rxa-audio-silence.md`
-- Fix commit: `bcfc1e3` on master
+- Fix commit: `bcfc1e3` on main
 - WDSP internals: `native/wdsp/meter.c:74-110`, `channel.c:78-99,249-288`, `iobuffs.c:478-500`, `main.c:40-49`, `RXA.c:63-145`
 - Thetis `Console/rxa.cs:63`, `Console/dsp.cs:876-966`, `Console/clsHardwareSpecific.cs:414-430`

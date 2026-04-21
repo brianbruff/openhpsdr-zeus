@@ -22,9 +22,10 @@ jobs:
           private-key: ${{ secrets.ZEUS_AGENT_PRIVATE_KEY }}
 
       - name: Run Zeus-Agent
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-base-action@v0.0.63
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         with:
-          github_token: ${{ steps.app-token.outputs.token }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: "--max-turns 15 --model claude-sonnet-4-6 --allowedTools 'Bash(gh label list),Bash(gh label list:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh search:*),Read,Glob,Grep'"
           prompt: |

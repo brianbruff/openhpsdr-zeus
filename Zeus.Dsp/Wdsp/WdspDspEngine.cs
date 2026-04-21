@@ -826,11 +826,14 @@ public sealed class WdspDspEngine : IDspEngine
         // partially-written set. Lock is uncontended in steady state —
         // ProcessTxBlock runs from the TX ingest thread and GetTxStageMeters
         // only from TxMetersService (10 Hz).
+        // alcGain from WDSP is 20*log10(linear_gain) ≤ 0 when reducing.
+        // Store as positive "gain reduction" dB per TxStageMeters convention.
         var snap = new TxStageMeters(
+            MicPk: (float)micPk,
             EqPk: (float)eqPk,
             LvlrPk: (float)lvlrPk,
             AlcPk: (float)alcPk,
-            AlcGr: (float)alcGain,
+            AlcGr: (float)-alcGain,
             OutPk: (float)outPk);
         lock (_txMeterPublishLock) { _latestTxStageMeters = snap; }
 

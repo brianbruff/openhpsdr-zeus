@@ -28,7 +28,6 @@ public sealed class TxMetersService : BackgroundService
     // and the ratio is meaningless (Thetis does the same in console.cs:25974).
     private const double SwrMinFwdWatts = 2.0;
     private const double SwrMax = 9.0;
-    private const float MicDbfsPlaceholder = -100f;
 
     // PRD FR-6: SWR > 2.5 sustained 500 ms → trip MOX/TUN. Tighter than the
     // original 3.0 threshold; chosen to protect HL2 PA aggressively.
@@ -171,7 +170,7 @@ public sealed class TxMetersService : BackgroundService
                         FwdWatts: (float)fwdW,
                         RefWatts: (float)refW,
                         Swr: (float)swr,
-                        MicDbfs: MicDbfsPlaceholder,
+                        MicDbfs: stage.MicPk,
                         EqPk: stage.EqPk,
                         LvlrPk: stage.LvlrPk,
                         AlcPk: stage.AlcPk,
@@ -197,7 +196,7 @@ public sealed class TxMetersService : BackgroundService
                         FwdWatts: 0f,
                         RefWatts: 0f,
                         Swr: 1.0f,
-                        MicDbfs: MicDbfsPlaceholder,
+                        MicDbfs: silent.MicPk,
                         EqPk: silent.EqPk,
                         LvlrPk: silent.LvlrPk,
                         AlcPk: silent.AlcPk,

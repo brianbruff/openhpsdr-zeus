@@ -9,8 +9,14 @@ namespace Zeus.Dsp;
 /// Chosen as peak (not average) readings — the diagnostic we care about is
 /// clipping-induced distortion, which hides inside the average window's
 /// ~100 ms smoothing. Indices tracked per <c>native/wdsp/TXA.h</c> txaMeterType.
+///
+/// Sign convention: <see cref="AlcGr"/> is stored as positive dB of gain
+/// reduction (0 = no reduction, 6 = 6 dB cut). WDSP returns <c>TXA_ALC_GAIN</c>
+/// as <c>20*log10(linear_gain)</c> which is ≤ 0 when reducing — callers must
+/// negate before storing here.
 /// </summary>
 public readonly record struct TxStageMeters(
+    float MicPk,
     float EqPk,
     float LvlrPk,
     float AlcPk,
@@ -18,6 +24,7 @@ public readonly record struct TxStageMeters(
     float OutPk)
 {
     public static readonly TxStageMeters Silent = new(
+        MicPk: float.NegativeInfinity,
         EqPk: float.NegativeInfinity,
         LvlrPk: float.NegativeInfinity,
         AlcPk: float.NegativeInfinity,

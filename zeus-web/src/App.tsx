@@ -3,6 +3,7 @@ import { AgcSlider } from './components/AgcSlider';
 import { AlertBanner } from './components/AlertBanner';
 import { AttenuatorSlider } from './components/AttenuatorSlider';
 import { AudioToggle } from './components/AudioToggle';
+import { BandButtons } from './components/BandButtons';
 import { ConnectPanel } from './components/ConnectPanel';
 import { DriveSlider } from './components/DriveSlider';
 import { MicGainSlider } from './components/MicGainSlider';
@@ -493,6 +494,11 @@ export default function App() {
       <div className="control-strip">
         <div className="hide-mobile" style={{ display: 'contents' }}>
           <ModeBandwidth />
+          <BandButtons />
+        </div>
+        <div className="show-mobile" style={{ display: 'none', gap: 8 }}>
+          <ModeBandwidth />
+          <BandButtons />
         </div>
         <div className="ctrl-group hide-mobile" style={{ minWidth: 220 }}>
           <div className="label-xs ctrl-lbl">FRONT-END</div>

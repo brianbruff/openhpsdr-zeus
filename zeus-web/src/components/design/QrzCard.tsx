@@ -3,9 +3,23 @@ import type { Contact } from './data';
 type QrzCardProps = {
   contact: Contact | null;
   enriching: boolean;
+  lookupError?: string | null;
+  onLogQso?: () => void;
+  canLogQso?: boolean;
 };
 
-export function QrzCard({ contact, enriching }: QrzCardProps) {
+export function QrzCard({ contact, enriching, lookupError, onLogQso, canLogQso }: QrzCardProps) {
+  // Show "Not found" if there's a lookup error
+  if (lookupError) {
+    return (
+      <div className="qrz-empty">
+        <div className="label-xs" style={{ color: 'var(--fg-error)', opacity: 0.8 }}>
+          Not found: {lookupError}
+        </div>
+      </div>
+    );
+  }
+
   if (!contact) {
     return (
       <div className="qrz-empty">
@@ -78,6 +92,16 @@ export function QrzCard({ contact, enriching }: QrzCardProps) {
           {contact.email}
         </span>
         <span style={{ flex: 1 }} />
+        {onLogQso && canLogQso && (
+          <button
+            type="button"
+            onClick={onLogQso}
+            className="btn sm"
+            style={{ marginRight: '0.5rem', padding: '0.25rem 0.5rem', fontSize: 10 }}
+          >
+            Log QSO
+          </button>
+        )}
         {contact.qrzUrl ? (
           <a
             className="mono"

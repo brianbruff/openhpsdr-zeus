@@ -38,6 +38,7 @@ import { fetchState } from './api/client';
 import { useConnectionStore } from './state/connection-store';
 import { useQrzStore } from './state/qrz-store';
 import { useRotatorStore } from './state/rotator-store';
+import { useLoggerStore } from './state/logger-store';
 import { useTxStore } from './state/tx-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
 import type { QrzStation } from './api/qrz';
@@ -133,7 +134,10 @@ export default function App() {
   const qrzHome = useQrzStore((s) => s.home);
   const qrzLookup = useQrzStore((s) => s.lastLookup);
   const qrzHasXml = useQrzStore((s) => s.hasXmlSubscription);
+  const qrzLookupError = useQrzStore((s) => s.lookupError);
   const qrzActive = !!qrzHome && qrzHasXml;
+
+  const addLogEntry = useLoggerStore((s) => s.addLogEntry);
 
   // Live rotator heading — drives the map's beam lines when rotctld is up so
   // the beam shows the actual antenna direction, not the great-circle bearing
@@ -143,6 +147,35 @@ export default function App() {
   const contact: Contact | null = qrzActive
     ? qrzStationToContact(qrzLookup, qrzHome)
     : (CONTACTS[callsign.toUpperCase()] ?? null);
+
+  // Log QSO handler - creates a lazy log entry with RST based on mode
+  const handleLogQso = useCallback(() => {
+    if (!contact || !qrzLookup) return;
+
+    // Determine RST based on mode: 599 for CW, 59 for phone modes
+    const isCwMode = mode === 'CWU' || mode === 'CWL';
+    const rstSent = isCwMode ? '599' : '59';
+    const rstRcvd = isCwMode ? '599' : '59';
+
+    const band = bandOf(vfoHz);
+    const frequencyMhz = vfoHz / 1e6;
+
+    void addLogEntry({
+      callsign: contact.callsign,
+      name: qrzLookup.name ?? undefined,
+      frequencyMhz,
+      band,
+      mode,
+      rstSent,
+      rstRcvd,
+      grid: qrzLookup.grid ?? undefined,
+      country: qrzLookup.country ?? undefined,
+      dxcc: qrzLookup.dxcc ?? undefined,
+      cqZone: qrzLookup.cqZone ?? undefined,
+      ituZone: qrzLookup.ituZone ?? undefined,
+      state: qrzLookup.state ?? undefined,
+    });
+  }, [contact, qrzLookup, mode, vfoHz, addLogEntry]);
 
   const [wpm, setWpm] = useState(22);
   const nrState = useConnectionStore((s) => s.nr);
@@ -610,7 +643,13 @@ export default function App() {
                   </form>
                 }
               >
-                <QrzCard contact={contact} enriching={enriching} />
+                <QrzCard
+                  contact={contact}
+                  enriching={enriching}
+                  lookupError={qrzLookupError}
+                  onLogQso={handleLogQso}
+                  canLogQso={qrzActive && !!contact}
+                />
               </Dockable>
             </div>
           ) : (

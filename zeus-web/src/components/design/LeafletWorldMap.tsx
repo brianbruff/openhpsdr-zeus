@@ -236,6 +236,10 @@ export function LeafletWorldMap({
     L.tileLayer(TILE_URL, {
       attribution: TILE_ATTRIBUTION,
       maxZoom: 19,
+    }).on('tileerror', (err) => {
+      console.warn('Leaflet tile load error:', err);
+      // Tile errors are non-fatal; map continues to work with cached tiles or
+      // at lower zoom levels. Error boundary handles catastrophic init failures.
     }).addTo(map);
 
     layerRef.current = L.layerGroup().addTo(map);

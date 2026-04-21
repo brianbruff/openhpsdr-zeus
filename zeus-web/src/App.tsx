@@ -138,6 +138,53 @@ export default function App() {
   const qrzActive = !!qrzHome && qrzHasXml;
 
   const addLogEntry = useLoggerStore((s) => s.addLogEntry);
+  const logPublishInFlight = useLoggerStore((s) => s.publishInFlight);
+  const logPublishResult = useLoggerStore((s) => s.lastPublishResult);
+  const logPublishError = useLoggerStore((s) => s.publishError);
+  const logSelectedIds = useLoggerStore((s) => s.selectedIds);
+  const logPublishSelected = useLoggerStore((s) => s.publishSelectedToQrz);
+  const logExportAdif = useLoggerStore((s) => s.exportAdif);
+  const qrzHasApiKey = useQrzStore((s) => s.hasApiKey);
+
+  const logbookTitle = logPublishInFlight
+    ? 'Logbook · Uploading…'
+    : logPublishError
+      ? `Logbook · ${logPublishError.length > 28 ? 'Publish failed' : logPublishError}`
+      : logPublishResult
+        ? logPublishResult.failedCount > 0
+          ? `Logbook · ${logPublishResult.successCount} ok, ${logPublishResult.failedCount} failed`
+          : `Logbook · Published ${logPublishResult.successCount}`
+        : 'Logbook';
+
+  const logSelectedCount = logSelectedIds.size;
+  const publishDisabled = logSelectedCount === 0 || logPublishInFlight || !qrzHasApiKey;
+  const publishTitle = !qrzHasApiKey
+    ? 'Set a QRZ API key in the QRZ panel to enable publishing'
+    : logSelectedCount === 0
+      ? 'Select one or more rows to publish'
+      : 'Publish selected QSOs to QRZ logbook';
+
+  const logbookActions = (
+    <>
+      <button
+        type="button"
+        className="btn ghost sm"
+        onClick={() => void logPublishSelected(Array.from(logSelectedIds))}
+        disabled={publishDisabled}
+        title={publishTitle}
+      >
+        {logPublishInFlight ? 'Publishing…' : `Publish (${logSelectedCount})`}
+      </button>
+      <button
+        type="button"
+        className="btn ghost sm"
+        onClick={() => void logExportAdif()}
+        title="Export all log entries to ADIF file"
+      >
+        Export
+      </button>
+    </>
+  );
 
   // Live rotator heading — drives the map's beam lines when rotctld is up so
   // the beam shows the actual antenna direction, not the great-circle bearing
@@ -674,7 +721,7 @@ export default function App() {
         {/* Bottom row — Logbook + TX Stage Meters on desktop; big PTT on mobile. */}
         <div className="bottom-row">
           <div className="bottom-slot hide-mobile">
-            <Dockable title="Logbook" ledOn>
+            <Dockable title={logbookTitle} ledOn actions={logbookActions}>
               <LogbookLive />
             </Dockable>
           </div>

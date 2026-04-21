@@ -10,6 +10,7 @@ type LoggerState = {
   publishInFlight: boolean;
   publishError: string | null;
   lastPublishResult: QrzPublishResponse | null;
+  selectedIds: Set<string>;
 
   // Actions
   loadEntries: () => Promise<void>;
@@ -17,6 +18,8 @@ type LoggerState = {
   exportAdif: () => Promise<void>;
   publishSelectedToQrz: (logEntryIds: string[]) => Promise<void>;
   clearPublishResult: () => void;
+  toggleSelected: (id: string) => void;
+  clearSelected: () => void;
 };
 
 export const useLoggerStore = create<LoggerState>((set, get) => ({
@@ -27,6 +30,7 @@ export const useLoggerStore = create<LoggerState>((set, get) => ({
   publishInFlight: false,
   publishError: null,
   lastPublishResult: null,
+  selectedIds: new Set<string>(),
 
   loadEntries: async () => {
     set({ loading: true, error: null });
@@ -64,7 +68,7 @@ export const useLoggerStore = create<LoggerState>((set, get) => ({
     set({ publishInFlight: true, publishError: null, lastPublishResult: null });
     try {
       const result = await publishToQrz({ logEntryIds });
-      set({ lastPublishResult: result, publishInFlight: false });
+      set({ lastPublishResult: result, publishInFlight: false, selectedIds: new Set<string>() });
       // Reload entries to update QRZ sync status
       await get().loadEntries();
     } catch (err) {
@@ -78,6 +82,15 @@ export const useLoggerStore = create<LoggerState>((set, get) => ({
   clearPublishResult: () => {
     set({ lastPublishResult: null, publishError: null });
   },
+
+  toggleSelected: (id: string) => {
+    const next = new Set(get().selectedIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    set({ selectedIds: next });
+  },
+
+  clearSelected: () => set({ selectedIds: new Set<string>() }),
 }));
 
 // Load entries on module load

@@ -1,27 +1,25 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useLoggerStore } from '../../state/logger-store';
 
 export function LogbookLive() {
   const entries = useLoggerStore((s) => s.entries);
   const totalCount = useLoggerStore((s) => s.totalCount);
   const loading = useLoggerStore((s) => s.loading);
-  const exportAdif = useLoggerStore((s) => s.exportAdif);
-  const publishSelectedToQrz = useLoggerStore((s) => s.publishSelectedToQrz);
-  const publishInFlight = useLoggerStore((s) => s.publishInFlight);
   const lastPublishResult = useLoggerStore((s) => s.lastPublishResult);
+  const publishError = useLoggerStore((s) => s.publishError);
   const clearPublishResult = useLoggerStore((s) => s.clearPublishResult);
-
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const selectedIds = useLoggerStore((s) => s.selectedIds);
+  const toggleSelected = useLoggerStore((s) => s.toggleSelected);
 
   useEffect(() => {
-    // Clear publish result after showing it for a few seconds
-    if (lastPublishResult) {
+    // Self-clear publish feedback (shown in the Logbook header) after a few seconds.
+    if (lastPublishResult || publishError) {
       const timer = setTimeout(() => {
         clearPublishResult();
-      }, 5000);
+      }, 4000);
       return () => clearTimeout(timer);
     }
-  }, [lastPublishResult, clearPublishResult]);
+  }, [lastPublishResult, publishError, clearPublishResult]);
 
   const formatTime = (isoString: string) => {
     const date = new Date(isoString);
@@ -31,22 +29,6 @@ export function LogbookLive() {
   const formatDate = (isoString: string) => {
     const date = new Date(isoString);
     return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-  };
-
-  const handleToggleSelect = (id: string) => {
-    const newSelected = new Set(selectedIds);
-    if (newSelected.has(id)) {
-      newSelected.delete(id);
-    } else {
-      newSelected.add(id);
-    }
-    setSelectedIds(newSelected);
-  };
-
-  const handlePublishToQrz = async () => {
-    if (selectedIds.size === 0) return;
-    await publishSelectedToQrz(Array.from(selectedIds));
-    setSelectedIds(new Set()); // Clear selection after publish
   };
 
   if (loading && entries.length === 0) {
@@ -87,14 +69,15 @@ export function LogbookLive() {
             key={entry.id}
             type="button"
             className={`log-row mono ${selectedIds.has(entry.id) ? 'selected' : ''}`}
+            onClick={() => toggleSelected(entry.id)}
           >
             <span style={{ width: '2rem' }}>
               <input
                 type="checkbox"
                 checked={selectedIds.has(entry.id)}
-                onChange={() => handleToggleSelect(entry.id)}
-                onClick={(e) => e.stopPropagation()}
-                style={{ cursor: 'pointer' }}
+                readOnly
+                tabIndex={-1}
+                style={{ cursor: 'pointer', pointerEvents: 'none' }}
               />
             </span>
             <span className="t-date">{formatDate(entry.qsoDateTimeUtc)}</span>
@@ -113,35 +96,6 @@ export function LogbookLive() {
         ))}
       </div>
       <div className="log-foot">
-        {lastPublishResult && (
-          <div
-            style={{
-              fontSize: '0.7em',
-              color: lastPublishResult.failedCount > 0 ? 'var(--fg-error)' : 'var(--accent)',
-              marginRight: '0.5rem',
-            }}
-          >
-            Published: {lastPublishResult.successCount} ok, {lastPublishResult.failedCount} failed
-          </div>
-        )}
-        <button
-          type="button"
-          className="btn sm"
-          onClick={handlePublishToQrz}
-          disabled={selectedIds.size === 0 || publishInFlight}
-          title="Publish selected QSOs to QRZ logbook"
-        >
-          {publishInFlight ? 'Publishing...' : `Publish to QRZ (${selectedIds.size})`}
-        </button>
-        <button
-          type="button"
-          className="btn sm"
-          onClick={exportAdif}
-          style={{ marginLeft: '0.5rem' }}
-          title="Export all log entries to ADIF file"
-        >
-          Export ADIF
-        </button>
         <span style={{ flex: 1 }} />
         <span className="label-xs">{entries.length} of {totalCount}</span>
       </div>

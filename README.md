@@ -141,7 +141,30 @@ Shipping surfaces are being added one at a time, slowly:
 - .NET 10 SDK
 - Node.js 20+
 - A Hermes Lite 2 on the local network
-- macOS / Linux (Windows untested); WDSP native lib ships for osx-arm64
+- macOS / Linux / Windows; WDSP native libraries are available for:
+  - macOS: arm64, x64
+  - Linux: x64, arm64
+  - Windows: x64, arm64
+
+## Troubleshooting
+
+### Missing native WDSP library on Windows or Linux
+
+If you see errors related to wisdom file generation or missing `wdsp.dll` / `libwdsp.so`:
+
+1. **For Windows users**: The native DLLs are automatically built via GitHub Actions.
+   - Check if `Zeus.Dsp/runtimes/win-x64/native/wdsp.dll` (or `win-arm64`) exists
+   - If missing, trigger a build: Go to repository Actions → "Build Native WDSP Libraries" → "Run workflow"
+   - Or build locally following instructions in `native/README.md`
+
+2. **For Linux users**:
+   - Check if `Zeus.Dsp/runtimes/linux-x64/native/libwdsp.so` (or `linux-arm64`) exists
+   - If missing, run `./native/build.sh` from the repository root
+   - Or wait for the automated GitHub Actions build
+
+3. **Fallback to synthetic DSP**: If native libraries are unavailable, Zeus will fall back to a synthetic DSP engine. Most UI features work, but actual signal processing requires the WDSP native library.
+
+See `native/README.md` for detailed build instructions and `docs/lessons/wdsp-init-gotchas.md` for WDSP-specific troubleshooting.
 
 ## Acknowledgements
 

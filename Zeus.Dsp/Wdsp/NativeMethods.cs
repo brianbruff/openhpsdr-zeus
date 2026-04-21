@@ -544,4 +544,19 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial double GetTXAMeter(int channel, int mt);
+
+    // FFTW wisdom: builds or loads cached plans from `directory/wdspWisdom00`.
+    // Returns 0 if plans were loaded from file (fast), 1 if newly built and
+    // saved (slow — FFTW_PATIENT runs sizes 64..262144). Must be called once
+    // before the first OpenChannel so FFTW reuses the cached plans instead of
+    // re-planning cold on every launch.
+    [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int WDSPwisdom(string directory);
+
+    // Returns a pointer into a static 128-byte buffer written by the last
+    // WDSPwisdom call (e.g. "Wisdom already existed" / "Wisdom created").
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial IntPtr wisdom_get_status();
 }

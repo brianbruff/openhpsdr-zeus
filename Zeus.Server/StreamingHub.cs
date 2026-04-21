@@ -21,10 +21,22 @@ public sealed class StreamingHub
 
     private readonly ILogger<StreamingHub> _log;
     private readonly ConcurrentDictionary<Guid, ClientSession> _clients = new();
+    // Latest WDSP wisdom phase. Set by StreamingHubWisdomBridge on phase-changed
+    // events; read on every AttachClientAsync so late joiners see the current
+    // state without waiting for the next transition. Volatile because the
+    // writer is on a worker thread and readers can be on any hub caller.
+    private volatile byte _wisdomPhase;
 
     public StreamingHub(ILogger<StreamingHub> log) { _log = log; }
 
     public int ClientCount => _clients.Count;
+
+    /// <summary>Updates the hub's cached wisdom phase so clients attaching
+    /// after the one-shot broadcast still receive the current state.</summary>
+    public void SetWisdomPhase(Zeus.Contracts.WisdomPhase phase)
+    {
+        _wisdomPhase = (byte)phase;
+    }
 
     /// <summary>
     /// Raised when a client sends a <c>MicPcm</c> binary frame. The handler
@@ -40,6 +52,11 @@ public sealed class StreamingHub
         var session = new ClientSession(id, ws, _log, this);
         _clients[id] = session;
         _log.LogInformation("ws.client.connected id={Id} total={Count}", id, _clients.Count);
+
+        // Prime the new client with the current wisdom phase. Without this a
+        // client that joins after the ready event would sit at default (Idle)
+        // and render the pulsing Connect button indefinitely.
+        session.TryEnqueue(BuildWisdomPayload((Zeus.Contracts.WisdomPhase)_wisdomPhase));
 
         try
         {
@@ -147,6 +164,22 @@ public sealed class StreamingHub
         {
             ArrayPool<byte>.Shared.Return(rented);
         }
+    }
+
+    public void Broadcast(in WisdomStatusFrame frame)
+    {
+        SetWisdomPhase(frame.Phase);
+        if (_clients.IsEmpty) return;
+        var payload = BuildWisdomPayload(frame.Phase);
+        foreach (var client in _clients.Values) client.TryEnqueue(payload);
+    }
+
+    private static byte[] BuildWisdomPayload(Zeus.Contracts.WisdomPhase phase)
+    {
+        var buf = new byte[WisdomStatusFrame.ByteLength];
+        var writer = new FixedBufferWriter(buf, buf.Length);
+        new WisdomStatusFrame(phase).Serialize(writer);
+        return buf;
     }
 
     public void Broadcast(in AlertFrame frame)

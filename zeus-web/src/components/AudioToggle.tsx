@@ -25,7 +25,7 @@ export function AudioToggle() {
     ? 'Loading…'
     : playing
     ? '■ Mute'
-    : '▶ Play';
+    : '▶ Unmute';
 
   const title = state.kind === 'error' ? state.message : undefined;
 

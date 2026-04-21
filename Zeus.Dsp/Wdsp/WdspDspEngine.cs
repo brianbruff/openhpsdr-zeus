@@ -111,6 +111,11 @@ public sealed class WdspDspEngine : IDspEngine
     {
         _log = logger ?? NullLogger<WdspDspEngine>.Instance;
         WdspNativeLoader.EnsureResolverRegistered();
+        // WDSPwisdom is run by WdspWisdomInitializer at app startup before any
+        // connect is allowed, so we trust it has completed by the time the
+        // first OpenChannel lands here. Tests that construct the engine in
+        // isolation can call WdspWisdomInitializer.EnsureInitializedAsync()
+        // themselves, or accept slow first-open planning.
     }
 
     public int OpenChannel(int sampleRateHz, int pixelWidth)

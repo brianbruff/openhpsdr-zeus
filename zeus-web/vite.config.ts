@@ -9,7 +9,7 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg', 'mic-uplink-worklet.js'],
+      includeAssets: ['mic-uplink-worklet.js'],
       manifest: {
         name: 'Zeus',
         short_name: 'Zeus',
@@ -24,7 +24,6 @@ export default defineConfig({
           { src: 'zeus-icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
           { src: 'zeus-icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
           { src: 'zeus-icon-512-maskable.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
-          { src: 'zeus-icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
         ],
       },
       workbox: {

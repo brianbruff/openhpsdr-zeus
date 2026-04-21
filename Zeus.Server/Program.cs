@@ -22,7 +22,9 @@ builder.Services.Configure<JsonOptions>(o =>
 // conflicting with the user's Log4YM project (which also binds :5050).
 // Bind on all interfaces so the SPA + API are reachable from other hosts
 // on the LAN (doc 01 §Deployment: local single-user, same LAN as radio).
-builder.WebHost.ConfigureKestrel(k => k.ListenAnyIP(6060));
+// ZEUS_PORT overrides the default (used by the /run skill's portOffset).
+var zeusPort = int.TryParse(Environment.GetEnvironmentVariable("ZEUS_PORT"), out var zp) ? zp : 6060;
+builder.WebHost.ConfigureKestrel(k => k.ListenAnyIP(zeusPort));
 
 // DspPipelineService owns engine selection directly: Synthetic while idle,
 // WDSP while a Protocol1Client is attached. No IDspEngine DI registration —

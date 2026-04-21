@@ -28,7 +28,9 @@ Thumbs.db
 *.log
 tools/demo-server/bin/
 tools/demo-server/obj/
-.claude/
+# Claude Code: share skills/commands/agents, keep per-machine state local
+.claude/settings.local.json
+.claude/*.lock
 
 # Local credential store (LiteDB) — stored in user's app-data dir, never in repo
 zeus.db*

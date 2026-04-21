@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { qrzLogin, qrzLogout, qrzLookup, qrzStatus, type QrzStation, type QrzStatus } from '../api/qrz';
+import { qrzLogin, qrzLogout, qrzLookup, qrzStatus, qrzSetApiKey, type QrzStation, type QrzStatus } from '../api/qrz';
 import { ApiError } from '../api/client';
 
 const USERNAME_STORAGE_KEY = 'zeus.qrz.username';
@@ -27,6 +27,7 @@ export type QrzStoreState = {
   // Session state mirrored from the backend; null means we haven't checked yet.
   connected: boolean;
   hasXmlSubscription: boolean;
+  hasApiKey: boolean;
   home: QrzStation | null;
   // Remembered username (password is never persisted).
   rememberedUsername: string;
@@ -44,12 +45,14 @@ export type QrzStoreState = {
   logout: () => Promise<void>;
   lookup: (callsign: string) => Promise<QrzStation | null>;
   clearLookup: () => void;
+  setApiKey: (apiKey: string | null) => Promise<void>;
 };
 
 function applyStatus(status: QrzStatus): Partial<QrzStoreState> {
   return {
     connected: status.connected,
     hasXmlSubscription: status.hasXmlSubscription,
+    hasApiKey: status.hasApiKey,
     home: status.home,
     loginError: status.error,
   };
@@ -58,6 +61,7 @@ function applyStatus(status: QrzStatus): Partial<QrzStoreState> {
 export const useQrzStore = create<QrzStoreState>((set) => ({
   connected: false,
   hasXmlSubscription: false,
+  hasApiKey: false,
   home: null,
   rememberedUsername: readSavedUsername(),
   lastLookup: null,
@@ -113,6 +117,16 @@ export const useQrzStore = create<QrzStoreState>((set) => ({
   },
 
   clearLookup: () => set({ lastLookup: null, lookupError: null }),
+
+  setApiKey: async (apiKey) => {
+    try {
+      const status = await qrzSetApiKey(apiKey);
+      set(applyStatus(status));
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : String(err);
+      set({ loginError: msg });
+    }
+  },
 }));
 
 // Kick off a status probe at module load so reconnected sessions (backend still has

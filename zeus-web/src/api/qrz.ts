@@ -21,6 +21,7 @@ export type QrzStatus = {
   hasXmlSubscription: boolean;
   home: QrzStation | null;
   error: string | null;
+  hasApiKey: boolean;
 };
 
 function toNum(v: unknown): number | null {
@@ -57,6 +58,7 @@ function normalizeStatus(raw: unknown): QrzStatus {
     hasXmlSubscription: Boolean(r.hasXmlSubscription),
     home: r.home ? normalizeStation(r.home) : null,
     error: toStr(r.error),
+    hasApiKey: Boolean(r.hasApiKey),
   };
 }
 
@@ -109,4 +111,17 @@ export function qrzLookup(callsign: string, signal?: AbortSignal): Promise<QrzSt
 
 export function qrzLogout(signal?: AbortSignal): Promise<QrzStatus> {
   return jsonFetch('/api/qrz/logout', { method: 'POST', signal }, normalizeStatus);
+}
+
+export function qrzSetApiKey(apiKey: string | null, signal?: AbortSignal): Promise<QrzStatus> {
+  return jsonFetch(
+    '/api/qrz/apikey',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ apiKey }),
+      signal,
+    },
+    normalizeStatus,
+  );
 }

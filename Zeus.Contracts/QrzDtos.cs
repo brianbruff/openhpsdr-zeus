@@ -4,6 +4,8 @@ public sealed record QrzLoginRequest(string Username, string Password);
 
 public sealed record QrzLookupRequest(string Callsign);
 
+public sealed record QrzSetApiKeyRequest(string? ApiKey);
+
 public sealed record QrzStation(
     string Callsign,
     string? Name,
@@ -24,4 +26,5 @@ public sealed record QrzStatus(
     bool HasXmlSubscription,
     QrzStation? Home,
     string? Error,
-    bool HasStoredCredentials = false);
+    bool HasStoredCredentials = false,
+    bool HasApiKey = false);

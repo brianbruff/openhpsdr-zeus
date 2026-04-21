@@ -4,16 +4,20 @@ import { useQrzStore } from '../state/qrz-store';
 export function QrzStatusPill() {
   const connected = useQrzStore((s) => s.connected);
   const hasXml = useQrzStore((s) => s.hasXmlSubscription);
+  const hasApiKey = useQrzStore((s) => s.hasApiKey);
   const home = useQrzStore((s) => s.home);
   const rememberedUsername = useQrzStore((s) => s.rememberedUsername);
   const loginInFlight = useQrzStore((s) => s.loginInFlight);
   const loginError = useQrzStore((s) => s.loginError);
   const login = useQrzStore((s) => s.login);
   const logout = useQrzStore((s) => s.logout);
+  const setApiKey = useQrzStore((s) => s.setApiKey);
 
   const [open, setOpen] = useState(false);
   const [username, setUsername] = useState(rememberedUsername);
   const [password, setPassword] = useState('');
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [showApiKeyInput, setShowApiKeyInput] = useState(false);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
 
   // Keep the form's username in sync when the store hydrates from localStorage
@@ -55,6 +59,12 @@ export function QrzStatusPill() {
     }
   }
 
+  async function onSaveApiKey() {
+    await setApiKey(apiKeyInput.trim() || null);
+    setShowApiKeyInput(false);
+    setApiKeyInput('');
+  }
+
   return (
     <div ref={wrapperRef} className="relative">
       <button
@@ -85,6 +95,52 @@ export function QrzStatusPill() {
               )}
               <div className={hasXml ? 'text-emerald-400' : 'text-amber-400'}>
                 {hasXml ? 'XML subscription active' : 'No XML subscription — lookups disabled'}
+              </div>
+              <div className="mt-2 border-t border-neutral-700 pt-2">
+                <div className="mb-1 text-neutral-400">
+                  QRZ API Key {hasApiKey && <span className="text-emerald-400">●</span>}
+                </div>
+                {showApiKeyInput ? (
+                  <div className="flex flex-col gap-2">
+                    <input
+                      type="password"
+                      value={apiKeyInput}
+                      onChange={(e) => setApiKeyInput(e.target.value)}
+                      placeholder="Enter API key"
+                      className="rounded border border-neutral-700 bg-neutral-950 px-2 py-1 font-mono text-xs text-neutral-100 focus:border-emerald-600 focus:outline-none"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={onSaveApiKey}
+                        className="rounded bg-emerald-700 px-2 py-1 text-xs text-neutral-50 hover:bg-emerald-600"
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowApiKeyInput(false);
+                          setApiKeyInput('');
+                        }}
+                        className="rounded border border-neutral-700 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setShowApiKeyInput(true)}
+                    className="text-xs text-emerald-400 hover:underline"
+                  >
+                    {hasApiKey ? 'Update API key' : 'Set API key'}
+                  </button>
+                )}
+                <div className="mt-1 text-[10px] leading-tight text-neutral-500">
+                  Required for publishing QSOs to QRZ logbook
+                </div>
               </div>
               <button
                 type="button"

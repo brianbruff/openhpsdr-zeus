@@ -6,8 +6,10 @@ namespace Zeus.Server;
 public sealed class QrzService
 {
     private const string QrzXmlApiUrl = "https://xmldata.qrz.com/xml/current/";
+    private const string QrzLogbookApiUrl = "https://logbook.qrz.com/api";
     private const string Agent = "Zeus";
     private const string ServiceName = "qrz";
+    private const string ApiKeyServiceName = "qrz-apikey";
     private static readonly XNamespace Ns = "http://xmldata.qrz.com";
 
     private readonly HttpClient _http;
@@ -21,6 +23,7 @@ public sealed class QrzService
     private DateTime _sessionExpiry;
     private QrzStation? _home;
     private bool _hasXmlSubscription;
+    private string? _apiKey;
 
     public QrzService(IHttpClientFactory httpClientFactory, ILogger<QrzService> log, CredentialStore credStore)
     {
@@ -46,6 +49,14 @@ public sealed class QrzService
                 await _credStore.DeleteAsync(ServiceName, ct);
             }
         }
+
+        // Load API key if stored
+        var apiKeyStored = await _credStore.GetAsync(ApiKeyServiceName, ct);
+        if (apiKeyStored != null)
+        {
+            _apiKey = apiKeyStored.Password; // Store API key in password field
+            _log.LogInformation("Loaded QRZ API key from storage");
+        }
     }
 
     public QrzStatus GetStatus() => new(
@@ -53,7 +64,8 @@ public sealed class QrzService
         HasXmlSubscription: _hasXmlSubscription,
         Home: _home,
         Error: null,
-        HasStoredCredentials: !string.IsNullOrWhiteSpace(_username));
+        HasStoredCredentials: !string.IsNullOrWhiteSpace(_username),
+        HasApiKey: !string.IsNullOrWhiteSpace(_apiKey));
 
     public async Task<QrzStatus> LoginAsync(string username, string password, CancellationToken ct)
     {
@@ -245,6 +257,144 @@ public sealed class QrzService
         if (Math.Abs(v) <= maxAbs) return v;
         var scaled = v / 1_000_000.0;
         return Math.Abs(scaled) <= maxAbs ? scaled : null;
+    }
+
+    public async Task SetApiKeyAsync(string? apiKey, CancellationToken ct = default)
+    {
+        _apiKey = apiKey;
+
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            // Store API key (using "apikey" as username for consistency)
+            await _credStore.SetAsync(ApiKeyServiceName, "apikey", apiKey, ct);
+            _log.LogInformation("QRZ API key stored");
+        }
+        else
+        {
+            // Delete API key
+            await _credStore.DeleteAsync(ApiKeyServiceName, ct);
+            _log.LogInformation("QRZ API key deleted");
+        }
+    }
+
+    public async Task<QrzPublishResult> PublishLogEntryAsync(LogEntry logEntry, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_apiKey))
+        {
+            return new QrzPublishResult(
+                LogEntryId: logEntry.Id,
+                Success: false,
+                QrzLogId: null,
+                Message: "QRZ API key not configured");
+        }
+
+        try
+        {
+            var adif = ConvertLogEntryToAdif(logEntry);
+            var (success, logId, message) = await UploadAdifToQrzAsync(_apiKey, adif, ct);
+
+            return new QrzPublishResult(
+                LogEntryId: logEntry.Id,
+                Success: success,
+                QrzLogId: logId,
+                Message: message);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Error publishing log entry {LogEntryId} to QRZ", logEntry.Id);
+            return new QrzPublishResult(
+                LogEntryId: logEntry.Id,
+                Success: false,
+                QrzLogId: null,
+                Message: $"Error: {ex.Message}");
+        }
+    }
+
+    private async Task<(bool Success, string? LogId, string? Message)> UploadAdifToQrzAsync(
+        string apiKey, string adif, CancellationToken ct)
+    {
+        var content = new FormUrlEncodedContent(new[]
+        {
+            new KeyValuePair<string, string>("KEY", apiKey),
+            new KeyValuePair<string, string>("ACTION", "INSERT"),
+            new KeyValuePair<string, string>("ADIF", adif)
+        });
+
+        var response = await _http.PostAsync(QrzLogbookApiUrl, content, ct);
+        var responseText = await response.Content.ReadAsStringAsync(ct);
+
+        _log.LogInformation("QRZ logbook response: {Response}", responseText);
+
+        // Parse response - format is: RESULT=OK&LOGID=12345 or RESULT=FAIL&REASON=message
+        var parts = responseText.Split('&')
+            .Select(p => p.Split('='))
+            .Where(p => p.Length == 2)
+            .ToDictionary(p => p[0], p => System.Net.WebUtility.UrlDecode(p[1]));
+
+        parts.TryGetValue("RESULT", out var result);
+        parts.TryGetValue("LOGID", out var logId);
+        parts.TryGetValue("REASON", out var reason);
+
+        // OK = new record inserted, REPLACE = duplicate updated
+        if (result == "OK" || result == "REPLACE")
+        {
+            var message = result == "REPLACE" ? "QSO already exists (updated)" : "QSO uploaded successfully";
+            return (true, logId, message);
+        }
+
+        // Handle duplicate errors as success
+        if (reason != null && (
+            reason.Contains("duplicate", StringComparison.OrdinalIgnoreCase) ||
+            reason.Contains("already exists", StringComparison.OrdinalIgnoreCase) ||
+            reason.Contains("dupe", StringComparison.OrdinalIgnoreCase)))
+        {
+            _log.LogDebug("QRZ duplicate detected, treating as success: {Reason}", reason);
+            return (true, logId, "QSO already exists in QRZ");
+        }
+
+        return (false, null, reason ?? "Unknown error");
+    }
+
+    private static string ConvertLogEntryToAdif(LogEntry entry)
+    {
+        var sb = new System.Text.StringBuilder();
+
+        // Required fields
+        AppendAdifField(sb, "CALL", entry.Callsign);
+        AppendAdifField(sb, "QSO_DATE", entry.QsoDateTimeUtc.ToString("yyyyMMdd"));
+        AppendAdifField(sb, "TIME_ON", entry.QsoDateTimeUtc.ToString("HHmmss"));
+        AppendAdifField(sb, "FREQ", entry.FrequencyMhz.ToString("F6", System.Globalization.CultureInfo.InvariantCulture));
+        AppendAdifField(sb, "BAND", entry.Band);
+        AppendAdifField(sb, "MODE", entry.Mode);
+        AppendAdifField(sb, "RST_SENT", entry.RstSent);
+        AppendAdifField(sb, "RST_RCVD", entry.RstRcvd);
+
+        // Optional fields
+        if (!string.IsNullOrEmpty(entry.Name))
+            AppendAdifField(sb, "NAME", entry.Name);
+        if (!string.IsNullOrEmpty(entry.Grid))
+            AppendAdifField(sb, "GRIDSQUARE", entry.Grid);
+        if (!string.IsNullOrEmpty(entry.Country))
+            AppendAdifField(sb, "COUNTRY", entry.Country);
+        if (entry.Dxcc.HasValue)
+            AppendAdifField(sb, "DXCC", entry.Dxcc.Value.ToString());
+        if (entry.CqZone.HasValue)
+            AppendAdifField(sb, "CQZ", entry.CqZone.Value.ToString());
+        if (entry.ItuZone.HasValue)
+            AppendAdifField(sb, "ITUZ", entry.ItuZone.Value.ToString());
+        if (!string.IsNullOrEmpty(entry.State))
+            AppendAdifField(sb, "STATE", entry.State);
+        if (!string.IsNullOrEmpty(entry.Comment))
+            AppendAdifField(sb, "COMMENT", entry.Comment);
+
+        sb.Append("<EOR>");
+        return sb.ToString();
+    }
+
+    private static void AppendAdifField(System.Text.StringBuilder sb, string fieldName, string value)
+    {
+        if (string.IsNullOrEmpty(value)) return;
+        sb.Append($"<{fieldName}:{value.Length}>{value} ");
     }
 }
 

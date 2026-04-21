@@ -21,11 +21,11 @@ import { VfoDisplay } from './components/VfoDisplay';
 import { Waterfall } from './components/Waterfall';
 import { ZoomControl } from './components/ZoomControl';
 import { AzimuthMap } from './components/design/AzimuthMap';
-import { CONTACTS, HOME, bandOf, type LogEntry } from './components/design/data';
+import { CONTACTS, HOME, bandOf } from './components/design/data';
 import { CwKeyer } from './components/design/CwKeyer';
 import { Dockable } from './components/design/Dockable';
 import { DspPanel } from './components/DspPanel';
-import { Logbook } from './components/design/Logbook';
+import { LogbookLive } from './components/design/LogbookLive';
 import { QrzCard } from './components/design/QrzCard';
 import { TerminatorLines } from './components/design/TerminatorLines';
 import { bearingDeg, distanceKm } from './components/design/geo';
@@ -38,6 +38,7 @@ import { fetchState } from './api/client';
 import { useConnectionStore } from './state/connection-store';
 import { useQrzStore } from './state/qrz-store';
 import { useRotatorStore } from './state/rotator-store';
+import { useLoggerStore } from './state/logger-store';
 import { useTxStore } from './state/tx-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
 import type { QrzStation } from './api/qrz';
@@ -133,7 +134,57 @@ export default function App() {
   const qrzHome = useQrzStore((s) => s.home);
   const qrzLookup = useQrzStore((s) => s.lastLookup);
   const qrzHasXml = useQrzStore((s) => s.hasXmlSubscription);
+  const qrzLookupError = useQrzStore((s) => s.lookupError);
   const qrzActive = !!qrzHome && qrzHasXml;
+
+  const addLogEntry = useLoggerStore((s) => s.addLogEntry);
+  const logPublishInFlight = useLoggerStore((s) => s.publishInFlight);
+  const logPublishResult = useLoggerStore((s) => s.lastPublishResult);
+  const logPublishError = useLoggerStore((s) => s.publishError);
+  const logSelectedIds = useLoggerStore((s) => s.selectedIds);
+  const logPublishSelected = useLoggerStore((s) => s.publishSelectedToQrz);
+  const logExportAdif = useLoggerStore((s) => s.exportAdif);
+  const qrzHasApiKey = useQrzStore((s) => s.hasApiKey);
+
+  const logbookTitle = logPublishInFlight
+    ? 'Logbook · Uploading…'
+    : logPublishError
+      ? `Logbook · ${logPublishError.length > 28 ? 'Publish failed' : logPublishError}`
+      : logPublishResult
+        ? logPublishResult.failedCount > 0
+          ? `Logbook · ${logPublishResult.successCount} ok, ${logPublishResult.failedCount} failed`
+          : `Logbook · Published ${logPublishResult.successCount}`
+        : 'Logbook';
+
+  const logSelectedCount = logSelectedIds.size;
+  const publishDisabled = logSelectedCount === 0 || logPublishInFlight || !qrzHasApiKey;
+  const publishTitle = !qrzHasApiKey
+    ? 'Set a QRZ API key in the QRZ panel to enable publishing'
+    : logSelectedCount === 0
+      ? 'Select one or more rows to publish'
+      : 'Publish selected QSOs to QRZ logbook';
+
+  const logbookActions = (
+    <>
+      <button
+        type="button"
+        className="btn ghost sm"
+        onClick={() => void logPublishSelected(Array.from(logSelectedIds))}
+        disabled={publishDisabled}
+        title={publishTitle}
+      >
+        {logPublishInFlight ? 'Publishing…' : `Publish (${logSelectedCount})`}
+      </button>
+      <button
+        type="button"
+        className="btn ghost sm"
+        onClick={() => void logExportAdif()}
+        title="Export all log entries to ADIF file"
+      >
+        Export
+      </button>
+    </>
+  );
 
   // Live rotator heading — drives the map's beam lines when rotctld is up so
   // the beam shows the actual antenna direction, not the great-circle bearing
@@ -143,6 +194,35 @@ export default function App() {
   const contact: Contact | null = qrzActive
     ? qrzStationToContact(qrzLookup, qrzHome)
     : (CONTACTS[callsign.toUpperCase()] ?? null);
+
+  // Log QSO handler - creates a lazy log entry with RST based on mode
+  const handleLogQso = useCallback(() => {
+    if (!contact || !qrzLookup) return;
+
+    // Determine RST based on mode: 599 for CW, 59 for phone modes
+    const isCwMode = mode === 'CWU' || mode === 'CWL';
+    const rstSent = isCwMode ? '599' : '59';
+    const rstRcvd = isCwMode ? '599' : '59';
+
+    const band = bandOf(vfoHz);
+    const frequencyMhz = vfoHz / 1e6;
+
+    void addLogEntry({
+      callsign: contact.callsign,
+      name: qrzLookup.name ?? undefined,
+      frequencyMhz,
+      band,
+      mode,
+      rstSent,
+      rstRcvd,
+      grid: qrzLookup.grid ?? undefined,
+      country: qrzLookup.country ?? undefined,
+      dxcc: qrzLookup.dxcc ?? undefined,
+      cqZone: qrzLookup.cqZone ?? undefined,
+      ituZone: qrzLookup.ituZone ?? undefined,
+      state: qrzLookup.state ?? undefined,
+    });
+  }, [contact, qrzLookup, mode, vfoHz, addLogEntry]);
 
   const [wpm, setWpm] = useState(22);
   const nrState = useConnectionStore((s) => s.nr);
@@ -231,8 +311,6 @@ export default function App() {
     e.preventDefault();
     engageTerminator();
   };
-
-  const onLogPick = (r: LogEntry) => engageTerminator(r.call);
 
   const bandLabel = bandOf(vfoHz);
 
@@ -610,7 +688,13 @@ export default function App() {
                   </form>
                 }
               >
-                <QrzCard contact={contact} enriching={enriching} />
+                <QrzCard
+                  contact={contact}
+                  enriching={enriching}
+                  lookupError={qrzLookupError}
+                  onLogQso={handleLogQso}
+                  canLogQso={qrzActive && !!contact}
+                />
               </Dockable>
             </div>
           ) : (
@@ -637,8 +721,8 @@ export default function App() {
         {/* Bottom row — Logbook + TX Stage Meters on desktop; big PTT on mobile. */}
         <div className="bottom-row">
           <div className="bottom-slot hide-mobile">
-            <Dockable title="Logbook" ledOn>
-              <Logbook onPick={onLogPick} />
+            <Dockable title={logbookTitle} ledOn actions={logbookActions}>
+              <LogbookLive />
             </Dockable>
           </div>
           <div className="bottom-slot hide-mobile">

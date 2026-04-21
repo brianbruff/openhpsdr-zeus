@@ -58,6 +58,7 @@ builder.Services.AddHostedService<TxTuneDriver>();
 builder.Services.AddHttpClient("Qrz", c => c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddSingleton<CredentialStore>();
 builder.Services.AddSingleton<QrzService>();
+builder.Services.AddSingleton<LogService>();
 
 // rotctld (hamlib rotator daemon) client. BackgroundService with persistent
 // TCP and reconnect-on-failure. Singleton so config/state survive across
@@ -342,6 +343,67 @@ app.MapPost("/api/qrz/logout", async (QrzService qrz, HttpContext ctx) =>
     await qrz.LogoutAsync(ctx.RequestAborted);
     return Results.Ok(qrz.GetStatus());
 });
+
+app.MapPost("/api/qrz/apikey", async (QrzSetApiKeyRequest req, QrzService qrz, HttpContext ctx) =>
+{
+    await qrz.SetApiKeyAsync(req.ApiKey, ctx.RequestAborted);
+    return Results.Ok(qrz.GetStatus());
+});
+
+app.MapGet("/api/log/entries", async (LogService logService, HttpContext ctx, int skip = 0, int take = 100) =>
+{
+    var response = await logService.GetLogEntriesAsync(skip, take, ctx.RequestAborted);
+    return Results.Ok(response);
+});
+
+app.MapPost("/api/log/entry", async (CreateLogEntryRequest req, LogService logService, HttpContext ctx) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Callsign))
+        return Results.BadRequest(new { error = "callsign required" });
+    var entry = await logService.CreateLogEntryAsync(req, ctx.RequestAborted);
+    return Results.Ok(entry);
+});
+
+app.MapGet("/api/log/export/adif", async (LogService logService, HttpContext ctx) =>
+{
+    var adif = await logService.ExportToAdifAsync(null, ctx.RequestAborted);
+    var fileName = $"zeus-log-{DateTime.UtcNow:yyyyMMdd-HHmmss}.adi";
+    return Results.File(
+        System.Text.Encoding.UTF8.GetBytes(adif),
+        "text/plain",
+        fileName);
+});
+
+app.MapPost("/api/log/publish/qrz", async (QrzPublishRequest req, QrzService qrz, LogService logService, HttpContext ctx) =>
+{
+    if (req.LogEntryIds == null || !req.LogEntryIds.Any())
+        return Results.BadRequest(new { error = "no log entry IDs provided" });
+
+    var entries = await logService.GetLogEntriesByIdsAsync(req.LogEntryIds, ctx.RequestAborted);
+    var results = new List<QrzPublishResult>();
+
+    foreach (var entry in entries)
+    {
+        var result = await qrz.PublishLogEntryAsync(entry, ctx.RequestAborted);
+        results.Add(result);
+
+        // Update log entry with QRZ log ID if successful
+        if (result.Success && !string.IsNullOrEmpty(result.QrzLogId))
+        {
+            await logService.UpdateQrzUploadStatusAsync(entry.Id, result.QrzLogId, ctx.RequestAborted);
+        }
+    }
+
+    var successCount = results.Count(r => r.Success);
+    var failedCount = results.Count - successCount;
+
+    return Results.Ok(new QrzPublishResponse(
+        TotalCount: results.Count,
+        SuccessCount: successCount,
+        FailedCount: failedCount,
+        Results: results));
+});
+
 
 app.MapGet("/api/rotator/status", (RotctldService rot) => rot.GetStatus());
 

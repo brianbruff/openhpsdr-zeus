@@ -445,14 +445,22 @@ export default function App() {
             <span className="spacer" style={{ flex: 1 }} />
             {terminatorActive && contact && (
               <>
-                <span className="chip mono">
+                <button
+                  type="button"
+                  className="chip mono"
+                  onClick={() => setBeamInputStr((((sp % 360) + 360) % 360).toFixed(0))}
+                >
                   <span className="k">SP</span>
                   <span className="v">{sp.toFixed(0)}°</span>
-                </span>
-                <span className="chip mono">
+                </button>
+                <button
+                  type="button"
+                  className="chip mono"
+                  onClick={() => setBeamInputStr((((lp % 360) + 360) % 360).toFixed(0))}
+                >
                   <span className="k">LP</span>
                   <span className="v">{lp.toFixed(0)}°</span>
-                </span>
+                </button>
                 <form onSubmit={submitBeam} className="chip mono" style={{ gap: 4 }}>
                   <span className="k">BEAM</span>
                   <input

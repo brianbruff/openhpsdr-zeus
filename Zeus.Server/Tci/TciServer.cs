@@ -99,7 +99,7 @@ public sealed class TciServer : IHostedService, IDisposable
         _radio.Connected -= OnRadioConnected;
         _radio.Disconnected -= OnRadioDisconnected;
 
-        _cts?.Cancel();
+        try { _cts?.Cancel(); } catch (ObjectDisposedException) { }
         _listener.Stop();
 
         if (_acceptTask is not null)
@@ -115,7 +115,9 @@ public sealed class TciServer : IHostedService, IDisposable
         _clients.Clear();
 
         _cts?.Dispose();
+        _cts = null;
         _listener.Close();
+        _listener = null;
     }
 
     private async Task AcceptLoopAsync(CancellationToken ct)
@@ -128,6 +130,10 @@ public sealed class TciServer : IHostedService, IDisposable
                 _ = Task.Run(() => HandleClientAsync(context, ct), ct);
             }
             catch (HttpListenerException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (ObjectDisposedException) when (ct.IsCancellationRequested)
             {
                 break;
             }
@@ -239,10 +245,13 @@ public sealed class TciServer : IHostedService, IDisposable
 
     public void Dispose()
     {
-        _cts?.Cancel();
+        try { _cts?.Cancel(); } catch (ObjectDisposedException) { }
+        _cts?.Dispose();
+        _cts = null;
+
         _listener?.Stop();
         _listener?.Close();
-        _cts?.Dispose();
+        _listener = null;
 
         foreach (var session in _clients.Values)
         {

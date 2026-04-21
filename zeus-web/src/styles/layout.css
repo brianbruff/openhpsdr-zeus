@@ -1053,3 +1053,151 @@
   bottom: 54px;
   z-index: 999;
 }
+
+/* .show-mobile — hidden on desktop, flexed in on mobile. Used for the PTT
+   slot that takes the bottom-row space normally occupied by the logbook. */
+.show-mobile { display: none; }
+
+/* ===== Mobile PTT button — desktop styles are unused (slot is hidden) but
+   kept here for consistency with the rest of the design system. ===== */
+.mobile-ptt-slot { flex: 1; }
+.mobile-ptt-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 14px;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  color: var(--fg-0);
+  background: linear-gradient(180deg, var(--btn-top), var(--btn-bot));
+  border: 1px solid var(--btn-edge);
+  border-radius: var(--r-md);
+  box-shadow:
+    inset 0 1px 0 var(--btn-hl),
+    inset 0 -2px 0 rgba(0,0,0,0.4),
+    0 2px 4px rgba(0,0,0,0.5);
+  text-shadow: 0 1px 0 rgba(0,0,0,0.6);
+  user-select: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+  transition: background 80ms ease, transform 80ms ease;
+}
+.mobile-ptt-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.mobile-ptt-btn.tx {
+  background: linear-gradient(180deg, #ff7a7a, #c41515);
+  color: #fff;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.3),
+    0 0 18px rgba(255,56,56,0.8);
+  transform: translateY(1px);
+}
+.mobile-ptt-label {
+  font-size: 28px;
+  letter-spacing: 0.24em;
+}
+.mobile-ptt-hint {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+  opacity: 0.85;
+}
+.mobile-ptt-btn.tx .mobile-ptt-hint { color: rgba(255,255,255,0.85); }
+
+/* ===== Mobile responsive layout (≤640 px) =====
+   Shows only frequency (VFO), signal (S-meter), mic level, power level (drive),
+   the panadapter/waterfall stack, and a big hold-to-talk PTT button where the
+   logbook sits on desktop. Everything else — QRZ, azimuth map, DSP, CW keyer,
+   logbook, TX stage meters, mode/bandwidth, front-end, AGC, zoom, status chips,
+   tweaks panel — is hidden via the .hide-mobile utility. */
+@media (max-width: 900px) {
+  .hide-mobile { display: none !important; }
+  .show-mobile { display: flex; }
+
+  html, body { overflow-x: hidden; }
+
+  .app {
+    grid-template-rows: 44px 52px auto 1fr 44px;
+    width: 100%;
+    padding: 4px;
+    gap: 4px;
+    overflow-x: hidden;
+  }
+
+  .topbar {
+    height: 44px;
+    padding: 0 8px;
+    gap: 6px;
+    min-width: 0;
+  }
+  .brand { padding: 0 4px; gap: 6px; }
+  .brand-mark { width: 22px; height: 22px; }
+  .brand-name { font-size: 13px; }
+  /* Compact the connected "RADIO x.x.x.x:pppp" chip — the mono IP overflows
+     a 390 px viewport when the Disconnect button sits next to it. */
+  .topbar .chip.accent .v { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; }
+
+  .control-strip {
+    height: 52px;
+    padding: 2px 6px;
+    gap: 8px;
+    overflow-x: hidden;
+    min-width: 0;
+  }
+  /* Override inline min-width: 360 on the visible ZOOM·DRIVE·MIC ctrl-group so
+     the two remaining sliders shrink to fit narrow viewports. */
+  .control-strip .ctrl-group { min-width: 0 !important; }
+  .control-strip .btn-row { min-width: 0; flex: 1; }
+  .control-strip .knob-group { min-width: 0; flex: 1; }
+
+  .workspace {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1.4fr) minmax(0, 0.85fr) auto;
+    gap: 4px;
+  }
+  .workspace .hero { grid-column: 1; grid-row: 1; }
+  .workspace .side-stack {
+    grid-column: 1;
+    grid-row: 2;
+    flex-direction: column;
+    overflow-y: auto;
+    overflow-x: hidden;
+    gap: 4px;
+  }
+  .workspace .side-stack .side-slot {
+    flex: 0 0 auto;
+    min-width: 0;
+  }
+  .workspace .side-stack .side-slot.grow {
+    flex: 0 0 auto;
+    min-height: 0;
+  }
+  .workspace .bottom-row {
+    grid-column: 1;
+    grid-row: 3;
+    grid-template-columns: 1fr;
+    min-height: 72px;
+  }
+
+  .freq-digits { font-size: 26px; margin: 2px 0; }
+  .freq-panel { padding: 6px; gap: 4px; }
+  .smeter { padding: 6px 8px; gap: 4px; }
+  .smeter-scale { height: 40px; padding: 4px; }
+
+  .transport {
+    height: 44px;
+    padding: 0 6px;
+    gap: 4px;
+    min-width: 0;
+    overflow-x: hidden;
+  }
+  .transport .knob-group { min-width: 0; flex: 1; }
+
+  .tweaks-fab,
+  .tweaks-panel { display: none !important; }
+}

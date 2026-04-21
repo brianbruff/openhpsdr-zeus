@@ -7,6 +7,7 @@ import { ConnectPanel } from './components/ConnectPanel';
 import { DriveSlider } from './components/DriveSlider';
 import { MicGainSlider } from './components/MicGainSlider';
 import { MicMeter } from './components/MicMeter';
+import { MobilePttButton } from './components/MobilePttButton';
 import { ModeBandwidth } from './components/ModeBandwidth';
 import { MoxButton } from './components/MoxButton';
 import { Panadapter } from './components/Panadapter';
@@ -340,22 +341,22 @@ export default function App() {
           </div>
           <div className="brand-text">
             <div className="brand-name mono">ZEUS</div>
-            <div className="brand-sub label-xs">HERMES LITE 2 · 0.1–54 MHz</div>
+            <div className="brand-sub label-xs hide-mobile">HERMES LITE 2 · 0.1–54 MHz</div>
           </div>
         </div>
 
-        <div className="topbar-divider" />
+        <div className="topbar-divider hide-mobile" />
 
-        <div className="vfo-group">
+        <div className="vfo-group hide-mobile">
           <div className="vfo-tab active">
             <div className="vfo-label label-xs">VFO A</div>
             <div className="vfo-freq mono">{(vfoHz / 1e6).toFixed(3)}</div>
           </div>
         </div>
 
-        <div className="topbar-divider" />
+        <div className="topbar-divider hide-mobile" />
 
-        <div className="status-chips">
+        <div className="status-chips hide-mobile">
           <div className="chip">
             <span className="k">MODE</span>
             <span className="v">{mode}</span>
@@ -389,12 +390,14 @@ export default function App() {
             polls. */}
         {connected && <ConnectPanel />}
 
-        <RotatorStatusPill />
-        <QrzStatusPill />
+        <div className="hide-mobile" style={{ display: 'contents' }}>
+          <RotatorStatusPill />
+          <QrzStatusPill />
+        </div>
 
         <button
           type="button"
-          className={`btn qrz-btn ${terminatorActive ? 'active' : ''}`}
+          className={`btn qrz-btn hide-mobile ${terminatorActive ? 'active' : ''}`}
           onClick={() => (terminatorActive ? disengageTerminator() : engageTerminator())}
         >
           <span className="led on" style={{ marginRight: 6 }} />
@@ -404,23 +407,27 @@ export default function App() {
 
       {/* Control strip — real wired controls rebuilt into the design's chassis */}
       <div className="control-strip">
-        <ModeBandwidth />
-        <div className="ctrl-group" style={{ minWidth: 220 }}>
+        <div className="hide-mobile" style={{ display: 'contents' }}>
+          <ModeBandwidth />
+        </div>
+        <div className="ctrl-group hide-mobile" style={{ minWidth: 220 }}>
           <div className="label-xs ctrl-lbl">FRONT-END</div>
           <div className="btn-row" style={{ gap: 6, alignItems: 'center' }}>
             <PreampButton />
             <AttenuatorSlider />
           </div>
         </div>
-        <div className="ctrl-group" style={{ minWidth: 180 }}>
+        <div className="ctrl-group hide-mobile" style={{ minWidth: 180 }}>
           <div className="label-xs ctrl-lbl">AGC</div>
           <AgcSlider />
         </div>
-        <div className="spacer" style={{ flex: 1 }} />
+        <div className="spacer hide-mobile" style={{ flex: 1 }} />
         <div className="ctrl-group" style={{ minWidth: 360 }}>
           <div className="label-xs ctrl-lbl">ZOOM · DRIVE · MIC</div>
           <div className="btn-row" style={{ gap: 10 }}>
-            <ZoomControl />
+            <div className="hide-mobile" style={{ display: 'contents' }}>
+              <ZoomControl />
+            </div>
             <DriveSlider />
             <MicGainSlider />
           </div>
@@ -559,7 +566,7 @@ export default function App() {
           </div>
 
           {terminatorActive ? (
-            <div className="side-slot grow">
+            <div className="side-slot grow hide-mobile">
               <Dockable
                 title="QRZ.com Lookup"
                 ledOn={!!contact}
@@ -585,37 +592,40 @@ export default function App() {
               </Dockable>
             </div>
           ) : (
-            <div className="side-slot">
+            <div className="side-slot hide-mobile">
               <Dockable title="Great-Circle Map" ledOn={!!contact}>
                 <AzimuthMap target={contact} myGrid="EM48" />
               </Dockable>
             </div>
           )}
 
-          <div className="side-slot">
+          <div className="side-slot hide-mobile">
             <Dockable title="DSP" ledOn={dspActive}>
               <DspPanel />
             </Dockable>
           </div>
 
-          <div className="side-slot">
+          <div className="side-slot hide-mobile">
             <Dockable title={`CW Keyer · ${wpm} WPM`} ledOn={mode === 'CWU' || mode === 'CWL'}>
               <CwKeyer wpm={wpm} setWpm={setWpm} />
             </Dockable>
           </div>
         </div>
 
-        {/* Bottom row — Logbook + Memory (mock, read-only) */}
+        {/* Bottom row — Logbook + TX Stage Meters on desktop; big PTT on mobile. */}
         <div className="bottom-row">
-          <div className="bottom-slot">
+          <div className="bottom-slot hide-mobile">
             <Dockable title="Logbook" ledOn>
               <Logbook onPick={onLogPick} />
             </Dockable>
           </div>
-          <div className="bottom-slot">
+          <div className="bottom-slot hide-mobile">
             <Dockable title="TX Stage Meters" ledOn={moxOn || tunOn}>
               <TxStageMeters />
             </Dockable>
+          </div>
+          <div className="bottom-slot show-mobile mobile-ptt-slot">
+            <MobilePttButton />
           </div>
         </div>
 
@@ -629,16 +639,16 @@ export default function App() {
         <div className="transport-sep" />
         <AudioToggle />
         <MicMeter />
-        <div className="transport-sep" />
-        <button type="button" className="btn ghost">SPLIT</button>
-        <button type="button" className="btn ghost">RIT</button>
-        <button type="button" className="btn ghost">SAVE MEM</button>
+        <div className="transport-sep hide-mobile" />
+        <button type="button" className="btn ghost hide-mobile">SPLIT</button>
+        <button type="button" className="btn ghost hide-mobile">RIT</button>
+        <button type="button" className="btn ghost hide-mobile">SAVE MEM</button>
         <div className="spacer" style={{ flex: 1 }} />
-        <div className="chip">
+        <div className="chip hide-mobile">
           <span className="k">LINK</span>
           <span className="v mono">{connected ? 'UP' : 'DOWN'}</span>
         </div>
-        <div className="chip">
+        <div className="chip hide-mobile">
           <span className="k">PRE</span>
           <span className="v">{preampOn ? 'ON' : 'OFF'}</span>
         </div>

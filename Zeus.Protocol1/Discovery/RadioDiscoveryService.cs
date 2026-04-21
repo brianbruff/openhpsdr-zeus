@@ -14,8 +14,6 @@ public sealed class RadioDiscoveryService : IRadioDiscovery
     private const int MacOsSendAttempts = 3;
     private static readonly TimeSpan SendGap = TimeSpan.FromMilliseconds(50);
 
-    private static readonly IPEndPoint BroadcastEndpoint = new(IPAddress.Broadcast, HpsdrPort);
-
     private readonly ILogger<RadioDiscoveryService> _log;
 
     public RadioDiscoveryService(ILogger<RadioDiscoveryService> log)
@@ -25,6 +23,14 @@ public sealed class RadioDiscoveryService : IRadioDiscovery
 
     public async Task<IReadOnlyList<DiscoveredRadio>> DiscoverAsync(TimeSpan timeout, CancellationToken ct = default)
     {
+        var broadcastTargets = GetBroadcastTargets();
+
+        _log.LogDebug("discovery.start interfaces={Count}", broadcastTargets.Count);
+        foreach (var (ifaceAddr, bcastAddr) in broadcastTargets)
+        {
+            _log.LogDebug("discovery.interface local={Local} broadcast={Broadcast}", ifaceAddr, bcastAddr);
+        }
+
         using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp)
         {
             EnableBroadcast = true,
@@ -32,7 +38,7 @@ public sealed class RadioDiscoveryService : IRadioDiscovery
         socket.Bind(new IPEndPoint(IPAddress.Any, 0));
 
         var packet = BuildDiscoveryPacket();
-        await SendProbesAsync(socket, packet, ct).ConfigureAwait(false);
+        await SendProbesAsync(socket, packet, broadcastTargets, ct).ConfigureAwait(false);
 
         var byMac = new Dictionary<PhysicalAddress, DiscoveredRadio>();
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -95,11 +101,28 @@ public sealed class RadioDiscoveryService : IRadioDiscovery
         return byMac.Values.OrderBy(IpSortKey).ToList();
     }
 
-    private async Task SendProbesAsync(Socket socket, ReadOnlyMemory<byte> packet, CancellationToken ct)
+    private async Task SendProbesAsync(
+        Socket socket,
+        ReadOnlyMemory<byte> packet,
+        IReadOnlyList<(IPAddress ifaceAddr, IPAddress bcastAddr)> broadcastTargets,
+        CancellationToken ct)
     {
         for (var attempt = 0; attempt < MacOsSendAttempts; attempt++)
         {
-            await socket.SendToAsync(packet, SocketFlags.None, BroadcastEndpoint, ct).ConfigureAwait(false);
+            // Send to each interface's broadcast address
+            foreach (var (_, bcastAddr) in broadcastTargets)
+            {
+                var endpoint = new IPEndPoint(bcastAddr, HpsdrPort);
+                try
+                {
+                    await socket.SendToAsync(packet, SocketFlags.None, endpoint, ct).ConfigureAwait(false);
+                }
+                catch (SocketException ex)
+                {
+                    _log.LogWarning(ex, "discovery.send.error broadcast={Broadcast}", bcastAddr);
+                }
+            }
+
             if (attempt < MacOsSendAttempts - 1)
             {
                 try
@@ -112,6 +135,67 @@ public sealed class RadioDiscoveryService : IRadioDiscovery
                 }
             }
         }
+    }
+
+    private IReadOnlyList<(IPAddress ifaceAddr, IPAddress bcastAddr)> GetBroadcastTargets()
+    {
+        var targets = new List<(IPAddress, IPAddress)>();
+
+        try
+        {
+            var interfaces = NetworkInterface.GetAllNetworkInterfaces();
+            foreach (var iface in interfaces)
+            {
+                // Skip inactive, loopback, and tunnel interfaces
+                if (iface.OperationalStatus != OperationalStatus.Up)
+                    continue;
+                if (iface.NetworkInterfaceType == NetworkInterfaceType.Loopback)
+                    continue;
+                if (iface.NetworkInterfaceType == NetworkInterfaceType.Tunnel)
+                    continue;
+
+                var ipProps = iface.GetIPProperties();
+                foreach (var unicast in ipProps.UnicastAddresses)
+                {
+                    // Only IPv4 addresses
+                    if (unicast.Address.AddressFamily != AddressFamily.InterNetwork)
+                        continue;
+
+                    // Calculate broadcast address from IP and netmask
+                    var ip = unicast.Address;
+                    var mask = unicast.IPv4Mask;
+
+                    // Skip if no valid netmask
+                    if (mask == null || mask.Equals(IPAddress.Any))
+                        continue;
+
+                    var ipBytes = ip.GetAddressBytes();
+                    var maskBytes = mask.GetAddressBytes();
+                    var bcastBytes = new byte[4];
+
+                    for (var i = 0; i < 4; i++)
+                    {
+                        bcastBytes[i] = (byte)(ipBytes[i] | ~maskBytes[i]);
+                    }
+
+                    var bcastAddr = new IPAddress(bcastBytes);
+                    targets.Add((ip, bcastAddr));
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "discovery.enumerate.error");
+        }
+
+        // Fallback to global broadcast if no interfaces found
+        if (targets.Count == 0)
+        {
+            _log.LogWarning("discovery.enumerate.empty, using global broadcast");
+            targets.Add((IPAddress.Any, IPAddress.Broadcast));
+        }
+
+        return targets;
     }
 
     private static byte[] BuildDiscoveryPacket()

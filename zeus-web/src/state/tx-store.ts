@@ -49,13 +49,14 @@ export type TxState = {
   // mic (near silence) so the SMeter/dBfs readouts don't spike on first paint.
   //
   // micDbfs is client-driven: set by the mic-uplink worklet's per-block peak
-  // so the MicMeter animates even during RX. The server's TxMetersFrame no
-  // longer writes this field — its placeholder -100f would clobber the live
-  // capture. setMeters intentionally skips micDbfs.
+  // so the MicMeter animates even during RX. setMeters does not overwrite it.
+  // wdspMicPk is server-driven: WDSP TXA_MIC_PK (post-panel-gain) carried in
+  // TxMetersFrame.MicDbfs at 10 Hz during MOX; −Infinity when idle.
   fwdWatts: number;
   refWatts: number;
   swr: number;
   micDbfs: number;
+  wdspMicPk: number;
   eqPk: number;
   lvlrPk: number;
   alcPk: number;
@@ -94,6 +95,7 @@ export const useTxStore = create<TxState>()(
       refWatts: 0,
       swr: 1.0,
       micDbfs: -100,
+      wdspMicPk: -Infinity,
       eqPk: -Infinity,
       lvlrPk: -Infinity,
       alcPk: -Infinity,
@@ -103,6 +105,7 @@ export const useTxStore = create<TxState>()(
         fwdWatts: m.fwdWatts,
         refWatts: m.refWatts,
         swr: m.swr,
+        wdspMicPk: m.micDbfs,
         eqPk: m.eqPk,
         lvlrPk: m.lvlrPk,
         alcPk: m.alcPk,

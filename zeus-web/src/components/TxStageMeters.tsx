@@ -111,6 +111,7 @@ function GrRow({ db, hint }: { db: number; hint: string }) {
 }
 
 export function TxStageMeters() {
+  const wdspMicPk = useTxStore((s) => s.wdspMicPk);
   const eqPk = useTxStore((s) => s.eqPk);
   const lvlrPk = useTxStore((s) => s.lvlrPk);
   const alcPk = useTxStore((s) => s.alcPk);
@@ -131,6 +132,11 @@ export function TxStageMeters() {
       }}
       aria-label="TX stage meters"
     >
+      <LevelRow
+        label="MIC"
+        dbfs={wdspMicPk}
+        hint="Post-panel-gain mic level entering WDSP TXA (TXA_MIC_PK)"
+      />
       <LevelRow label="EQ" dbfs={eqPk} hint="Post-EQ peak" />
       <LevelRow
         label="LVLR"

@@ -98,3 +98,12 @@ public sealed record AutoAttSetRequest(bool Enabled);
 public sealed record TunSetRequest(bool On);
 
 public sealed record MicGainSetRequest(int Db);
+
+// Per-band memory: last-used frequency and mode for a given ham band
+// (e.g. "20m"). The server keeps these in an unencrypted LiteDB file so they
+// survive restarts and follow the backend (not the browser). Band buttons
+// read the full map on mount and write on every tune/mode change
+// (debounced on the web).
+public sealed record BandMemoryDto(string Band, long Hz, RxMode Mode);
+
+public sealed record BandMemorySetRequest(long Hz, RxMode Mode);

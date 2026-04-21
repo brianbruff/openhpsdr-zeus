@@ -1,5 +1,12 @@
-import { useCallback, useState, useEffect } from 'react';
-import { setVfo } from '../api/client';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  fetchBandMemory,
+  saveBandMemory,
+  setMode,
+  setVfo,
+  type BandMemoryEntry,
+  type RxMode,
+} from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { BANDS, bandOf } from './design/data';
 
@@ -18,48 +25,86 @@ const HF_BANDS: readonly BandEntry[] = BANDS.slice(0, 10).map((b) => ({
   rangeEnd: b.range[1],
 }));
 
-// LocalStorage key for persisting last-used frequency per band
-const STORAGE_KEY_PREFIX = 'zeus.band.';
-
-function getLastFrequency(bandName: string, defaultHz: number): number {
-  const stored = localStorage.getItem(STORAGE_KEY_PREFIX + bandName);
-  if (!stored) return defaultHz;
-  const parsed = Number(stored);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultHz;
-}
-
-function saveLastFrequency(bandName: string, hz: number): void {
-  localStorage.setItem(STORAGE_KEY_PREFIX + bandName, String(hz));
-}
+// Debounce the "save current (hz, mode) for the current band" write so tuning
+// the VFO doesn't hammer the server on every pixel of knob travel.
+const SAVE_DEBOUNCE_MS = 500;
 
 export function BandButtons() {
   const vfoHz = useConnectionStore((s) => s.vfoHz);
+  const mode = useConnectionStore((s) => s.mode);
   const applyState = useConnectionStore((s) => s.applyState);
 
-  // Track current band for active state
   const [currentBand, setCurrentBand] = useState<string>(() => bandOf(vfoHz));
 
-  // Update current band whenever VFO changes
+  // In-memory mirror of the server's band memory. Populated from the
+  // /api/bands/memory GET on mount and kept in sync with our own PUTs so a
+  // band click can apply the saved (hz, mode) without an extra round-trip.
+  const memoryRef = useRef<Map<string, BandMemoryEntry>>(new Map());
+  const saveTimerRef = useRef<number | null>(null);
+
+  // Initial load of server-persisted band memory
+  useEffect(() => {
+    const ac = new AbortController();
+    fetchBandMemory(ac.signal)
+      .then((entries) => {
+        const m = new Map<string, BandMemoryEntry>();
+        for (const e of entries) m.set(e.band, e);
+        memoryRef.current = m;
+      })
+      .catch(() => {
+        /* offline / older server — band click will just use center defaults */
+      });
+    return () => ac.abort();
+  }, []);
+
+  // Track current band + debounced save of (hz, mode) for that band
   useEffect(() => {
     const band = bandOf(vfoHz);
     setCurrentBand(band);
-    // Save the current frequency for this band
-    if (band !== '—') {
-      saveLastFrequency(band, vfoHz);
+    if (band === '—') return;
+
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
     }
-  }, [vfoHz]);
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null;
+      memoryRef.current.set(band, { band, hz: vfoHz, mode });
+      saveBandMemory(band, vfoHz, mode).catch(() => {
+        /* best-effort — next tune will retry */
+      });
+    }, SAVE_DEBOUNCE_MS);
+
+    return () => {
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+    };
+  }, [vfoHz, mode]);
 
   const selectBand = useCallback(
     (band: BandEntry) => {
-      const targetHz = getLastFrequency(band.name, band.centerHz);
+      const stored = memoryRef.current.get(band.name);
+      const targetHz = stored?.hz ?? band.centerHz;
+      const targetMode: RxMode | null = stored?.mode ?? null;
+
       useConnectionStore.setState({ vfoHz: targetHz });
       setVfo(targetHz)
         .then(applyState)
         .catch(() => {
           /* next state poll will reconcile */
         });
+
+      if (targetMode && targetMode !== mode) {
+        useConnectionStore.setState({ mode: targetMode });
+        setMode(targetMode)
+          .then(applyState)
+          .catch(() => {
+            /* next state poll will reconcile */
+          });
+      }
     },
-    [applyState],
+    [applyState, mode],
   );
 
   return (

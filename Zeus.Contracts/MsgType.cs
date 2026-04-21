@@ -20,4 +20,9 @@ public enum MsgType : byte
 
     // Server → client (RX signal strength, dBm)
     RxMeter = 0x14,
+
+    // Server → client (DSP bootstrap state). Broadcast when the WDSPwisdom
+    // FFTW plan cache transitions between idle/building/ready; also pushed
+    // once per client at WS attach so late joiners get the current state.
+    WisdomStatus = 0x15,
 }

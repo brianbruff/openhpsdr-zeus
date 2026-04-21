@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Http.Json;
 using Zeus.Contracts;
 using Zeus.Dsp;
+using Zeus.Dsp.Wdsp;
 using Zeus.Protocol1;
 using Zeus.Protocol1.Discovery;
 using Zeus.Server;
@@ -34,6 +35,11 @@ builder.Services.AddSingleton<Zeus.Protocol1.ITxIqSource>(sp =>
     sp.GetRequiredService<Zeus.Protocol1.TxIqRing>());
 builder.Services.AddSingleton<RadioService>();
 builder.Services.AddSingleton<StreamingHub>();
+// WDSPwisdom bootstrap: run FFTW plan caching on a worker at app start so the
+// first /api/connect isn't blocked for ~2 min while WDSP plans FFTs 64..262144.
+// Clients are told to keep Connect disabled until phase=Ready.
+builder.Services.AddSingleton<WdspWisdomInitializer>();
+builder.Services.AddHostedService<WisdomBootstrapService>();
 builder.Services.AddSingleton<DspPipelineService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DspPipelineService>());
 builder.Services.AddSingleton<TxService>();
@@ -73,6 +79,17 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 
 var log = app.Services.GetRequiredService<ILogger<Program>>();
+
+// Wire wisdom initializer → hub so every phase change is broadcast to all
+// connected clients. Seed the hub's cached phase with whatever the
+// initializer currently reports (Idle at first boot, Ready on restart once
+// the file is cached).
+{
+    var wisdom = app.Services.GetRequiredService<WdspWisdomInitializer>();
+    var hub = app.Services.GetRequiredService<StreamingHub>();
+    hub.SetWisdomPhase(wisdom.Phase);
+    wisdom.PhaseChanged += phase => hub.Broadcast(new WisdomStatusFrame(phase));
+}
 
 app.MapGet("/api/state", (RadioService r) => r.Snapshot());
 
@@ -121,11 +138,20 @@ app.MapGet("/api/radios", async (IRadioDiscovery discovery, HttpContext ctx) =>
     }
 });
 
-app.MapPost("/api/connect", async (ConnectRequest req, RadioService r, HttpContext ctx) =>
+app.MapPost("/api/connect", async (ConnectRequest req, RadioService r, WdspWisdomInitializer wisdom, HttpContext ctx) =>
 {
     log.LogInformation(
         "api.connect endpoint={Ep} rate={Rate} preamp={Pre} atten={Atten}",
         req.Endpoint, req.SampleRate, req.PreampOn, req.Atten);
+
+    // WDSPwisdom must finish before OpenChannel, otherwise FFTW runs its slow
+    // per-size planner on the pipeline thread and RX packets pile up until
+    // the radio drops. The UI keeps Connect disabled during build; this is
+    // the server-side guard for non-UI callers (curl, older clients).
+    if (wisdom.Phase != WisdomPhase.Ready)
+        return Results.Json(
+            new { error = "DSP is preparing FFTW plans — try again in a moment." },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
 
     if (!TryValidateSampleRate(req.SampleRate, out var rateErr))
         return Results.BadRequest(new { error = rateErr });

@@ -8,6 +8,13 @@ import {
   type ZoomLevel,
 } from '../api/client';
 
+// WDSP wisdom bootstrap phase, mirroring the server's WisdomPhase enum.
+// 'idle' = initializer hasn't started yet (first ms after boot),
+// 'building' = WDSPwisdom is running (up to ~2 min on a fresh machine),
+// 'ready' = FFTW plans are cached and /api/connect is accepting. The
+// ConnectPanel disables + pulses Connect while !== 'ready'.
+export type WisdomPhase = 'idle' | 'building' | 'ready';
+
 export type ConnectionState = {
   status: ConnectionStatus;
   endpoint: string | null;
@@ -34,6 +41,7 @@ export type ConnectionState = {
   // disconnect so ConnectPanel can float it to the top of the next scan.
   // Intentionally in-memory only — no localStorage yet.
   lastConnectedEndpoint: string | null;
+  wisdomPhase: WisdomPhase;
   applyState: (s: RadioStateDto) => void;
   setInflight: (v: boolean) => void;
   setBoardId: (id: string | null) => void;
@@ -41,6 +49,7 @@ export type ConnectionState = {
   setNr: (nr: NrConfigDto) => void;
   setZoomLevel: (level: ZoomLevel) => void;
   setLastConnectedEndpoint: (ep: string | null) => void;
+  setWisdomPhase: (phase: WisdomPhase) => void;
 };
 
 export const useConnectionStore = create<ConnectionState>((set) => ({
@@ -62,6 +71,9 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   zoomLevel: 1,
   inflight: false,
   lastConnectedEndpoint: null,
+  // Default to 'ready' so a page-load before the WS attach doesn't show the
+  // pulse spuriously. The server overrides on attach with the real phase.
+  wisdomPhase: 'ready',
   applyState: (s) =>
     set({
       status: s.status,
@@ -86,4 +98,5 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   setZoomLevel: (zoomLevel) => set({ zoomLevel }),
   setLastConnectedEndpoint: (lastConnectedEndpoint) =>
     set({ lastConnectedEndpoint }),
+  setWisdomPhase: (wisdomPhase) => set({ wisdomPhase }),
 }));

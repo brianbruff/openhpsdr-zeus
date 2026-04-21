@@ -111,20 +111,11 @@ public sealed class WdspDspEngine : IDspEngine
     {
         _log = logger ?? NullLogger<WdspDspEngine>.Instance;
         WdspNativeLoader.EnsureResolverRegistered();
-        InitWisdom();
-    }
-
-    private void InitWisdom()
-    {
-        var dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Zeus");
-        Directory.CreateDirectory(dir);
-        _log.LogInformation("wdsp.wisdom initialising dir={Dir}", dir);
-        int result = NativeMethods.WDSPwisdom(dir);
-        var status = Marshal.PtrToStringUTF8(NativeMethods.wisdom_get_status()) ?? string.Empty;
-        _log.LogInformation("wdsp.wisdom ready result={Result} ({Source}) status={Status}",
-            result, result == 0 ? "loaded" : "built", status);
+        // WDSPwisdom is run by WdspWisdomInitializer at app startup before any
+        // connect is allowed, so we trust it has completed by the time the
+        // first OpenChannel lands here. Tests that construct the engine in
+        // isolation can call WdspWisdomInitializer.EnsureInitializedAsync()
+        // themselves, or accept slow first-open planning.
     }
 
     public int OpenChannel(int sampleRateHz, int pixelWidth)

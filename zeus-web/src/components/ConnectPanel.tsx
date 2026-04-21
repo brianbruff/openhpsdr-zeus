@@ -45,6 +45,8 @@ export function ConnectPanel() {
   const setLastConnectedEndpoint = useConnectionStore(
     (s) => s.setLastConnectedEndpoint,
   );
+  const wisdomPhase = useConnectionStore((s) => s.wisdomPhase);
+  const dspPreparing = wisdomPhase === 'building';
 
   const [radios, setRadios] = useState<RadioInfoDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -205,8 +207,9 @@ export function ConnectPanel() {
     );
   }
 
-  const statusRight =
-    status === 'Connecting'
+  const statusRight = dspPreparing
+    ? 'Preparing DSP…'
+    : status === 'Connecting'
       ? 'Connecting…'
       : inflight
         ? 'Working…'
@@ -300,11 +303,23 @@ export function ConnectPanel() {
                 <button
                   type="button"
                   onClick={() => handleConnect(r)}
-                  disabled={r.busy || inflight}
-                  title={r.busy ? 'Radio is busy (in use by another client)' : undefined}
-                  className={`btn sm ${r.busy ? '' : 'active'}`}
+                  disabled={r.busy || inflight || dspPreparing}
+                  title={
+                    r.busy
+                      ? 'Radio is busy (in use by another client)'
+                      : dspPreparing
+                        ? 'DSP is preparing FFTW plans (first-run only, up to ~2 min)'
+                        : undefined
+                  }
+                  className={`btn sm ${r.busy ? '' : 'active'} ${dspPreparing ? 'pulsing' : ''}`}
                 >
-                  {r.busy ? 'Busy' : inflight ? 'Connecting…' : 'Connect'}
+                  {r.busy
+                    ? 'Busy'
+                    : dspPreparing
+                      ? 'Preparing DSP…'
+                      : inflight
+                        ? 'Connecting…'
+                        : 'Connect'}
                 </button>
               </li>
             );

@@ -1,6 +1,7 @@
 import { decodeDisplayFrame, FrameDecodeError, MSG_TYPE_DISPLAY_FRAME } from './frame';
 import { AudioFrameDecodeError, MSG_TYPE_AUDIO_PCM, decodeAudioFrame } from '../audio/frame';
 import { getAudioClient } from '../audio/audio-client';
+import { useConnectionStore, type WisdomPhase } from '../state/connection-store';
 import { useDisplayStore } from '../state/display-store';
 import { useTxStore } from '../state/tx-store';
 import { warnOnce } from '../util/logger';
@@ -24,6 +25,13 @@ const RX_METER_BYTES = 1 + 4;
 // Alert frame: 1 type byte + 1 kind byte + UTF-8 message (variable length).
 // Server emits when SWR > 2.5 sustained ≥500 ms (PRD FR-6). Kind 0 = SWR trip.
 export const MSG_TYPE_ALERT = 0x13;
+
+// WDSP wisdom status: 1 type byte + 1 phase byte (0=idle, 1=building, 2=ready).
+// Pushed once on WS attach and again on every transition. The UI disables the
+// Connect button and pulses while phase=building so the user doesn't try to
+// talk to the radio while FFTW is still planning.
+export const MSG_TYPE_WISDOM_STATUS = 0x15;
+const WISDOM_STATUS_BYTES = 1 + 1;
 
 // Mic uplink (client → server). Payload: 960 × f32le = 3840 bytes preceded by
 // the 1-byte type, total 3841 bytes. 960 samples = 20 ms @ 48 kHz mono.
@@ -157,6 +165,20 @@ export function startRealtime(path = '/ws'): () => void {
           }
           const dbm = new DataView(ev.data).getFloat32(1, true);
           useTxStore.getState().setRxDbm(dbm);
+          return;
+        }
+        if (peekType === MSG_TYPE_WISDOM_STATUS) {
+          if (ev.data.byteLength < WISDOM_STATUS_BYTES) {
+            warnOnce(
+              'ws-wisdom-short',
+              `wisdom frame too short: ${ev.data.byteLength}`,
+            );
+            return;
+          }
+          const raw = new DataView(ev.data).getUint8(1);
+          const phase: WisdomPhase =
+            raw === 1 ? 'building' : raw === 2 ? 'ready' : 'idle';
+          useConnectionStore.getState().setWisdomPhase(phase);
           return;
         }
         if (peekType === MSG_TYPE_ALERT) {

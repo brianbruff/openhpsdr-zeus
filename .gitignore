@@ -30,6 +30,10 @@ tools/demo-server/bin/
 tools/demo-server/obj/
 .claude/
 
+# Local credential store (LiteDB) — stored in user's app-data dir, never in repo
+zeus.db*
+.dbkey
+
 # Native WDSP build cache. The staged library under
 # Zeus.Dsp/runtimes/<rid>/native/ IS committed so managed-side tests
 # don't need to run CMake before executing.

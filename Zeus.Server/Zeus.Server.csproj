@@ -19,6 +19,10 @@
     <InternalsVisibleTo Include="Zeus.Server.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="LiteDB" Version="5.0.21" />
+  </ItemGroup>
+
   <Target Name="BuildSpa" BeforeTargets="Publish" Condition="!Exists('$(SpaBuildOutput)') Or '$(ForceSpaBuild)' == 'true'">
     <Message Importance="high" Text="Building React frontend in $(SpaRoot)" />
     <Exec Command="npm ci" WorkingDirectory="$(SpaRoot)" />

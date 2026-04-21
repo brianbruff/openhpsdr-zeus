@@ -23,4 +23,5 @@ public sealed record QrzStatus(
     bool Connected,
     bool HasXmlSubscription,
     QrzStation? Home,
-    string? Error);
+    string? Error,
+    bool HasStoredCredentials = false);

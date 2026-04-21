@@ -7,10 +7,12 @@ public sealed class QrzService
 {
     private const string QrzXmlApiUrl = "https://xmldata.qrz.com/xml/current/";
     private const string Agent = "Zeus";
+    private const string ServiceName = "qrz";
     private static readonly XNamespace Ns = "http://xmldata.qrz.com";
 
     private readonly HttpClient _http;
     private readonly ILogger<QrzService> _log;
+    private readonly CredentialStore _credStore;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     private string? _username;
@@ -20,17 +22,38 @@ public sealed class QrzService
     private QrzStation? _home;
     private bool _hasXmlSubscription;
 
-    public QrzService(IHttpClientFactory httpClientFactory, ILogger<QrzService> log)
+    public QrzService(IHttpClientFactory httpClientFactory, ILogger<QrzService> log, CredentialStore credStore)
     {
         _http = httpClientFactory.CreateClient("Qrz");
         _log = log;
+        _credStore = credStore;
+    }
+
+    public async Task InitializeAsync(CancellationToken ct)
+    {
+        // Attempt silent re-login from stored credentials
+        var stored = await _credStore.GetAsync(ServiceName, ct);
+        if (stored != null)
+        {
+            _log.LogInformation("Found stored QRZ credentials for user={User}; attempting silent login", stored.Username);
+            try
+            {
+                await LoginAsync(stored.Username, stored.Password, ct);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Silent QRZ login failed; clearing stored credentials");
+                await _credStore.DeleteAsync(ServiceName, ct);
+            }
+        }
     }
 
     public QrzStatus GetStatus() => new(
         Connected: _sessionKey != null && _home != null,
         HasXmlSubscription: _hasXmlSubscription,
         Home: _home,
-        Error: null);
+        Error: null,
+        HasStoredCredentials: !string.IsNullOrWhiteSpace(_username));
 
     public async Task<QrzStatus> LoginAsync(string username, string password, CancellationToken ct)
     {
@@ -57,16 +80,25 @@ public sealed class QrzService
                 var home = await LookupInternalAsync(username, ct);
                 _home = home;
                 _hasXmlSubscription = home != null;
+
+                // Persist credentials on successful login
+                await _credStore.SetAsync(ServiceName, username, password, ct);
+
                 return new QrzStatus(
                     Connected: true,
                     HasXmlSubscription: _hasXmlSubscription,
                     Home: _home,
-                    Error: _hasXmlSubscription ? null : "XML subscription required; login OK but lookups will fail");
+                    Error: _hasXmlSubscription ? null : "XML subscription required; login OK but lookups will fail",
+                    HasStoredCredentials: true);
             }
             catch (QrzSubscriptionRequiredException ex)
             {
                 _hasXmlSubscription = false;
-                return new QrzStatus(true, false, null, ex.Message);
+
+                // Still persist credentials even without XML subscription
+                await _credStore.SetAsync(ServiceName, username, password, ct);
+
+                return new QrzStatus(true, false, null, ex.Message, HasStoredCredentials: true);
             }
         }
         finally
@@ -92,7 +124,7 @@ public sealed class QrzService
         }
     }
 
-    public void Logout()
+    public async Task LogoutAsync(CancellationToken ct = default)
     {
         _username = null;
         _password = null;
@@ -100,6 +132,9 @@ public sealed class QrzService
         _sessionExpiry = default;
         _home = null;
         _hasXmlSubscription = false;
+
+        // Delete stored credentials
+        await _credStore.DeleteAsync(ServiceName, ct);
     }
 
     // Assumes _gate is held.

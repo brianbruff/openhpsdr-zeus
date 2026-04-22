@@ -113,3 +113,11 @@ public sealed record LevelerMaxGainSetRequest(double Gain);
 public sealed record BandMemoryDto(string Band, long Hz, RxMode Mode);
 
 public sealed record BandMemorySetRequest(long Hz, RxMode Mode);
+
+// UI layout: opaque flexlayout-react JSON persisted server-side so the
+// operator's panel arrangement survives page reloads and reinstalls.
+// The JSON is stored as a string to avoid strongly-typing the flex-layout
+// tree on the wire — the frontend owns the schema.
+public sealed record UiLayoutDto(string LayoutJson, long UpdatedUtc);
+
+public sealed record UiLayoutSetRequest(string LayoutJson);

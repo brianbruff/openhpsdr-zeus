@@ -84,6 +84,7 @@ builder.Services.AddHostedService<TxTuneDriver>();
 builder.Services.AddHttpClient("Qrz", c => c.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddSingleton<CredentialStore>();
 builder.Services.AddSingleton<BandMemoryStore>();
+builder.Services.AddSingleton<LayoutStore>();
 builder.Services.AddSingleton<QrzService>();
 builder.Services.AddSingleton<LogService>();
 
@@ -366,6 +367,46 @@ app.MapPut("/api/bands/memory/{band}", (string band, BandMemorySetRequest req, B
         return Results.BadRequest(new { error = "hz must be positive" });
     store.Upsert(band, req.Hz, req.Mode);
     return Results.Ok(new BandMemoryDto(band, req.Hz, req.Mode));
+});
+
+// UI layout: flexlayout-react panel arrangement, persisted per operator profile.
+// GET returns 404 when no layout has been saved yet (frontend falls back to
+// DEFAULT_LAYOUT). PUT replaces; DELETE resets to default on next load.
+app.MapGet("/api/ui/layout", (LayoutStore store) =>
+{
+    var layout = store.Get();
+    return layout is null ? Results.NotFound() : Results.Ok(layout);
+});
+
+app.MapPut("/api/ui/layout", (UiLayoutSetRequest req, LayoutStore store) =>
+{
+    if (string.IsNullOrWhiteSpace(req.LayoutJson))
+        return Results.BadRequest(new { error = "layoutJson required" });
+    store.Upsert(req.LayoutJson);
+    return Results.Ok(store.Get());
+});
+
+app.MapDelete("/api/ui/layout", (LayoutStore store) =>
+{
+    store.Delete();
+    return Results.NoContent();
+});
+
+// Beacon endpoint: navigator.sendBeacon posts a Blob with Content-Type
+// application/json; minimal response so the browser's 204-check passes.
+app.MapPost("/api/ui/layout-beacon", async (LayoutStore store, HttpContext ctx) =>
+{
+    using var reader = new StreamReader(ctx.Request.Body);
+    var body = await reader.ReadToEndAsync(ctx.RequestAborted);
+    try
+    {
+        var req = System.Text.Json.JsonSerializer.Deserialize<UiLayoutSetRequest>(
+            body, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        if (req?.LayoutJson is { } json && !string.IsNullOrWhiteSpace(json))
+            store.Upsert(json);
+    }
+    catch { /* sendBeacon is fire-and-forget; swallow parse errors */ }
+    return Results.Ok();
 });
 
 app.MapGet("/api/qrz/status", (QrzService qrz) => qrz.GetStatus());

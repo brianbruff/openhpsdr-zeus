@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { WorkspaceContext } from './layout/WorkspaceContext';
+import { FlexWorkspace } from './layout/FlexWorkspace';
 import { AgcSlider } from './components/AgcSlider';
 import { AlertBanner } from './components/AlertBanner';
 import { AttenuatorSlider } from './components/AttenuatorSlider';
@@ -396,7 +398,70 @@ export default function App() {
     );
   }, [connected]);
 
+  // Feature flag: ?layout=flex activates the flexlayout-react dockable panel
+  // layout. Mobile viewports (≤900px) always use the fixed grid regardless of
+  // the flag — the mobile layout does not support flexlayout-react.
+  const useFlexLayout = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    const wantsFlexLayout = new URLSearchParams(window.location.search).get('layout') === 'flex';
+    const isMobile = window.matchMedia('(max-width: 900px)').matches;
+    return wantsFlexLayout && !isMobile;
+  }, []);
+
+  // Bundle workspace state into a context so panel components can consume it
+  // without prop-drilling through the FlexWorkspace factory.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const workspaceCtx = useMemo(() => ({
+    connected,
+    moxOn,
+    tunOn,
+    mode,
+    vfoHz,
+    callsign,
+    setCallsign,
+    terminatorActive,
+    enriching,
+    lookupKey,
+    contact,
+    qrzLookupError,
+    qrzActive,
+    mapAvailable,
+    setMapAvailable,
+    mapInteractive,
+    effectiveHome,
+    beamOverrideDeg,
+    setBeamOverrideDeg,
+    beamInputStr,
+    setBeamInputStr,
+    rotLiveAz,
+    sp,
+    lp,
+    dist,
+    heroTitle,
+    csInputRef,
+    engageTerminator,
+    disengageTerminator,
+    onCallsignSubmit,
+    submitBeam,
+    handleLogQso,
+    dspActive,
+    wpm,
+    setWpm,
+    logbookTitle,
+    logbookActions,
+  }), [
+    connected, moxOn, tunOn, mode, vfoHz,
+    callsign, terminatorActive, enriching, lookupKey, contact,
+    qrzLookupError, qrzActive, mapAvailable, mapInteractive, effectiveHome,
+    beamOverrideDeg, beamInputStr, rotLiveAz, sp, lp, dist,
+    // heroTitle and logbookActions are ReactNodes (new objects each render);
+    // their underlying primitive deps are already above, so omit them here.
+    dspActive, wpm, logbookTitle,
+    handleLogQso, engageTerminator, disengageTerminator,
+  ]);
+
   return (
+    <WorkspaceContext.Provider value={workspaceCtx}>
     <div className="app" data-screen-label="01 Main Console" style={{ position: 'relative' }}>
       {/* Top bar — sits above the disconnected overlay (zIndex 200) so QRZ
           sign-in and Discover Radio stay usable before the HL2 is connected. */}
@@ -527,6 +592,9 @@ export default function App() {
 
       <AlertBanner />
 
+      {useFlexLayout ? (
+        <FlexWorkspace />
+      ) : (
       <div className={`workspace ${terminatorActive ? 'terminator' : ''}`}>
         {/* Hero — spectrum + waterfall with QRZ world-map layer */}
         <div className={`panel hero ${terminatorActive ? 'qrz-mode' : ''} ${mapInteractive ? 'map-mode' : ''}`}>
@@ -748,6 +816,7 @@ export default function App() {
 
         <TerminatorLines active={terminatorActive} />
       </div>
+      )}
 
       {/* Transport — MOX/TUN + audio + drive + mic meter + chips */}
       <div className="transport">
@@ -774,6 +843,7 @@ export default function App() {
 
       {disconnectedOverlay}
     </div>
+    </WorkspaceContext.Provider>
   );
 }
 

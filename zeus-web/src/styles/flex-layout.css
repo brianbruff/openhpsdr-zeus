@@ -1,0 +1,143 @@
+/* ================================================================
+   Zeus flexlayout-react theme overrides
+   Layers over the imported dark.css to apply the Zeus amber/near-black
+   console look. Uses the same CSS variables as layout.css / tokens.css.
+   ================================================================ */
+
+/* Container */
+.flexlayout__layout {
+  background: var(--bg-workspace, #575e6b);
+}
+
+/* Tabset (panel container) */
+.flexlayout__tabset {
+  background: var(--bg-0, #1a1b1e);
+  border: 1px solid var(--panel-border, #0d0d10);
+}
+
+.flexlayout__tabset_header {
+  background: linear-gradient(to bottom, var(--panel-head-top, #3a3b3f), var(--panel-head-bot, #232427));
+  border-bottom: 1px solid var(--panel-border, #0d0d10);
+  color: var(--fg-1, #d4d5d8);
+  font-family: var(--font-sans, 'Archivo Narrow', sans-serif);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0 6px;
+}
+
+.flexlayout__tabset_header_inner {
+  height: 100%;
+  display: flex;
+  align-items: center;
+}
+
+/* Tab buttons */
+.flexlayout__tab_button {
+  background: transparent;
+  color: var(--fg-2, #9a9b9f);
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 4px 10px;
+  font-family: var(--font-sans, 'Archivo Narrow', sans-serif);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 120ms, border-color 120ms;
+}
+
+.flexlayout__tab_button:hover {
+  color: var(--fg-0, #ffffff);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.flexlayout__tab_button--selected {
+  color: var(--accent, #4a9eff);
+  border-bottom: 2px solid var(--accent, #4a9eff);
+}
+
+.flexlayout__tab_button_content {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Tab content area */
+.flexlayout__tab {
+  background: var(--bg-0, #1a1b1e);
+  overflow: hidden;
+}
+
+/* Splitter (resize handle) */
+.flexlayout__splitter {
+  background: var(--bg-workspace, #575e6b);
+  transition: background 120ms;
+}
+
+.flexlayout__splitter:hover,
+.flexlayout__splitter_drag {
+  background: var(--accent, #4a9eff);
+  opacity: 0.6;
+}
+
+/* Drag/drop overlay */
+.flexlayout__outline_rect {
+  border: 2px solid var(--accent, #4a9eff);
+  background: rgba(74, 158, 255, 0.08);
+}
+
+.flexlayout__outline_rect_edge {
+  background: var(--accent, #4a9eff);
+  opacity: 0.4;
+}
+
+/* Tab close button */
+.flexlayout__tab_button_trailing {
+  opacity: 0.5;
+}
+
+.flexlayout__tab_button_trailing:hover {
+  opacity: 1;
+  color: var(--fg-0, #ffffff);
+}
+
+/* Maximise button */
+.flexlayout__tab_toolbar_button {
+  background: transparent;
+  border: none;
+  color: var(--fg-2, #9a9b9f);
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.flexlayout__tab_toolbar_button:hover {
+  color: var(--fg-0, #ffffff);
+}
+
+/* Scrollbar inside tabset headers */
+.flexlayout__tabset_header::-webkit-scrollbar {
+  height: 3px;
+}
+
+.flexlayout__tabset_header::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.flexlayout__tabset_header::-webkit-scrollbar-thumb {
+  background: var(--fg-3, #6b6c70);
+  border-radius: 2px;
+}
+
+/* Empty tabset placeholder */
+.flexlayout__tabset_tabbar_outer_top {
+  background: linear-gradient(to bottom, var(--panel-head-top, #3a3b3f), var(--panel-head-bot, #232427));
+}
+
+/* Ensure the flex-workspace container fills available height */
+.flex-workspace {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  min-height: 0;
+}

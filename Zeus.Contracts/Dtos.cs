@@ -99,6 +99,12 @@ public sealed record TunSetRequest(bool On);
 
 public sealed record MicGainSetRequest(int Db);
 
+// Leveler max-gain ceiling in dB. Server clamps to [0, 15]; outside that is
+// 400. Frontend POSTs this whenever the slider moves and on WS reconnect so
+// the operator's preferred ceiling is re-applied after a server restart
+// (backend holds no persistent state for this setting).
+public sealed record LevelerMaxGainSetRequest(double Gain);
+
 // Per-band memory: last-used frequency and mode for a given ham band
 // (e.g. "20m"). The server keeps these in an unencrypted LiteDB file so they
 // survive restarts and follow the backend (not the browser). Band buttons

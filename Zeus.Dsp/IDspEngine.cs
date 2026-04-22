@@ -62,6 +62,13 @@ public interface IDspEngine : IDisposable
     /// and when TXA is not open.</summary>
     void SetTxPanelGain(double linearGain);
 
+    /// <summary>Set the TXA Leveler maximum-gain ceiling in dB. Calls
+    /// <c>SetTXALevelerTop</c> (wcpAGC.c:648), which WDSP converts internally
+    /// to a linear cap via <c>pow(10, maxgainDb/20)</c>. Caller is
+    /// responsible for range-clamping; this method passes the value through.
+    /// No-op on Synthetic and when TXA is not open.</summary>
+    void SetTxLevelerMaxGain(double maxGainDb);
+
     /// <summary>Start or stop the TXA internal-tune post-generator tone
     /// (Thetis console.cs:18648 `chkTUN_CheckedChanged`). When on, TXA emits
     /// a steady unmodulated carrier regardless of mic input. When off, the

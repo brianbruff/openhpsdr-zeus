@@ -100,13 +100,16 @@ public class MicGainEndpointTests : IClassFixture<MicGainEndpointTests.Factory>
         }
     }
 
-    // Minimal IDspEngine that records SetTxPanelGain calls for assertion.
-    // All other members are safe no-ops because the endpoint never calls them.
+    // Minimal IDspEngine that records SetTxPanelGain and SetTxLevelerMaxGain
+    // calls for assertion. All other members are safe no-ops because the
+    // endpoints under test never call them.
     public sealed class StubEngine : IDspEngine
     {
         public List<double> GainCalls { get; } = new();
+        public List<double> LevelerMaxGainCalls { get; } = new();
 
         public void SetTxPanelGain(double linearGain) => GainCalls.Add(linearGain);
+        public void SetTxLevelerMaxGain(double maxGainDb) => LevelerMaxGainCalls.Add(maxGainDb);
 
         public int TxBlockSamples => 1024;
         public int OpenChannel(int sampleRateHz, int pixelWidth) => 0;

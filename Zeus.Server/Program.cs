@@ -261,6 +261,21 @@ app.MapPost("/api/mic-gain", (MicGainSetRequest req, DspPipelineService pipe) =>
     return Results.Ok(new { micGainDb = db });
 });
 
+// Leveler max-gain ceiling in dB. Operator-safe band is 0..15 dB: 0 disables
+// the headroom entirely (unity-cap Leveler) and 15 matches Thetis's stock
+// ceiling (radio.cs:2979 tx_leveler_max_gain = 15.0). Anything outside is a
+// 400 so a misbehaving client can't hand WDSP a value that'd saturate on
+// the first voiced sample. The server is stateless for this setting —
+// frontend re-POSTs on WS reconnect to re-sync after a server restart.
+app.MapPost("/api/tx/leveler-max-gain", (LevelerMaxGainSetRequest req, DspPipelineService pipe) =>
+{
+    if (req.Gain < 0.0 || req.Gain > 15.0 || double.IsNaN(req.Gain))
+        return Results.BadRequest(new { error = "gain must be 0..15 dB" });
+    log.LogInformation("api.tx.levelerMaxGain dB={Db:F1}", req.Gain);
+    pipe.CurrentEngine?.SetTxLevelerMaxGain(req.Gain);
+    return Results.Ok(new { levelerMaxGainDb = req.Gain });
+});
+
 // TUN: internal-tune carrier. Flips SetTXAPostGenRun on WDSP; server-side is
 // where the PRD's drive clamp to min(drive, 25) lives, and where we gate
 // mutual exclusion with MOX so the HL2 sees exactly one of them active.

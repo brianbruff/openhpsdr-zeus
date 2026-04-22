@@ -489,6 +489,15 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetTXALevelerSt(int channel, int state);
 
+    // Leveler maximum-gain ceiling. WDSP's SetTXALevelerTop takes the value
+    // in dB (wcpAGC.c:648 — converts internally via pow(10, maxgain/20)
+    // to the linear `max_gain` field on the wcpagc struct). create_wcpagc
+    // (TXA.c:169) ships with max_gain = 1.778 linear ≈ +5 dB; this setter
+    // lets the operator widen/narrow the peak-leveling headroom at runtime.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXALevelerTop(int channel, double maxgain);
+
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetTXACompressorRun(int channel, int run);

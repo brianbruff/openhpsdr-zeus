@@ -21,6 +21,13 @@ public sealed class WdspDspEngine : IDspEngine
     private const int TxaInSize = 1024;
     private const int TxaDspSize = 1024;
 
+    // Leveler max-gain ceiling in dB applied at TXA init. Matches the
+    // W1AEX / softerhardware community default ("CFC Audio Tools" guide,
+    // ~+5 dB) — milder than Thetis's stock +15 dB, erring toward cleaner
+    // transmit audio on the first connect. Operator overrides via
+    // POST /api/tx/leveler-max-gain.
+    internal const double DefaultLevelerMaxGainDb = 5.0;
+
     // Legacy aliases — RXA-side code still references these. Kept = RxaInSize
     // / RxaDspSize so existing callsites (audio outSamples math, channel
     // structs, etc.) don't have to change.
@@ -633,6 +640,14 @@ public sealed class WdspDspEngine : IDspEngine
             // ALC stays on (see SetTXAALCSt below; never 0). AMSQ is the mic
             // noise gate and shouldn't shape SSB audio.
             NativeMethods.SetTXALevelerSt(id, 1);
+            // Leveler max-gain default. WDSP's create_wcpagc ships with
+            // max_gain = 1.778 linear (≈ +5 dB) at TXA.c:169; we assert the
+            // value explicitly so the baseline stays deterministic and the
+            // init log confirms what the Leveler's headroom is set to.
+            // +5 dB matches the W1AEX / softerhardware community default
+            // (milder than Thetis's +15 dB stock — see task #13 notes).
+            // Operator-settable at runtime via POST /api/tx/leveler-max-gain.
+            NativeMethods.SetTXALevelerTop(id, DefaultLevelerMaxGainDb);
             NativeMethods.SetTXACompressorRun(id, 0);
             NativeMethods.SetTXACFCOMPRun(id, 0);
             NativeMethods.SetTXAPHROTRun(id, 0);
@@ -643,8 +658,8 @@ public sealed class WdspDspEngine : IDspEngine
 
             _txaChannelId = id;
             _log.LogInformation(
-                "wdsp.openTxChannel id={Id} chain=[alc=1 lvlr=1 cpdr=0 cfc=0 phrot=0 osctrl=0 eq=0 amsq=0] bp=150..2850 panelGain=1.0 (Leveler enabled to match Thetis default)",
-                id);
+                "wdsp.openTxChannel id={Id} chain=[alc=1 lvlr=1 lvlrMax={LvlrMax:F1}dB cpdr=0 cfc=0 phrot=0 osctrl=0 eq=0 amsq=0] bp=150..2850 panelGain=1.0 (Leveler enabled to match Thetis default)",
+                id, DefaultLevelerMaxGainDb);
             return id;
         }
     }
@@ -718,6 +733,17 @@ public sealed class WdspDspEngine : IDspEngine
             NativeMethods.SetTXAPanelGain1(txa, linearGain);
         }
         _log.LogInformation("wdsp.setTxPanelGain linear={Gain:F3}", linearGain);
+    }
+
+    public void SetTxLevelerMaxGain(double maxGainDb)
+    {
+        if (_disposed != 0) return;
+        lock (_txaLock)
+        {
+            if (_txaChannelId is not int txa) return;
+            NativeMethods.SetTXALevelerTop(txa, maxGainDb);
+        }
+        _log.LogInformation("wdsp.setTxLevelerMaxGain dB={Db:F1}", maxGainDb);
     }
 
     public void SetTxTune(bool on)

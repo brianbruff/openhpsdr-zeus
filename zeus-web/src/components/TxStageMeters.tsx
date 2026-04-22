@@ -142,18 +142,27 @@ function LevelRow({ label, dbfs, hint }: LevelRowProps) {
 }
 
 function GrRow({ db, hint }: { db: number; hint: string }) {
-  // GR readings are always ≥ 0 dB; a large negative value is WDSP's bypass
-  // sentinel (−400). Show em-dash rather than pinning the bar to 0 dB with
-  // a meaningless readout.
+  // GR is "dB of gain reduction" by convention: 0 = no reduction, +N = N dB
+  // cut. WDSP's ALC_GAIN meter drifts slightly above unity when ALC isn't
+  // limiting, which lands as small negative values after the backend's
+  // negation — meaningless for the operator. Clamp the raw reading to ≥ 0
+  // *before* anything else so text, bar, and peak-hold all agree.
+  // Bypass (−400 dBFS sentinel) wins over the clamp so bypassed stages
+  // still render as em-dash rather than "0 dB".
   const bypassed = isBypassed(db);
-  const clamped = bypassed ? 0 : Math.max(0, Math.min(GR_MAX_DB, db));
-  // GR axis is 20 dB wide; scale decay so full-range takes ~2 s.
-  const held = usePeakHold(db, GR_MAX_DB / 2);
+  const normalized = bypassed ? db : Math.max(0, db);
+  const clamped = bypassed ? 0 : Math.min(GR_MAX_DB, normalized);
+  // GR axis is GR_MAX_DB wide; scale decay so full-range takes ~2 s.
+  const held = usePeakHold(normalized, GR_MAX_DB / 2);
   const heldClamped = Math.max(0, Math.min(GR_MAX_DB, held));
   const heldVisible =
     isFinite(held) && !isBypassed(held) && heldClamped > clamped;
   const display =
-    !isFinite(db) || bypassed ? '—' : db === 0 ? '0' : db.toFixed(1);
+    !isFinite(normalized) || bypassed
+      ? '—'
+      : normalized === 0
+        ? '0'
+        : normalized.toFixed(1);
   const rowTitle = bypassed ? `${hint} (stage bypassed)` : hint;
   return (
     <div className="meter" title={rowTitle}>

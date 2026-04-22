@@ -141,6 +141,204 @@ function LevelRow({ label, dbfs, hint }: LevelRowProps) {
   );
 }
 
+// W1AEX / softerhardware-wiki community guidance: operators must read ALC
+// peak and ALC gain-reduction side-by-side to know how much the limiter is
+// acting. Zones on the GR bar follow the task spec:
+//   0..3  dB — "quiet"    (Leveler barely engaging)
+//   3..10 dB — "healthy"  (SSB compression sweet spot)
+//   10+   dB — "overdrive" (input is consistently over-driving the limiter)
+// Zone colors track the existing .meter-fill green→amber→red gradient so
+// the surrounding Zeus amber chrome stays intact; zones are rendered as
+// low-alpha background stripes so the bar itself still reads as amber.
+const ALC_ZONE_QUIET_END_DB = 3;
+const ALC_ZONE_HEALTHY_END_DB = 10;
+
+const ALC_TOOLTIP =
+  'ALC peak (left) + gain reduction (right). You must read both to know ' +
+  'how much ALC is acting — the ALC meter tops out at 0 dB and the Comp ' +
+  'meter bottoms at 0 dB (W1AEX). Healthy SSB compression sits in the ' +
+  '3–10 dB GR band; sustained >10 dB means the input is over-driving.';
+
+// Faint background stripes behind the GR fill that cue the zones without
+// overwhelming the amber palette. Alpha is kept low (0.10–0.14) so the
+// primary readout is still the filled bar.
+function grZoneBackground(): string {
+  const q = (ALC_ZONE_QUIET_END_DB / GR_MAX_DB) * 100;
+  const h = (ALC_ZONE_HEALTHY_END_DB / GR_MAX_DB) * 100;
+  return (
+    `linear-gradient(90deg,` +
+    ` rgba(242, 133, 36, 0.10) 0%,` + //   amber (quiet)
+    ` rgba(242, 133, 36, 0.10) ${q}%,` +
+    ` rgba(0, 200, 83, 0.14) ${q}%,` + //  green (healthy)
+    ` rgba(0, 200, 83, 0.14) ${h}%,` +
+    ` rgba(230, 58, 43, 0.14) ${h}%,` + // red (overdrive)
+    ` rgba(230, 58, 43, 0.14) 100%)`
+  );
+}
+
+function AlcPairRow({ alcPk, alcGr }: { alcPk: number; alcGr: number }) {
+  // PK side re-uses the same -30..+12 dB axis as the per-stage strip so the
+  // prominent summary agrees with the strip below.
+  const pkBypassed = isBypassed(alcPk);
+  const pkAxis = dbfsToAxis(alcPk);
+  const pkHeld = usePeakHold(alcPk);
+  const pkHeldAxis = dbfsToAxis(pkHeld);
+  const pkHeldVisible =
+    isFinite(pkHeld) && !isBypassed(pkHeld) && pkHeldAxis > pkAxis;
+  const pkDisplay =
+    !isFinite(alcPk) || pkBypassed ? '—' : alcPk.toFixed(0);
+
+  // GR side clamps negative noise to 0 (see P1.8); bypass sentinel still wins.
+  const grBypassed = isBypassed(alcGr);
+  const grNormalized = grBypassed ? alcGr : Math.max(0, alcGr);
+  const grClamped = grBypassed ? 0 : Math.min(GR_MAX_DB, grNormalized);
+  const grOverdrive = grClamped >= ALC_ZONE_HEALTHY_END_DB;
+  const grHeld = usePeakHold(grNormalized, GR_MAX_DB / 2);
+  const grHeldClamped = Math.max(0, Math.min(GR_MAX_DB, grHeld));
+  const grHeldVisible =
+    isFinite(grHeld) && !isBypassed(grHeld) && grHeldClamped > grClamped;
+  const grDisplay =
+    !isFinite(grNormalized) || grBypassed
+      ? '—'
+      : grNormalized === 0
+        ? '0'
+        : grNormalized.toFixed(1);
+
+  return (
+    <div
+      className="meter"
+      title={ALC_TOOLTIP}
+      aria-label="ALC peak and gain reduction pair"
+      style={{
+        borderTop: '1px solid var(--panel-border)',
+        borderBottom: '1px solid var(--panel-border)',
+        background: 'rgba(255, 160, 40, 0.04)',
+      }}
+    >
+      <div className="meter-head">
+        <span className="label-xs" style={{ fontWeight: 700 }}>
+          ALC
+        </span>
+        <span className="meter-val mono" style={{ fontSize: 12 }}>
+          PK {pkDisplay}
+          <span className="unit"> dBFS</span>
+          <span style={{ color: 'var(--fg-3)', margin: '0 6px' }}>·</span>
+          GR {grDisplay}
+          <span className="unit"> dB</span>
+        </span>
+      </div>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: 8,
+          alignItems: 'stretch',
+        }}
+      >
+        {/* PK bar (-30..+12) */}
+        <div className="meter-bar">
+          <div
+            className="meter-fill"
+            style={{
+              width: `${(pkAxis / LEVEL_RANGE_DB) * 100}%`,
+              filter:
+                pkAxis / LEVEL_RANGE_DB > LEVEL_DANGER_POS
+                  ? 'hue-rotate(-20deg) saturate(1.4)'
+                  : undefined,
+            }}
+          />
+          {pkHeldVisible && (
+            <div
+              aria-hidden="true"
+              style={{
+                position: 'absolute',
+                left: `calc(${(pkHeldAxis / LEVEL_RANGE_DB) * 100}% - 1px)`,
+                top: 0,
+                bottom: 0,
+                width: 2,
+                background: 'rgba(255, 160, 40, 0.4)',
+                pointerEvents: 'none',
+              }}
+            />
+          )}
+          <div className="meter-ticks">
+            {[0.25, 0.5, 0.75].map((t) => (
+              <div
+                key={t}
+                className="meter-tick"
+                style={{ left: `${t * 100}%` }}
+              />
+            ))}
+            <div
+              className="meter-tick"
+              style={{
+                left: `${LEVEL_TARGET_POS * 100}%`,
+                background: 'rgba(255, 160, 40, 0.55)',
+              }}
+            />
+            <div
+              className="meter-tick danger"
+              style={{ left: `${LEVEL_DANGER_POS * 100}%` }}
+            />
+          </div>
+        </div>
+
+        {/* GR bar (0..25) with zone bands */}
+        <div className="meter-bar">
+          {/* Zone background stripes sit behind the fill. */}
+          <div
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              background: grZoneBackground(),
+              pointerEvents: 'none',
+            }}
+          />
+          <div
+            className="meter-fill"
+            style={{
+              width: `${(grClamped / GR_MAX_DB) * 100}%`,
+              filter: grOverdrive
+                ? 'hue-rotate(-20deg) saturate(1.4)'
+                : undefined,
+            }}
+          />
+          {grHeldVisible && (
+            <div
+              aria-hidden="true"
+              style={{
+                position: 'absolute',
+                left: `calc(${(grHeldClamped / GR_MAX_DB) * 100}% - 1px)`,
+                top: 0,
+                bottom: 0,
+                width: 2,
+                background: 'rgba(255, 160, 40, 0.4)',
+                pointerEvents: 'none',
+              }}
+            />
+          )}
+          <div className="meter-ticks">
+            {/* Zone dividers at the boundaries and the overdrive danger tick. */}
+            <div
+              className="meter-tick"
+              style={{
+                left: `${(ALC_ZONE_QUIET_END_DB / GR_MAX_DB) * 100}%`,
+              }}
+            />
+            <div
+              className="meter-tick danger"
+              style={{
+                left: `${(ALC_ZONE_HEALTHY_END_DB / GR_MAX_DB) * 100}%`,
+              }}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function GrRow({ db, hint }: { db: number; hint: string }) {
   // GR is "dB of gain reduction" by convention: 0 = no reduction, +N = N dB
   // cut. WDSP's ALC_GAIN meter drifts slightly above unity when ALC isn't
@@ -243,6 +441,14 @@ export function TxStageMeters() {
       }}
       aria-label="TX stage meters"
     >
+      {/*
+        ALC prominent summary — peak + gain-reduction side-by-side. The
+        community-critical operator diagnostic (W1AEX, softerhardware wiki).
+        Rendered above the per-stage strip so it's always in view even
+        before the user scrolls.
+      */}
+      <AlcPairRow alcPk={alcPk} alcGr={alcGr} />
+
       <LevelRow
         label="MIC"
         dbfs={wdspMicPk}

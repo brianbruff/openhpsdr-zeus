@@ -21,11 +21,20 @@ const LEVEL_RANGE_DB = 60; // -60..0 dBFS displayed
 const LEVEL_DANGER_POS = (LEVEL_RANGE_DB - 3) / LEVEL_RANGE_DB; // -3 dBFS
 const GR_MAX_DB = 20;
 const GR_DANGER_POS = 12 / GR_MAX_DB;
+// WDSP returns −400 dBFS when a stage is bypassed. Anything ≤ −200 is far
+// below any real audio level, so we treat it as a bypassed sentinel rather
+// than clamping to the axis floor (which would paint a misleading tiny bar
+// and a confusing "-400 dBFS" readout).
+const BYPASSED_DBFS_THRESHOLD = -200;
+
+function isBypassed(dbfs: number): boolean {
+  return dbfs <= BYPASSED_DBFS_THRESHOLD;
+}
 
 // Convert a dBFS reading (≤ 0) to the 0..max axis the Meter primitive wants.
 // -60 dBFS → 0, 0 dBFS → 60.
 function dbfsToAxis(dbfs: number): number {
-  if (!isFinite(dbfs)) return 0;
+  if (!isFinite(dbfs) || isBypassed(dbfs)) return 0;
   const clamped = Math.max(-LEVEL_RANGE_DB, Math.min(0, dbfs));
   return LEVEL_RANGE_DB + clamped;
 }
@@ -37,10 +46,12 @@ type LevelRowProps = {
 };
 
 function LevelRow({ label, dbfs, hint }: LevelRowProps) {
+  const bypassed = isBypassed(dbfs);
   const axis = dbfsToAxis(dbfs);
-  const display = isFinite(dbfs) ? dbfs.toFixed(0) : '—';
+  const display = !isFinite(dbfs) || bypassed ? '—' : dbfs.toFixed(0);
+  const rowTitle = bypassed ? `${hint} (stage bypassed)` : hint;
   return (
-    <div className="meter" title={hint}>
+    <div className="meter" title={rowTitle}>
       <div className="meter-head">
         <span className="label-xs">{label}</span>
         <span className="meter-val mono">
@@ -74,10 +85,16 @@ function LevelRow({ label, dbfs, hint }: LevelRowProps) {
 }
 
 function GrRow({ db, hint }: { db: number; hint: string }) {
-  const clamped = Math.max(0, Math.min(GR_MAX_DB, db));
-  const display = isFinite(db) ? (db === 0 ? '0' : db.toFixed(1)) : '—';
+  // GR readings are always ≥ 0 dB; a large negative value is WDSP's bypass
+  // sentinel (−400). Show em-dash rather than pinning the bar to 0 dB with
+  // a meaningless readout.
+  const bypassed = isBypassed(db);
+  const clamped = bypassed ? 0 : Math.max(0, Math.min(GR_MAX_DB, db));
+  const display =
+    !isFinite(db) || bypassed ? '—' : db === 0 ? '0' : db.toFixed(1);
+  const rowTitle = bypassed ? `${hint} (stage bypassed)` : hint;
   return (
-    <div className="meter" title={hint}>
+    <div className="meter" title={rowTitle}>
       <div className="meter-head">
         <span className="label-xs">ALC GR</span>
         <span className="meter-val mono">

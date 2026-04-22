@@ -1,52 +1,99 @@
 import { useRef } from 'react';
 import { useTxStore } from '../state/tx-store';
 
-// Overdrive detector — "you are distorting" signature per HL2 community
-// guidance: mic clipping (micPk >= -1 dBFS) AND ALC limiting hard
-// (alcGr > 10 dB), sustained >= 200 ms. At the 10 Hz WS frame rate that's
-// effectively "both conditions true for 2+ consecutive samples".
+// Overdrive detector — fires on ANY of three independent HL2 community
+// signatures (W1AEX, softerhardware wiki), each sustained >= 200 ms:
+//   1. mic clipping         micPk  >= -1 dBFS  (bad regardless of downstream)
+//   2. ALC limiting hard    alcGr  > 10 dB
+//   3. CFC limiting hard    cfcGr  > 10 dB     (silent until CFC is enabled)
+// Earlier AND-of-mic+ALC spec never fired in live test because the Leveler
+// (enabled by default in P1.1) absorbs mic dynamics before ALC — so mic
+// could peg at 0 dBFS while alcGr stayed near 0. OR of independent
+// signatures captures each failure mode on its own. Each signature gets
+// its own sustain timer so a short transient on one doesn't reset the others.
 const OVERDRIVE_MIC_PK_DBFS = -1;
 const OVERDRIVE_ALC_GR_DB = 10;
+const OVERDRIVE_CFC_GR_DB = 10;
 const OVERDRIVE_SUSTAIN_MS = 200;
 
-function useOverdrive(): boolean {
+type OverdriveState = {
+  tripped: boolean;
+  mic: boolean;
+  alc: boolean;
+  cfc: boolean;
+};
+
+function useOverdrive(): OverdriveState {
   const micPk = useTxStore((s) => s.wdspMicPk);
   const alcGr = useTxStore((s) => s.alcGr);
+  const cfcGr = useTxStore((s) => s.cfcGr);
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
-  // Track the most recent timestamp at which the sustained condition was
-  // NOT met. While it IS met, `now - lastNotMet` measures sustain time.
-  const lastNotMetRef = useRef<number>(
-    typeof performance !== 'undefined' ? performance.now() : 0,
-  );
+  // Per-signature last-NOT-met timestamps; sustain = now - lastNotMet.
+  const now0 =
+    typeof performance !== 'undefined' ? performance.now() : 0;
+  const micNotMetRef = useRef<number>(now0);
+  const alcNotMetRef = useRef<number>(now0);
+  const cfcNotMetRef = useRef<number>(now0);
+
   const transmitting = moxOn || tunOn;
-  const conditionsMet =
+  const now =
+    typeof performance !== 'undefined' ? performance.now() : Date.now();
+
+  const micRaw =
     transmitting &&
     isFinite(micPk) &&
     !isBypassed(micPk) &&
-    micPk >= OVERDRIVE_MIC_PK_DBFS &&
+    micPk >= OVERDRIVE_MIC_PK_DBFS;
+  const alcRaw =
+    transmitting &&
     isFinite(alcGr) &&
+    !isBypassed(alcGr) &&
     alcGr > OVERDRIVE_ALC_GR_DB;
-  const now =
-    typeof performance !== 'undefined' ? performance.now() : Date.now();
-  if (!conditionsMet) {
-    lastNotMetRef.current = now;
-    return false;
+  // CFC stays bypassed by default; isBypassed check keeps the −400 sentinel
+  // from ever tripping this signature until the operator enables CFC.
+  const cfcRaw =
+    transmitting &&
+    isFinite(cfcGr) &&
+    !isBypassed(cfcGr) &&
+    cfcGr > OVERDRIVE_CFC_GR_DB;
+
+  if (!micRaw) micNotMetRef.current = now;
+  if (!alcRaw) alcNotMetRef.current = now;
+  if (!cfcRaw) cfcNotMetRef.current = now;
+
+  const mic = micRaw && now - micNotMetRef.current >= OVERDRIVE_SUSTAIN_MS;
+  const alc = alcRaw && now - alcNotMetRef.current >= OVERDRIVE_SUSTAIN_MS;
+  const cfc = cfcRaw && now - cfcNotMetRef.current >= OVERDRIVE_SUSTAIN_MS;
+
+  return { tripped: mic || alc || cfc, mic, alc, cfc };
+}
+
+function overdriveTooltip(s: OverdriveState): string {
+  const triggers: string[] = [];
+  if (s.mic) triggers.push('mic clipping (≥ -1 dBFS)');
+  if (s.alc) triggers.push('ALC limiting hard (> 10 dB GR)');
+  if (s.cfc) triggers.push('CFC limiting hard (> 10 dB GR)');
+  if (s.tripped) {
+    return (
+      `Overdrive: ${triggers.join(' + ')}. ` +
+      'Reduce mic gain or drive.'
+    );
   }
-  return now - lastNotMetRef.current >= OVERDRIVE_SUSTAIN_MS;
+  return (
+    'Overdrive detector — fires on any of: mic peak ≥ -1 dBFS, ALC GR > 10 dB, ' +
+    'or CFC GR > 10 dB, sustained 200 ms.'
+  );
 }
 
 export function OverdriveIndicator() {
-  const tripped = useOverdrive();
+  const state = useOverdrive();
+  const tripped = state.tripped;
   return (
     <span
       aria-live="polite"
       aria-label={tripped ? 'Overdrive detected' : 'Overdrive clear'}
-      title={
-        tripped
-          ? 'Mic clipping + ALC limiting hard — reduce mic gain or drive.'
-          : 'Overdrive detector (mic peak ≥ -1 dBFS AND ALC GR > 10 dB sustained 200 ms)'
-      }
+      title={overdriveTooltip(state)}
       style={{
         display: 'inline-flex',
         alignItems: 'center',

@@ -258,43 +258,85 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // ADC0 step attenuator (0-31 dB). Thetis network.c:1057.
         p[1443] = _rxStepAttnDb;
 
-        // Alex0 and Alex1 BPF words. pihpsdr constructs these with its own
-        // ALEX_* bit macros (same packed form Priapus uses).
+        // Alex words. Bit positions and BPF selections per pihpsdr's alex.h +
+        // new_protocol.c (function new_protocol_high_priority, device cases
+        // NEW_DEVICE_ORION2 / NEW_DEVICE_SATURN). Alex0 holds the RX BPF +
+        // TX LPF + TX antenna; Alex1 duplicates for the RX path during TX.
+        // Offsets: Alex0 at 1432..1435, Alex1 at 1428..1431.
         uint alex = ComputeAlexWord(_rxFreqHz, _rxFreqHz, txAnt: 1);
         WriteBeU32(p, 1428, alex);
         WriteBeU32(p, 1432, alex);
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1027));
     }
 
+    // ANAN-7000 / Orion-II / Saturn (G2 MkII) BPF board constants. Copied
+    // verbatim from pihpsdr's alex.h — these are the RX BPF selections the
+    // MkII's filter board expects. The older ALEX_*_HPF constants used for
+    // ANAN-100 / classic Alex do NOT work on MkII — the filter board
+    // silently selects "nothing" and all RF is cut off at the ADC.
+    private const uint ALEX_ANAN7000_RX_BYPASS_BPF = 0x00001000;
+    private const uint ALEX_ANAN7000_RX_160_BPF    = 0x00000040;
+    private const uint ALEX_ANAN7000_RX_80_60_BPF  = 0x00000020;
+    private const uint ALEX_ANAN7000_RX_40_30_BPF  = 0x00000010;
+    private const uint ALEX_ANAN7000_RX_20_15_BPF  = 0x00000002;
+    private const uint ALEX_ANAN7000_RX_12_10_BPF  = 0x00000004;
+    private const uint ALEX_ANAN7000_RX_6_PRE_BPF  = 0x00000008;
+
+    // TX LPF constants (used during TX; harmless during RX but worth setting
+    // correctly so the BPF board stays in a sane latched state if the radio
+    // momentarily T/Rs).
+    private const uint ALEX_160_LPF        = 0x00800000;
+    private const uint ALEX_80_LPF         = 0x00400000;
+    private const uint ALEX_60_40_LPF      = 0x00200000;
+    private const uint ALEX_30_20_LPF      = 0x00100000;
+    private const uint ALEX_17_15_LPF      = 0x80000000;
+    private const uint ALEX_12_10_LPF      = 0x40000000;
+    private const uint ALEX_6_BYPASS_LPF   = 0x20000000;
+
+    // TX antenna select.
+    private const uint ALEX_TX_ANTENNA_1   = 0x01000000;
+    private const uint ALEX_TX_ANTENNA_2   = 0x02000000;
+    private const uint ALEX_TX_ANTENNA_3   = 0x04000000;
+
     internal static uint ComputeAlexWord(uint rxFreqHz, uint txFreqHz, int txAnt)
     {
         uint word = 0;
-        word |= (uint)LpfBits(txFreqHz) << 24;
-        word |= (uint)(1 << (txAnt - 1)) << 16;
-        word |= (uint)HpfBits(rxFreqHz) << 8;
+        word |= BpfBitsAnan7000(rxFreqHz);
+        word |= LpfBitsAnan7000(txFreqHz);
+        word |= txAnt switch
+        {
+            1 => ALEX_TX_ANTENNA_1,
+            2 => ALEX_TX_ANTENNA_2,
+            3 => ALEX_TX_ANTENNA_3,
+            _ => ALEX_TX_ANTENNA_1,
+        };
         return word;
     }
 
-    internal static byte HpfBits(uint freqHz)
+    // RX BPF band splits lifted from pihpsdr new_protocol.c
+    // (function new_protocol_high_priority, ADC0 BPFfreq selection).
+    internal static uint BpfBitsAnan7000(uint freqHz)
     {
-        if (freqHz >= 39_850_000u) return 0x40; // 6 m preamp
-        if (freqHz >= 26_465_000u) return 0x20; // bypass
-        if (freqHz >= 19_584_000u) return 0x02; // 20 MHz HPF
-        if (freqHz >= 12_075_000u) return 0x01; // 13 MHz HPF
-        if (freqHz >=  6_202_000u) return 0x04; // 9.5 MHz HPF
-        if (freqHz >=  4_665_000u) return 0x08; // 6.5 MHz HPF
-        return 0x10;                            // 1.5 MHz HPF
+        if (freqHz <  1_500_000u) return ALEX_ANAN7000_RX_BYPASS_BPF;
+        if (freqHz <  2_100_000u) return ALEX_ANAN7000_RX_160_BPF;
+        if (freqHz <  5_500_000u) return ALEX_ANAN7000_RX_80_60_BPF;
+        if (freqHz < 11_000_000u) return ALEX_ANAN7000_RX_40_30_BPF;
+        if (freqHz < 22_000_000u) return ALEX_ANAN7000_RX_20_15_BPF;
+        if (freqHz < 35_000_000u) return ALEX_ANAN7000_RX_12_10_BPF;
+        return ALEX_ANAN7000_RX_6_PRE_BPF;
     }
 
-    internal static byte LpfBits(uint freqHz)
+    // TX LPF band splits (pihpsdr calc_tx_alex in alex.c). Same band groupings
+    // as the physical LPF board — not HPF-shaped.
+    internal static uint LpfBitsAnan7000(uint freqHz)
     {
-        if (freqHz >= 39_850_000u) return 0x10; // 6 m LPF
-        if (freqHz >= 26_465_000u) return 0x20; // 12/10 m LPF
-        if (freqHz >= 19_584_000u) return 0x40; // 17/15 m LPF
-        if (freqHz >= 12_075_000u) return 0x01; // 30/20 m LPF
-        if (freqHz >=  4_665_000u) return 0x02; // 60/40 m LPF
-        if (freqHz >=  2_750_000u) return 0x04; // 80 m LPF
-        return 0x08;                            // 160 m LPF
+        if (freqHz >= 33_000_000u) return ALEX_6_BYPASS_LPF;
+        if (freqHz >= 22_000_000u) return ALEX_12_10_LPF;
+        if (freqHz >= 15_000_000u) return ALEX_17_15_LPF;
+        if (freqHz >=  8_000_000u) return ALEX_30_20_LPF;
+        if (freqHz >=  4_500_000u) return ALEX_60_40_LPF;
+        if (freqHz >=  2_500_000u) return ALEX_80_LPF;
+        return ALEX_160_LPF;
     }
 
     // Mirrors pihpsdr's new_protocol_timer_thread:

@@ -108,6 +108,17 @@ if(PkgConfig_FOUND)
     endif()
 endif()
 
+# vcpkg / CMake CONFIG mode — used when the vcpkg toolchain is active (Windows)
+# or any platform where FFTW3 ships a CMake config package.
+if(NOT _fftw_found)
+    find_package(FFTW3 CONFIG QUIET)
+    if(FFTW3_FOUND)
+        target_link_libraries(wdsp PRIVATE FFTW3::fftw3)
+        set(_fftw_found TRUE)
+        message(STATUS "FFTW3 found via CMake config (vcpkg or system package)")
+    endif()
+endif()
+
 # macOS Homebrew fallback (arm64: /opt/homebrew, x86_64: /usr/local).
 if(NOT _fftw_found AND APPLE)
     foreach(_prefix /opt/homebrew/opt/fftw /usr/local/opt/fftw)
@@ -124,6 +135,16 @@ endif()
 
 if(NOT _fftw_found)
     message(FATAL_ERROR "FFTW3 not found. Install with: brew install fftw (macOS) | apt install libfftw3-dev (Linux) | see native/README.md for Windows.")
+endif()
+
+# -----------------------------------------------------------------------------
+# Windows system libraries: main.c calls AvSetMmThreadCharacteristics /
+# AvSetMmThreadPriority / AvRevertMmThreadCharacteristics (Multimedia Class
+# Scheduler "Pro Audio") which live in avrt.lib. Thetis's wdsp.vcxproj does
+# the same.
+# -----------------------------------------------------------------------------
+if(WIN32)
+    target_link_libraries(wdsp PRIVATE avrt)
 endif()
 
 # -----------------------------------------------------------------------------

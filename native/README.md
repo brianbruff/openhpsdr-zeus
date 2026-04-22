@@ -42,29 +42,46 @@ sudo dnf install fftw-devel cmake gcc pkgconf                      # Fedora/RHEL
 
 Produces `Zeus.Dsp/runtimes/linux-x64/native/libwdsp.so` (or `linux-arm64`).
 
-## Build on Windows (x64)
+## Build on Windows (x64 / arm64)
 
-Windows support is wired into the CMakeLists but has not been validated. Rough
-recipe:
+Windows native libraries are built automatically via GitHub Actions (see
+`.github/workflows/build-native-libs.yml`). The workflow uses vcpkg to install
+FFTW3 and builds for both x64 and arm64.
+
+For local development:
 
 ```powershell
-winget install Kitware.CMake
-winget install Microsoft.VisualStudio.2022.BuildTools   # or full VS
-# FFTW3: either vcpkg (vcpkg install fftw3:x64-windows) or
-# download prebuilt DLLs from https://www.fftw.org/install/windows.html and
-# point CMake at them via -DCMAKE_PREFIX_PATH.
-cmake -S native\wdsp -B native\build -G "Visual Studio 17 2022" -A x64
+# Install dependencies
+vcpkg install fftw3:x64-windows
+# or for ARM64: vcpkg install fftw3:arm64-windows
+
+# Configure (x64)
+cmake -S native\wdsp -B native\build -G "Visual Studio 17 2022" -A x64 `
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
+
+# Configure (ARM64)
+cmake -S native\wdsp -B native\build -G "Visual Studio 17 2022" -A ARM64 `
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
+
+# Build
 cmake --build native\build --config Release
+
+# Stage
 copy native\build\Release\wdsp.dll Zeus.Dsp\runtimes\win-x64\native\
+# or for ARM64: copy native\build\Release\wdsp.dll Zeus.Dsp\runtimes\win-arm64\native\
 ```
 
-Known Windows TODOs:
+## Automated Builds via GitHub Actions
 
-- No pkg-config on Windows by default; `find_package(FFTW3)` only fires if the
-  user supplies `-DCMAKE_PREFIX_PATH=…`. A `cmake/FindFFTW3.cmake` module is
-  the likely next step (doc 03 §3.4 notes this).
-- `/fp:precise` is set, but wider MSVC-specific warning suppression may be
-  needed once someone runs a real build.
+Native libraries for Windows and Linux are automatically built by the
+`.github/workflows/build-native-libs.yml` workflow. This workflow:
+
+- Builds for Windows (x64, arm64) using MSVC and vcpkg
+- Builds for Linux (x64, arm64) using GCC
+- Stages the libraries in `Zeus.Dsp/runtimes/<rid>/native/`
+- Can be triggered manually via workflow_dispatch or automatically on changes to `native/`
+
+To trigger a manual build, go to Actions → "Build Native WDSP Libraries" → "Run workflow".
 
 ## MVP API surface
 

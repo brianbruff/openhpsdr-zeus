@@ -1,0 +1,155 @@
+name: Build Native WDSP Libraries
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'native/**'
+      - '.github/workflows/build-native-libs.yml'
+
+jobs:
+  build-windows:
+    name: Build Windows Native Libraries
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        # arm64 deferred: upstream channel.c uses _MM_SET_FLUSH_ZERO_MODE
+        # (SSE intrinsic) guarded only for linux/APPLE, so it fails to
+        # compile on Windows-on-ARM. Revisit if a Windows-ARM64 user asks.
+        arch: [x64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install FFTW via vcpkg (static-md triplet, dynamic CRT)
+        run: |
+          # static-md = FFTW linked statically into wdsp.dll, but using the
+          # default dynamic CRT (/MD) so no CRT mismatch with CMake defaults.
+          # Result: a single self-contained wdsp.dll, no fftw3.dll needed.
+          vcpkg install fftw3:${{ matrix.arch }}-windows-static-md
+          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+
+      - name: Configure CMake
+        run: |
+          $archFlag = if ("${{ matrix.arch }}" -eq "arm64") { "ARM64" } else { "x64" }
+          cmake -S native/wdsp -B native/build `
+            -G "Visual Studio 17 2022" `
+            -A $archFlag `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=${{ matrix.arch }}-windows-static-md
+
+      - name: Build
+        run: |
+          cmake --build native/build --config Release --parallel
+
+      - name: Stage DLL
+        run: |
+          $rid = "win-${{ matrix.arch }}"
+          $destDir = "Zeus.Dsp/runtimes/$rid/native"
+          New-Item -ItemType Directory -Force -Path $destDir
+          Copy-Item "native/build/Release/wdsp.dll" "$destDir/wdsp.dll"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wdsp-windows-${{ matrix.arch }}
+          path: Zeus.Dsp/runtimes/win-${{ matrix.arch }}/native/wdsp.dll
+
+  build-linux:
+    name: Build Linux Native Libraries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (x64)
+        if: matrix.arch == 'x64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfftw3-dev cmake build-essential pkg-config
+
+      - name: Install cross-compilation tools (arm64)
+        if: matrix.arch == 'arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu cmake pkg-config
+
+          # Download and build FFTW for arm64
+          wget http://www.fftw.org/fftw-3.3.10.tar.gz
+          tar xzf fftw-3.3.10.tar.gz
+          cd fftw-3.3.10
+          ./configure --host=aarch64-linux-gnu --prefix=$HOME/fftw-arm64 \
+            CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ \
+            --enable-shared --disable-static
+          make -j$(nproc)
+          make install
+          cd ..
+
+      - name: Configure CMake (x64)
+        if: matrix.arch == 'x64'
+        run: |
+          cmake -S native/wdsp -B native/build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Configure CMake (arm64)
+        if: matrix.arch == 'arm64'
+        run: |
+          cmake -S native/wdsp -B native/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+            -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+            -DCMAKE_FIND_ROOT_PATH=$HOME/fftw-arm64 \
+            -DCMAKE_PREFIX_PATH=$HOME/fftw-arm64
+
+      - name: Build
+        run: |
+          cmake --build native/build --config Release --parallel
+
+      - name: Stage library
+        run: |
+          rid="linux-${{ matrix.arch }}"
+          destDir="Zeus.Dsp/runtimes/$rid/native"
+          mkdir -p "$destDir"
+          cp native/build/libwdsp.so "$destDir/libwdsp.so"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wdsp-linux-${{ matrix.arch }}
+          path: Zeus.Dsp/runtimes/linux-${{ matrix.arch }}/native/libwdsp.so
+
+  commit-libraries:
+    name: Commit Native Libraries
+    runs-on: ubuntu-latest
+    needs: [build-windows, build-linux]
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Stage all libraries
+        run: |
+          # Copy all artifacts to their proper locations
+          for artifact in artifacts/wdsp-*; do
+            cp -r "$artifact"/* .
+          done
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Zeus.Dsp/runtimes/
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "build: update native WDSP libraries for Windows and Linux"
+            git push
+          fi

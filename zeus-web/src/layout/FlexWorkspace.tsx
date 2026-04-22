@@ -10,8 +10,9 @@ import { TerminatorLines } from '../components/design/TerminatorLines';
 
 function factory(node: TabNode) {
   const id = node.getComponent();
-  if (!id || !(id in PANELS)) return null;
-  const { component: Component } = PANELS[id];
+  const panel = id ? PANELS[id] : undefined;
+  if (!panel) return null;
+  const Component = panel.component;
   return <Component />;
 }
 

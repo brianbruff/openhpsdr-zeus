@@ -1,0 +1,46 @@
+using System.Buffers;
+using System.Buffers.Binary;
+
+namespace Zeus.Contracts;
+
+// Compact PA-temperature frame. 5 bytes total:
+//
+//   [0x17] [tempC:f32]
+//
+// Broadcast at 2 Hz regardless of MOX state — temperature is a protection
+// signal that matters during RX-only operation as well (the HL2 gateware
+// auto-disables TX at 55 °C on the Q6 sensor, so the operator wants to see
+// the climb even when not keyed). Moves on a seconds timescale, so the
+// 10 Hz TX-meter cadence is overkill.
+//
+// Value is the smoothed-and-clamped Celsius reading from the HL2 Q6
+// sensor, arriving as <c>reading.Ain0</c> on the C0=0x08 echo slot (same
+// slot that carries Alex FWD power in <c>Ain1</c>). Clamped into the
+// plausible sensor range at the server so a floating ADC input can't
+// trip the UI's 55 °C red zone on boot.
+//
+// Deliberately does NOT use the 16-byte WireFormat header — matches
+// RxMeterFrame / TxMetersFrame conventions: a per-frame header would more
+// than quadruple the wire cost for a value that updates twice a second.
+public readonly record struct PaTempFrame(float TempC)
+{
+    public const int ByteLength = 1 + 4;
+
+    public void Serialize(IBufferWriter<byte> writer)
+    {
+        var span = writer.GetSpan(ByteLength);
+        span[0] = (byte)MsgType.PaTemp;
+        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(1, 4), TempC);
+        writer.Advance(ByteLength);
+    }
+
+    public static PaTempFrame Deserialize(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length < ByteLength)
+            throw new InvalidDataException($"PaTempFrame requires {ByteLength} bytes, got {bytes.Length}");
+        if (bytes[0] != (byte)MsgType.PaTemp)
+            throw new InvalidDataException($"expected PaTemp (0x{(byte)MsgType.PaTemp:X2}), got 0x{bytes[0]:X2}");
+        return new PaTempFrame(
+            TempC: BinaryPrimitives.ReadSingleLittleEndian(bytes.Slice(1, 4)));
+    }
+}

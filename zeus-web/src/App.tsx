@@ -12,11 +12,12 @@ import { MobilePttButton } from './components/MobilePttButton';
 import { ModeBandwidth } from './components/ModeBandwidth';
 import { MoxButton } from './components/MoxButton';
 import { Panadapter } from './components/Panadapter';
+import { PaTempChip } from './components/PaTempChip';
 import { PreampButton } from './components/PreampButton';
 import { QrzStatusPill } from './components/QrzStatusPill';
 import { RotatorStatusPill } from './components/RotatorStatusPill';
 import { SMeterLive } from './components/SMeterLive';
-import { TxStageMeters } from './components/TxStageMeters';
+import { OverdriveIndicator, TxStageMeters } from './components/TxStageMeters';
 import { TunButton } from './components/TunButton';
 import { VfoDisplay } from './components/VfoDisplay';
 import { Waterfall } from './components/Waterfall';
@@ -732,7 +733,11 @@ export default function App() {
             </Dockable>
           </div>
           <div className="bottom-slot hide-mobile">
-            <Dockable title="TX Stage Meters" ledOn={moxOn || tunOn}>
+            <Dockable
+              title="TX Stage Meters"
+              ledOn={moxOn || tunOn}
+              actions={<OverdriveIndicator />}
+            >
               <TxStageMeters />
             </Dockable>
           </div>
@@ -756,6 +761,7 @@ export default function App() {
         <button type="button" className="btn ghost hide-mobile">RIT</button>
         <button type="button" className="btn ghost hide-mobile">SAVE MEM</button>
         <div className="spacer" style={{ flex: 1 }} />
+        <PaTempChip />
         <div className="chip hide-mobile">
           <span className="k">LINK</span>
           <span className="v mono">{connected ? 'UP' : 'DOWN'}</span>

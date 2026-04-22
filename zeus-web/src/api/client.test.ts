@@ -12,6 +12,7 @@ import {
   setAgcTop,
   setAttenuator,
   setAutoAtt,
+  setLevelerMaxGain,
   setMicGain,
   setMode,
   setNr,
@@ -395,6 +396,46 @@ describe('POST helpers', () => {
       ),
     );
     await expect(setMicGain(99)).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 400,
+    });
+  });
+
+  it('setLevelerMaxGain posts { gain } to /api/tx/leveler-max-gain and returns echoed value', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse({ levelerMaxGainDb: 7.5 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(setLevelerMaxGain(7.5)).resolves.toEqual({
+      levelerMaxGainDb: 7.5,
+    });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/tx/leveler-max-gain');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse((init?.body ?? '') as string)).toEqual({ gain: 7.5 });
+  });
+
+  it('setLevelerMaxGain treats 404 as accepted (backend not landed yet)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response('Not Found', { status: 404, statusText: 'Not Found' }),
+      ),
+    );
+    await expect(setLevelerMaxGain(5)).resolves.toEqual({
+      levelerMaxGainDb: 5,
+    });
+  });
+
+  it('setLevelerMaxGain rethrows non-404 errors so the slider can roll back', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockResolvedValue(
+        jsonResponse({ error: 'gain out of range' }, 400),
+      ),
+    );
+    await expect(setLevelerMaxGain(99)).rejects.toMatchObject({
       name: 'ApiError',
       status: 400,
     });

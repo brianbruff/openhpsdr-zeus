@@ -25,4 +25,21 @@ public enum MsgType : byte
     // FFTW plan cache transitions between idle/building/ready; also pushed
     // once per client at WS attach so late joiners get the current state.
     WisdomStatus = 0x15,
+
+    // Server → client (TX telemetry v2). Compatible additive extension of
+    // TxMeters (0x11): carries average readings alongside peak for every
+    // stage, plus CFC/COMP stages that v1 omitted. Operators need the
+    // average to judge level and the peak to catch clipping; v1's peak-only
+    // payload hid transient overshoots inside the smoothing window. v1 is
+    // left in the enum for decoder interop / historical clients but the
+    // server only broadcasts v2 after the feat/tx-audio-meters branch.
+    TxMetersV2 = 0x16,
+
+    // Server → client (HL2 PA temperature in °C, MCP9700 sensor). Separate
+    // from the TX meter frame because temperature is a protection signal
+    // the operator wants to see during RX-only operation too — the HL2
+    // gateware auto-disables TX at 55 °C (Q6 sensor) — and it moves on a
+    // seconds timescale, so bolting it onto the 10 Hz TX meter cadence
+    // would be overkill. Broadcast at 2 Hz always.
+    PaTemp = 0x17,
 }

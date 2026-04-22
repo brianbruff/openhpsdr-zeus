@@ -5,6 +5,7 @@ import {
   fetchRadios,
   fetchState,
   setDrive,
+  setLevelerMaxGain,
   setMicGain,
   type RadioInfoDto,
 } from '../api/client';
@@ -138,6 +139,10 @@ export function ConnectPanel() {
         const tx = useTxStore.getState();
         void setDrive(tx.drivePercent).catch(() => {});
         void setMicGain(tx.micGainDb).catch(() => {});
+        // Leveler max-gain is stateless across backend restart; re-POST the
+        // persisted value so the radio uses our preference instead of the
+        // server default (+5 dB).
+        void setLevelerMaxGain(tx.levelerMaxGainDb).catch(() => {});
       } catch (err) {
         setError(errorMessage(err));
       } finally {

@@ -592,6 +592,41 @@ export function saveBandMemory(
   );
 }
 
+// Leveler max-gain endpoint: POST /api/tx/leveler-max-gain { gain }. Returns
+// { levelerMaxGainDb }. Backend clamps to [0, 15] and echoes the applied
+// value; stateless across backend restart, so ConnectPanel re-POSTs the
+// persisted value when the connection comes up. Same 404-tolerant pattern as
+// setMicGain for the frontend-ahead-of-backend window.
+export async function setLevelerMaxGain(
+  gain: number,
+  signal?: AbortSignal,
+): Promise<{ levelerMaxGainDb: number }> {
+  try {
+    return await jsonFetch(
+      '/api/tx/leveler-max-gain',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ gain }),
+        signal,
+      },
+      (raw) => {
+        const v = (raw as { levelerMaxGainDb?: unknown }).levelerMaxGainDb;
+        return { levelerMaxGainDb: typeof v === 'number' ? v : gain };
+      },
+    );
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) {
+      warnOnce(
+        'tx-leveler-max-gain-404',
+        'POST /api/tx/leveler-max-gain not implemented yet — treating as accepted',
+      );
+      return { levelerMaxGainDb: gain };
+    }
+    throw err;
+  }
+}
+
 // Mic-gain endpoint: POST /api/mic-gain { db }. Returns { micGainDb }.
 // Backend may not have landed the handler yet — a 404 is downgraded to a
 // silent warnOnce so the console doesn't fill with noise during the

@@ -51,6 +51,7 @@ public class TxAudioIngestTests
         public double GetRxaSignalDbm(int channelId) => -140.0;
         public void SetTxMode(RxMode mode) { }
         public void SetTxPanelGain(double linearGain) { }
+        public void SetTxLevelerMaxGain(double maxGainDb) { }
         public void SetTxTune(bool on) { }
         public TxStageMeters GetTxStageMeters() => TxStageMeters.Silent;
         public void Dispose() { }

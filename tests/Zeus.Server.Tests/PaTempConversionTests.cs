@@ -1,0 +1,73 @@
+using Zeus.Server;
+using Xunit;
+
+namespace Zeus.Server.Tests;
+
+/// <summary>
+/// Sanity-check the HL2 PA-temperature ADC → °C conversion (MCP9700-class
+/// sensor) and the protective clamp around it. The numeric reference points
+/// come from HL2 community operator data cited in task P2.4:
+///   idle 30 °C, 1 W ~44 °C, 5 W ~47-51 °C, gateware trip at 55 °C.
+/// Formula: tempC = (3.26 * raw / 4096 - 0.5) * 100 — see
+/// <c>TxMetersService.ConvertPaTempAdcToCelsius</c> for provenance.
+/// </summary>
+public class PaTempConversionTests
+{
+    // Invert the formula to build raw ADC values that should decode to a
+    // known °C: raw = (tempC / 100 + 0.5) * 4096 / 3.26
+    private static int RawForTempC(double tempC)
+        => (int)Math.Round((tempC / 100.0 + 0.5) * 4096.0 / 3.26);
+
+    [Theory]
+    [InlineData(30.0)]  // idle
+    [InlineData(44.0)]  // 1 W
+    [InlineData(51.0)]  // 5 W
+    [InlineData(55.0)]  // HL2 gateware trip threshold
+    public void Convert_CommunityReferencePoints_RoundTripWithinTolerance(double expectedC)
+    {
+        int raw = RawForTempC(expectedC);
+        float actualC = TxMetersService.ConvertPaTempAdcToCelsius(raw);
+
+        // Half-degree tolerance — the ADC quantization is ~0.08 °C per LSB
+        // at 3.26 V ref, so round-trip drift stays well within ±0.1 °C.
+        Assert.InRange(actualC, expectedC - 0.5, expectedC + 0.5);
+    }
+
+    [Fact]
+    public void Convert_ZeroAdc_ClampsToFloor()
+    {
+        // A raw reading of 0 decodes mathematically to -50 °C; clamp pins
+        // it to -40 so the UI never shows a physically-impossible value
+        // on a floating-ADC boot.
+        Assert.Equal(-40f, TxMetersService.ConvertPaTempAdcToCelsius(0));
+    }
+
+    [Fact]
+    public void Convert_MaxAdc_ClampsToCeiling()
+    {
+        // Full-scale ADC (4095) decodes to ~275 °C; clamp pins it to
+        // 125 °C so a disconnected sensor can't light the 55 °C red
+        // zone with a wild value.
+        Assert.Equal(125f, TxMetersService.ConvertPaTempAdcToCelsius(4095));
+    }
+
+    [Fact]
+    public void Convert_Monotonic_Between_ClampedReference_Points()
+    {
+        // Across the operating band (idle → trip) the conversion must be
+        // strictly monotonic: a hotter ADC reading must yield a hotter °C.
+        int rawIdle = RawForTempC(30);
+        int raw1w = RawForTempC(44);
+        int raw5w = RawForTempC(51);
+        int rawTrip = RawForTempC(55);
+
+        float cIdle = TxMetersService.ConvertPaTempAdcToCelsius(rawIdle);
+        float c1w = TxMetersService.ConvertPaTempAdcToCelsius(raw1w);
+        float c5w = TxMetersService.ConvertPaTempAdcToCelsius(raw5w);
+        float cTrip = TxMetersService.ConvertPaTempAdcToCelsius(rawTrip);
+
+        Assert.True(cIdle < c1w);
+        Assert.True(c1w < c5w);
+        Assert.True(c5w < cTrip);
+    }
+}

@@ -7,21 +7,24 @@ import { useTxStore } from '../state/tx-store';
 // WdspDspEngine.ProcessTxBlock (via TxMetersFrame) and renders them in
 // the design's .meter chassis.
 //
-// Conventions:
-//   - Levels shown on a -60..0 dBFS scale with the danger tick at -3 dBFS
-//     (3 dB headroom, Thetis-equivalent). We negate the stored dBFS for
-//     the Meter primitive's 0..max positive axis — i.e. a −20 dBFS peak
-//     fills 40/60 of the bar.
-//   - ALC gain reduction uses a 0..20 dB scale with the danger tick at
-//     ~12 dB; sustained >12 dB on SSB means the input is consistently
+// Conventions (Thetis MeterManager.cs):
+//   - Levels shown on a -30..+12 dB scale (42 dB span) with the danger tick
+//     at 0 dBFS (clip point) and a secondary "target peak" tick at -6 dBFS.
+//     The asymmetric scale concentrates resolution around the useful range
+//     for SSB voice, where healthy peaks sit around -6..-3 dBFS.
+//   - ALC gain reduction uses a 0..25 dB scale with the danger tick at
+//     10 dB; sustained > 10 dB GR means the input is consistently
 //     over-driving the limiter.
 //   - While MOX/TUN is off, TxMetersFrame carries −Infinity level / 0 GR;
 //     we detect that with isFinite() and render em-dashes.
 
-const LEVEL_RANGE_DB = 60; // -60..0 dBFS displayed
-const LEVEL_DANGER_POS = (LEVEL_RANGE_DB - 3) / LEVEL_RANGE_DB; // -3 dBFS
-const GR_MAX_DB = 20;
-const GR_DANGER_POS = 12 / GR_MAX_DB;
+const LEVEL_MIN_DB = -30;
+const LEVEL_MAX_DB = 12;
+const LEVEL_RANGE_DB = LEVEL_MAX_DB - LEVEL_MIN_DB; // 42 dB span
+const LEVEL_DANGER_POS = (0 - LEVEL_MIN_DB) / LEVEL_RANGE_DB; // 0 dBFS = clip
+const LEVEL_TARGET_POS = (-6 - LEVEL_MIN_DB) / LEVEL_RANGE_DB; // -6 dBFS target
+const GR_MAX_DB = 25;
+const GR_DANGER_POS = 10 / GR_MAX_DB; // >10 dB GR = over-driving the limiter
 // WDSP returns −400 dBFS when a stage is bypassed. Anything ≤ −200 is far
 // below any real audio level, so we treat it as a bypassed sentinel rather
 // than clamping to the axis floor (which would paint a misleading tiny bar
@@ -33,13 +36,13 @@ function isBypassed(dbfs: number): boolean {
 }
 
 // Thetis convention (MeterManager.cs: attack 0.8, decay 0.1, ~2 s visible
-// history): the held peak decays 30 dB/sec, i.e. a peak at 0 dB drops off
-// the −60 dBFS axis over ~2 seconds. The hook tracks the running max in a
-// ref so the decay stays continuous across renders, using wall-clock time
-// for dt rather than frame count (the component re-renders at the 10 Hz WS
-// tick, giving ~3 dB steps — visually smooth enough for a 60 dB range).
-// Returns −Infinity while current is non-finite or ≤ the bypass sentinel.
-const PEAK_DECAY_DB_PER_SEC = 30;
+// history): the held peak decays at a rate that takes ~2 s to traverse the
+// full axis. For the 42 dB level axis that's 21 dB/s; the GR axis uses
+// GR_MAX_DB/2 via the decayDbPerSec override. The hook tracks the running
+// max in a ref so decay stays continuous across renders, using wall-clock
+// time for dt rather than frame count. Returns −Infinity while current is
+// non-finite or ≤ the bypass sentinel.
+const PEAK_DECAY_DB_PER_SEC = LEVEL_RANGE_DB / 2;
 
 function usePeakHold(current: number, decayDbPerSec = PEAK_DECAY_DB_PER_SEC): number {
   const state = useRef<{ db: number; ts: number }>({ db: -Infinity, ts: 0 });
@@ -57,12 +60,12 @@ function usePeakHold(current: number, decayDbPerSec = PEAK_DECAY_DB_PER_SEC): nu
   return held;
 }
 
-// Convert a dBFS reading (≤ 0) to the 0..max axis the Meter primitive wants.
-// -60 dBFS → 0, 0 dBFS → 60.
+// Convert a dBFS reading to the 0..LEVEL_RANGE_DB axis (0..42).
+// -30 dBFS → 0, 0 dBFS → 30, +12 dBFS → 42.
 function dbfsToAxis(dbfs: number): number {
   if (!isFinite(dbfs) || isBypassed(dbfs)) return 0;
-  const clamped = Math.max(-LEVEL_RANGE_DB, Math.min(0, dbfs));
-  return LEVEL_RANGE_DB + clamped;
+  const clamped = Math.max(LEVEL_MIN_DB, Math.min(LEVEL_MAX_DB, dbfs));
+  return clamped - LEVEL_MIN_DB;
 }
 
 type LevelRowProps = {
@@ -120,6 +123,14 @@ function LevelRow({ label, dbfs, hint }: LevelRowProps) {
           {[0.25, 0.5, 0.75].map((t) => (
             <div key={t} className="meter-tick" style={{ left: `${t * 100}%` }} />
           ))}
+          {/* Target-peak marker at -6 dBFS (amber, #FFA028 @ 0.55 alpha). */}
+          <div
+            className="meter-tick"
+            style={{
+              left: `${LEVEL_TARGET_POS * 100}%`,
+              background: 'rgba(255, 160, 40, 0.55)',
+            }}
+          />
           <div
             className="meter-tick danger"
             style={{ left: `${LEVEL_DANGER_POS * 100}%` }}
@@ -233,7 +244,7 @@ export function TxStageMeters() {
       />
       <GrRow
         db={alcGr}
-        hint="ALC gain reduction; sustained >12 dB means the input is over-driving the limiter"
+        hint="ALC gain reduction; sustained >10 dB means the input is over-driving the limiter"
       />
       <LevelRow label="OUT" dbfs={outPk} hint="Final TX peak" />
     </div>

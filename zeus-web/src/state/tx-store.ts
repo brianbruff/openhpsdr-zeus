@@ -4,19 +4,32 @@ import { persist } from 'zustand/middleware';
 // TX-side state. Intentionally separate from connection-store so the TX panel
 // can mount/unmount cleanly and so TX-specific fields (drivePercent, micGainDb,
 // meter values, SWR alert) can accumulate here as subsequent slices land.
+// TxMetersV2 wire payload (MsgType 0x16, 20 f32 LE). TXA per-stage peak/average
+// readings from WdspDspEngine.ProcessTxBlock. Valid during MOX/TUN only — idle
+// or bypassed WDSP stages emit ≤ −200 dBFS (near the −400 sentinel) and `*Gr`
+// fields stay at 0 when the stage is idle. Consumers should treat ≤ −200 as
+// "bypassed" rather than a real level (see P1.4).
 export type TxMeters = {
   fwdWatts: number;
   refWatts: number;
   swr: number;
-  micDbfs: number;
-  // TXA per-stage peak readings from WdspDspEngine.ProcessTxBlock. Valid
-  // during MOX/TUN only — idle frames carry −Infinity levels and 0 GR, so
-  // consumers can detect "no live data" by checking isFinite().
+  micPk: number;
+  micAv: number;
   eqPk: number;
+  eqAv: number;
   lvlrPk: number;
+  lvlrAv: number;
+  lvlrGr: number;
+  cfcPk: number;
+  cfcAv: number;
+  cfcGr: number;
+  compPk: number;
+  compAv: number;
   alcPk: number;
+  alcAv: number;
   alcGr: number;
   outPk: number;
+  outAv: number;
 };
 
 export enum AlertKind {
@@ -44,24 +57,35 @@ export type TxState = {
   // WDSP SetTXAPanelGain1(TXA, 10^(db/20)). Kept as int dB on the wire.
   micGainDb: number;
   setMicGainDb: (db: number) => void;
-  // Meter telemetry pushed from the server's TxMetersService over WS (0x11).
+  // Meter telemetry pushed from the server's TxMetersService over WS (0x16 v2).
   // Defaults look "quiet": 0 W forward/reflected, 1.0 SWR (matched), -100 dBfs
   // mic (near silence) so the SMeter/dBfs readouts don't spike on first paint.
   //
   // micDbfs is client-driven: set by the mic-uplink worklet's per-block peak
   // so the MicMeter animates even during RX. setMeters does not overwrite it.
   // wdspMicPk is server-driven: WDSP TXA_MIC_PK (post-panel-gain) carried in
-  // TxMetersFrame.MicDbfs at 10 Hz during MOX; −Infinity when idle.
+  // TxMetersFrame.MicPk at 10 Hz during MOX; −Infinity when idle.
   fwdWatts: number;
   refWatts: number;
   swr: number;
   micDbfs: number;
   wdspMicPk: number;
+  micAv: number;
   eqPk: number;
+  eqAv: number;
   lvlrPk: number;
+  lvlrAv: number;
+  lvlrGr: number;
+  cfcPk: number;
+  cfcAv: number;
+  cfcGr: number;
+  compPk: number;
+  compAv: number;
   alcPk: number;
+  alcAv: number;
   alcGr: number;
   outPk: number;
+  outAv: number;
   setMeters: (m: TxMeters) => void;
   setMicDbfs: (dbfs: number) => void;
   // Surfaced when getUserMedia / AudioWorklet init fails so MicMeter can
@@ -96,21 +120,43 @@ export const useTxStore = create<TxState>()(
       swr: 1.0,
       micDbfs: -100,
       wdspMicPk: -Infinity,
+      micAv: -Infinity,
       eqPk: -Infinity,
+      eqAv: -Infinity,
       lvlrPk: -Infinity,
+      lvlrAv: -Infinity,
+      lvlrGr: 0,
+      cfcPk: -Infinity,
+      cfcAv: -Infinity,
+      cfcGr: 0,
+      compPk: -Infinity,
+      compAv: -Infinity,
       alcPk: -Infinity,
+      alcAv: -Infinity,
       alcGr: 0,
       outPk: -Infinity,
+      outAv: -Infinity,
       setMeters: (m) => set({
         fwdWatts: m.fwdWatts,
         refWatts: m.refWatts,
         swr: m.swr,
-        wdspMicPk: m.micDbfs,
+        wdspMicPk: m.micPk,
+        micAv: m.micAv,
         eqPk: m.eqPk,
+        eqAv: m.eqAv,
         lvlrPk: m.lvlrPk,
+        lvlrAv: m.lvlrAv,
+        lvlrGr: m.lvlrGr,
+        cfcPk: m.cfcPk,
+        cfcAv: m.cfcAv,
+        cfcGr: m.cfcGr,
+        compPk: m.compPk,
+        compAv: m.compAv,
         alcPk: m.alcPk,
+        alcAv: m.alcAv,
         alcGr: m.alcGr,
         outPk: m.outPk,
+        outAv: m.outAv,
       }),
       setMicDbfs: (dbfs) => set({ micDbfs: dbfs }),
       micError: null,

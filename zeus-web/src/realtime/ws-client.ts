@@ -9,13 +9,19 @@ import { warnOnce } from '../util/logger';
 const INITIAL_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 8000;
 
-// Binary WS frame type for TX meters: 1 type byte + 9 × f32 LE
-// (fwdWatts, refWatts, swr, micDbfs, eqPk, lvlrPk, alcPk, alcGr, outPk).
-// Contract locked with the server team in Zeus.Contracts/TxMetersFrame.cs —
-// the last 5 floats are TXA per-stage peak readings added for the TX-quality
-// diagnostic strip; they read −∞ / 0 while idle.
-export const MSG_TYPE_TX_METERS = 0x11;
-const TX_METERS_BYTES = 1 + 4 * 9;
+// Binary WS frame type for TX meters v2: 1 type byte + 20 × f32 LE.
+// Payload order (must match Zeus.Contracts/TxMetersFrame.cs v2):
+//   fwdWatts, refWatts, swr,
+//   micPk, micAv, eqPk, eqAv,
+//   lvlrPk, lvlrAv, lvlrGr,
+//   cfcPk, cfcAv, cfcGr,
+//   compPk, compAv,
+//   alcPk, alcAv, alcGr,
+//   outPk, outAv.
+// Bypassed WDSP stages emit ≤ −200 dBFS (near the WDSP −400 sentinel) and
+// `*Gr` fields stay at 0 when the stage is idle.
+export const MSG_TYPE_TX_METERS_V2 = 0x16;
+const TX_METERS_V2_BYTES = 1 + 4 * 20;
 
 // RX S-meter: 1 type byte + 1 × f32 LE (dBm). Broadcast at ~5 Hz from
 // DspPipelineService; server clamps floor to −160 dBm before send.
@@ -133,11 +139,11 @@ export function startRealtime(path = '/ws'): () => void {
           getAudioClient().push(audio);
           return;
         }
-        if (peekType === MSG_TYPE_TX_METERS) {
-          if (ev.data.byteLength < TX_METERS_BYTES) {
+        if (peekType === MSG_TYPE_TX_METERS_V2) {
+          if (ev.data.byteLength < TX_METERS_V2_BYTES) {
             warnOnce(
-              'ws-tx-meters-short',
-              `tx meters frame too short: ${ev.data.byteLength}`,
+              'ws-tx-meters-v2-short',
+              `tx meters v2 frame too short: ${ev.data.byteLength}`,
             );
             return;
           }
@@ -146,12 +152,23 @@ export function startRealtime(path = '/ws'): () => void {
             fwdWatts: dv.getFloat32(1, true),
             refWatts: dv.getFloat32(5, true),
             swr: dv.getFloat32(9, true),
-            micDbfs: dv.getFloat32(13, true),
-            eqPk: dv.getFloat32(17, true),
-            lvlrPk: dv.getFloat32(21, true),
-            alcPk: dv.getFloat32(25, true),
-            alcGr: dv.getFloat32(29, true),
-            outPk: dv.getFloat32(33, true),
+            micPk: dv.getFloat32(13, true),
+            micAv: dv.getFloat32(17, true),
+            eqPk: dv.getFloat32(21, true),
+            eqAv: dv.getFloat32(25, true),
+            lvlrPk: dv.getFloat32(29, true),
+            lvlrAv: dv.getFloat32(33, true),
+            lvlrGr: dv.getFloat32(37, true),
+            cfcPk: dv.getFloat32(41, true),
+            cfcAv: dv.getFloat32(45, true),
+            cfcGr: dv.getFloat32(49, true),
+            compPk: dv.getFloat32(53, true),
+            compAv: dv.getFloat32(57, true),
+            alcPk: dv.getFloat32(61, true),
+            alcAv: dv.getFloat32(65, true),
+            alcGr: dv.getFloat32(69, true),
+            outPk: dv.getFloat32(73, true),
+            outAv: dv.getFloat32(77, true),
           });
           return;
         }

@@ -138,6 +138,16 @@ if(NOT _fftw_found)
 endif()
 
 # -----------------------------------------------------------------------------
+# Windows system libraries: main.c calls AvSetMmThreadCharacteristics /
+# AvSetMmThreadPriority / AvRevertMmThreadCharacteristics (Multimedia Class
+# Scheduler "Pro Audio") which live in avrt.lib. Thetis's wdsp.vcxproj does
+# the same.
+# -----------------------------------------------------------------------------
+if(WIN32)
+    target_link_libraries(wdsp PRIVATE avrt)
+endif()
+
+# -----------------------------------------------------------------------------
 # Output naming: match .NET NativeLibrary resolution defaults.
 #   macOS   : libwdsp.dylib  (OUTPUT_NAME=wdsp + PREFIX=lib + .dylib)
 #   Linux   : libwdsp.so

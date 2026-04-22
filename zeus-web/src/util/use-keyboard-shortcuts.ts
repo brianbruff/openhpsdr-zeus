@@ -75,13 +75,14 @@ export function useKeyboardShortcuts() {
     };
 
     const bumpZoom = (direction: -1 | 1) => {
-      const { zoomLevel } = useConnectionStore.getState();
+      const store = useConnectionStore.getState();
       const next = Math.min(
         ZOOM_MAX,
-        Math.max(ZOOM_MIN, zoomLevel + direction),
+        Math.max(ZOOM_MIN, store.zoomLevel + direction),
       ) as ZoomLevel;
-      if (next === zoomLevel) return;
-      useConnectionStore.setState({ zoomLevel: next });
+      if (next === store.zoomLevel) return;
+      // Set local state first for immediate visual feedback
+      store.setZoomLevel(next);
       zoomAbort?.abort();
       const ctrl = new AbortController();
       zoomAbort = ctrl;

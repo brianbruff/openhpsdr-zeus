@@ -11,6 +11,7 @@ import { DriveSlider } from './components/DriveSlider';
 import { MicGainSlider } from './components/MicGainSlider';
 import { MicMeter } from './components/MicMeter';
 import { MobilePttButton } from './components/MobilePttButton';
+import { MobileZoomSlider } from './components/MobileZoomSlider';
 import { ModeBandwidth } from './components/ModeBandwidth';
 import { MoxButton } from './components/MoxButton';
 import { Panadapter } from './components/Panadapter';
@@ -721,6 +722,10 @@ export default function App() {
             >
               {connected && <Panadapter />}
               {connected && <Waterfall transparent={terminatorActive} />}
+            </div>
+            {/* Mobile vertical zoom slider — hidden on desktop via CSS */}
+            <div className="show-mobile" style={{ display: 'none' }}>
+              <MobileZoomSlider />
             </div>
           </div>
         </div>

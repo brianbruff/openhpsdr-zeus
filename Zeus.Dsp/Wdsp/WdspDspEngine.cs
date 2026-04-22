@@ -622,14 +622,17 @@ public sealed class WdspDspEngine : IDspEngine
 
             // Explicit clean-slate TX chain state. WDSP initializes these
             // "off" at channel-create, but asserting them makes the baseline
-            // deterministic and independent of the library build. Leveler
-            // and Compressor are Thetis-factory-ON per its database profile,
-            // but we keep them OFF here until they're wired to operator UI
-            // and tuned — enabling them with library-default parameters can
-            // mask or create new distortion on its own. ALC stays on (see
-            // SetTXAALCSt below; never 0). AMSQ is the mic noise gate and
-            // shouldn't shape SSB audio.
-            NativeMethods.SetTXALevelerSt(id, 0);
+            // deterministic and independent of the library build. Leveler is
+            // Thetis-factory-ON (radio.cs:3018 tx_leveler_on = true) and is
+            // enabled here to match that default — a disabled Leveler stage
+            // also leaves GetTXAMeter(LVLR_PK) stuck at WDSP's -400 silence
+            // sentinel, which made the frontend LVLR bar look broken. Other
+            // stages (Compressor, CFC, PHROT, osctrl, EQ, AMSQ) remain OFF
+            // until they're wired to operator UI and tuned — enabling them
+            // with library-default parameters can mask or create distortion.
+            // ALC stays on (see SetTXAALCSt below; never 0). AMSQ is the mic
+            // noise gate and shouldn't shape SSB audio.
+            NativeMethods.SetTXALevelerSt(id, 1);
             NativeMethods.SetTXACompressorRun(id, 0);
             NativeMethods.SetTXACFCOMPRun(id, 0);
             NativeMethods.SetTXAPHROTRun(id, 0);
@@ -640,7 +643,7 @@ public sealed class WdspDspEngine : IDspEngine
 
             _txaChannelId = id;
             _log.LogInformation(
-                "wdsp.openTxChannel id={Id} chain=[alc=1 lvlr=0 cpdr=0 cfc=0 phrot=0 osctrl=0 eq=0 amsq=0] bp=150..2850 panelGain=1.0",
+                "wdsp.openTxChannel id={Id} chain=[alc=1 lvlr=1 cpdr=0 cfc=0 phrot=0 osctrl=0 eq=0 amsq=0] bp=150..2850 panelGain=1.0 (Leveler enabled to match Thetis default)",
                 id);
             return id;
         }

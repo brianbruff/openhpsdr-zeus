@@ -656,8 +656,18 @@ public class WdspDspEngineTests
             var mic = new float[block];
             var iq = new float[2 * block];
 
-            // Build a synthetic mic block: 1 kHz tone at amplitude 0.1
-            const double Amplitude = 0.1;
+            // Build a synthetic mic block: 1 kHz tone at amplitude 0.01.
+            //
+            // Input amplitude is kept ≤ 0.05 so both the 1x and 10x cases
+            // stay below the Leveler's compression knee (WDSP defaults:
+            // out_targ = 1.05, max_gain = 1.778 — see TXA.c:169,173).
+            // Testing panel-gain linearity above that point would be
+            // testing the Leveler, not the gain. The Leveler is on by
+            // default to match Thetis (radio.cs:3018 tx_leveler_on = true),
+            // so this amplitude choice is tied to that default — if the
+            // Leveler default ever flips off, the amplitude can be raised
+            // back to 0.1 without loss of meaning.
+            const double Amplitude = 0.01;
             const double ToneHz = 1000.0;
             const int SampleRate = 48_000;
             for (int n = 0; n < block; n++)
@@ -674,7 +684,11 @@ public class WdspDspEngineTests
             // Measure RMS of IQ output at gain=1.0
             double rms1 = ComputeRms(iq);
 
-            // Now set gain to 10.0 (20 dB) and process again
+            // Now set gain to 10.0 (20 dB) and process again. With
+            // Amplitude = 0.01, the 10x intermediate signal peaks near 0.1,
+            // well under the Leveler's out_targ of 1.05, so the Leveler
+            // stays in unity-gain pass-through and the ratio reflects
+            // panel-gain alone.
             engine.SetTxPanelGain(10.0);
             for (int k = 0; k < 16; k++)
                 engine.ProcessTxBlock(mic, iq);

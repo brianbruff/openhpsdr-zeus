@@ -51,8 +51,17 @@ public sealed class WdspWisdomInitializer
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "Zeus");
             Directory.CreateDirectory(dir);
-            _log.LogInformation("wdsp.wisdom initialising dir={Dir}", dir);
-            int result = NativeMethods.WDSPwisdom(dir);
+
+            // WDSP's wisdom.c does a plain strcat of "wdspWisdom00" onto the
+            // directory without inserting a path separator (see native/wdsp/
+            // wisdom.c:49-50). Pass the directory with a trailing separator so
+            // the native side produces a valid "<dir>/wdspWisdom00" path
+            // instead of "<dir>wdspWisdom00" which lands the wisdom file one
+            // level up.
+            var dirForNative = dir + Path.DirectorySeparatorChar;
+
+            _log.LogInformation("wdsp.wisdom initialising dir={Dir}", dirForNative);
+            int result = NativeMethods.WDSPwisdom(dirForNative);
             var status = Marshal.PtrToStringUTF8(NativeMethods.wisdom_get_status()) ?? string.Empty;
             _log.LogInformation(
                 "wdsp.wisdom ready result={Result} ({Source}) status={Status}",

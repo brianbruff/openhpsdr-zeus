@@ -51,14 +51,19 @@ import {
 import { getAudioClient } from '../audio/audio-client';
 import { useConnectionStore } from '../state/connection-store';
 import { useTxStore } from '../state/tx-store';
+import {
+  useConnectStore,
+  type ProtocolChoice,
+  type SampleRate,
+  type SavedEndpoint,
+} from '../state/connect-store';
 
 const DISCOVERY_INTERVAL_MS = 10_000;
 const DEFAULT_DATA_PORT = 1024;
 const DEFAULT_SAMPLE_RATE = 192_000;
-// Only surface the error + Retry button after this many consecutive failed
-// scans — a single transient timeout during hand-off shouldn't startle the
-// user.
 const RETRY_THRESHOLD = 2;
+const IPV4_RE = /^(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d?\d)$/;
+const SAMPLE_RATES: SampleRate[] = [48_000, 96_000, 192_000, 384_000];
 
 function endpointFor(r: RadioInfoDto): string {
   if (!r.ipAddress) return '';
@@ -70,6 +75,17 @@ function endpointFor(r: RadioInfoDto): string {
 function errorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+// Post-connect side-effects shared by discover-click and manual-connect: push
+// persisted TX values so the radio doesn't key at its boot default, and resume
+// the AudioContext on the gesture so the user doesn't need a second Play click.
+function applyPostConnectEffects() {
+  void getAudioClient().start();
+  const tx = useTxStore.getState();
+  void setDrive(tx.drivePercent).catch(() => {});
+  void setMicGain(tx.micGainDb).catch(() => {});
+  void setLevelerMaxGain(tx.levelerMaxGainDb).catch(() => {});
 }
 
 export function ConnectPanel() {
@@ -88,14 +104,29 @@ export function ConnectPanel() {
   const wisdomPhase = useConnectionStore((s) => s.wisdomPhase);
   const dspPreparing = wisdomPhase === 'building';
 
+  const mode = useConnectStore((s) => s.mode);
+  const setMode = useConnectStore((s) => s.setMode);
+  const savedEndpoints = useConnectStore((s) => s.savedEndpoints);
+  const saveEndpoint = useConnectStore((s) => s.saveEndpoint);
+  const removeEndpoint = useConnectStore((s) => s.removeEndpoint);
+  const touchEndpoint = useConnectStore((s) => s.touchEndpoint);
+  const manualFormDefaults = useConnectStore((s) => s.manualFormDefaults);
+  const setManualFormDefaults = useConnectStore((s) => s.setManualFormDefaults);
+  const lastConnectedId = useConnectStore((s) => s.lastConnectedId);
+
   const [radios, setRadios] = useState<RadioInfoDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [failureCount, setFailureCount] = useState(0);
   const inflightRef = useRef(false);
-  // Trigger for the discovery loop to fire a scan immediately instead of
-  // waiting for its next 10-second tick. Bumping this re-runs the effect.
   const [retryNonce, setRetryNonce] = useState(0);
+
+  const [manualIp, setManualIp] = useState(manualFormDefaults.ip);
+  const [manualPort, setManualPort] = useState(manualFormDefaults.port);
+  const [manualProtocol, setManualProtocol] = useState<ProtocolChoice>(manualFormDefaults.protocol);
+  const [manualSampleRate, setManualSampleRate] = useState<SampleRate>(manualFormDefaults.sampleRate);
+  const [manualSave, setManualSave] = useState(true);
+  const [manualError, setManualError] = useState<string | null>(null);
 
   useEffect(() => {
     inflightRef.current = inflight;
@@ -113,6 +144,8 @@ export function ConnectPanel() {
     return () => ctrl.abort();
   }, [applyState]);
 
+  // Discovery polling keeps running while Manual mode is active (PRD §6.2
+  // proposal): toggling back to Discover shows fresh results immediately.
   useEffect(() => {
     if (status === 'Connected') return;
     let cancelled = false;
@@ -156,10 +189,7 @@ export function ConnectPanel() {
       setError(null);
       try {
         if (isP2) {
-          await apiConnectP2({
-            endpoint: ep,
-            sampleRate: 48_000,
-          });
+          await apiConnectP2({ endpoint: ep, sampleRate: 48_000 });
           const fresh = await fetchState();
           applyState(fresh);
         } else {
@@ -171,27 +201,7 @@ export function ConnectPanel() {
         }
         setBoardId(r.boardId || null);
         setLastConnectedEndpoint(ep || null);
-        // Auto-unmute on connect: the user's Connect click is the gesture
-        // that satisfies the browser's autoplay policy, so AudioContext can
-        // resume here without a second Play click. If the user has already
-        // started audio this is a no-op (AudioClient.start short-circuits
-        // when already playing).
-        void getAudioClient().start();
-        // Push the TX store's persisted values to the freshly-connected
-        // radio. Drive and mic-gain live in localStorage (zustand persist)
-        // so the slider thumb shows the right number immediately, but the
-        // HL2/backend has no memory of the last session — without these
-        // POSTs the radio runs on its boot defaults while the UI reads the
-        // user's saved value, so the first MOX would transmit at the wrong
-        // power. Fire-and-forget: the sliders themselves will retry on the
-        // next drag, and a transient failure here isn't worth surfacing.
-        const tx = useTxStore.getState();
-        void setDrive(tx.drivePercent).catch(() => {});
-        void setMicGain(tx.micGainDb).catch(() => {});
-        // Leveler max-gain is stateless across backend restart; re-POST the
-        // persisted value so the radio uses our preference instead of the
-        // server default (+5 dB).
-        void setLevelerMaxGain(tx.levelerMaxGainDb).catch(() => {});
+        applyPostConnectEffects();
       } catch (err) {
         setError(errorMessage(err));
       } finally {
@@ -201,15 +211,62 @@ export function ConnectPanel() {
     [applyState, setBoardId, setInflight, setLastConnectedEndpoint],
   );
 
+  const handleManualConnect = useCallback(
+    async (override?: Partial<SavedEndpoint>) => {
+      if (inflightRef.current) return;
+      const ip = (override?.ip ?? manualIp).trim();
+      const port = override?.port ?? manualPort;
+      const protocol: ProtocolChoice = override?.protocol ?? manualProtocol;
+      const sampleRate: SampleRate = (override?.sampleRate as SampleRate | undefined)
+        ?? (protocol === 'P2' ? 48_000 : manualSampleRate);
+      const label = override?.label;
+
+      if (!IPV4_RE.test(ip)) {
+        setManualError('Enter a valid IPv4 address, e.g. 192.168.1.20');
+        return;
+      }
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        setManualError('Port must be between 1 and 65535');
+        return;
+      }
+
+      const ep = `${ip}:${port}`;
+      setInflight(true);
+      setManualError(null);
+      try {
+        if (protocol === 'P2') {
+          await apiConnectP2({ endpoint: ep, sampleRate: 48_000 });
+          const fresh = await fetchState();
+          applyState(fresh);
+        } else {
+          const next = await apiConnect({ endpoint: ep, sampleRate });
+          applyState(next);
+        }
+        setBoardId(null);
+        setLastConnectedEndpoint(ep);
+        applyPostConnectEffects();
+        if (manualSave || override) {
+          saveEndpoint({ label, ip, port, protocol, sampleRate });
+        }
+        setManualFormDefaults({ ip, port, protocol, sampleRate, label: '' });
+      } catch (err) {
+        setManualError(errorMessage(err));
+      } finally {
+        setInflight(false);
+      }
+    },
+    [
+      manualIp, manualPort, manualProtocol, manualSampleRate,
+      manualSave, applyState, setBoardId, setInflight, setLastConnectedEndpoint,
+      saveEndpoint, setManualFormDefaults,
+    ],
+  );
+
   const handleDisconnect = useCallback(async () => {
     if (inflightRef.current) return;
     setInflight(true);
     setError(null);
     try {
-      // Try P1 disconnect first; if the server reports it's a P2 session
-      // (no P1 client active), fall back to the P2 endpoint. Fire both as a
-      // safety net — each is idempotent and returns cleanly if nothing is
-      // connected on its side.
       try { await apiDisconnect(); } catch { /* may be P2 */ }
       try { await apiDisconnectP2(); } catch { /* may have been P1 */ }
       const fresh = await fetchState();
@@ -229,9 +286,6 @@ export function ConnectPanel() {
     setRetryNonce((n) => n + 1);
   }, []);
 
-  // Float the last-connected radio to the top so one-tap reconnect lands on
-  // the right row without the user scanning the list. Falls back to the
-  // server's discovery order for everything else.
   const sortedRadios = useMemo(() => {
     if (!radios || !lastConnectedEndpoint) return radios;
     const preferred: RadioInfoDto[] = [];
@@ -242,6 +296,12 @@ export function ConnectPanel() {
     }
     return [...preferred, ...rest];
   }, [radios, lastConnectedEndpoint]);
+
+  const sortedSaved = useMemo(() => {
+    return [...savedEndpoints].sort((a, b) =>
+      b.lastUsedUtc.localeCompare(a.lastUsedUtc),
+    );
+  }, [savedEndpoints]);
 
   const showError = error !== null && failureCount >= RETRY_THRESHOLD;
 
@@ -275,125 +335,470 @@ export function ConnectPanel() {
           : 'Refreshes every 10 s';
 
   return (
-    <div className="panel" style={{ padding: 16, minWidth: 420, maxWidth: 540 }}>
+    <div className="panel" style={{ padding: 0, minWidth: 460, maxWidth: 580 }}>
+      <div
+        style={{
+          position: 'relative',
+          height: 140,
+          overflow: 'hidden',
+          borderBottom: '1px solid var(--panel-border)',
+          background:
+            'radial-gradient(ellipse at center, #1a2740 0%, #0a0f18 70%, #05080d 100%)',
+        }}
+      >
+        <img
+          src="/zeus-hero.png"
+          alt=""
+          aria-hidden
+          style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            height: '110%',
+            width: 'auto',
+            objectFit: 'contain',
+            filter: 'drop-shadow(0 4px 10px rgba(0,0,0,0.7))',
+            pointerEvents: 'none',
+          }}
+        />
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background:
+              'linear-gradient(180deg, rgba(0,0,0,0) 55%, rgba(0,0,0,0.55) 100%)',
+            pointerEvents: 'none',
+          }}
+        />
+      </div>
+
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          marginBottom: 10,
+          padding: '8px 14px',
+          borderBottom: '1px solid var(--panel-border)',
+          background: 'var(--bg-1)',
         }}
       >
         <span className="label-xs" style={{ fontSize: 11, letterSpacing: '0.14em' }}>
-          DISCOVER RADIO
+          Discover Radio
         </span>
         <span className="label-xs" style={{ color: 'var(--fg-3)' }}>
           {scanning && <span aria-hidden>· </span>}
           {statusRight}
         </span>
       </div>
-      {showError && (
+
+      <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div
+          role="tablist"
+          aria-label="Connect mode"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gap: 4,
+            padding: 3,
+            background: 'var(--bg-0)',
+            border: '1px solid var(--panel-border)',
+            borderRadius: 'var(--r-sm)',
+          }}
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'discover'}
+            onClick={() => setMode('discover')}
+            className={`btn sm ${mode === 'discover' ? 'orange' : 'ghost'}`}
+          >
+            Discover
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'manual'}
+            onClick={() => setMode('manual')}
+            className={`btn sm ${mode === 'manual' ? 'orange' : 'ghost'}`}
+          >
+            Manual
+          </button>
+        </div>
+
+        {mode === 'discover' ? (
+          <>
+            {showError && (
+              <div
+                className="mono"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '6px 10px',
+                  background: 'rgba(230,58,43,0.12)',
+                  border: '1px solid rgba(230,58,43,0.35)',
+                  borderRadius: 4,
+                  color: 'var(--tx)',
+                  fontSize: 11,
+                }}
+              >
+                <span>{error}</span>
+                <button type="button" onClick={handleRetry} className="btn sm">
+                  Retry
+                </button>
+              </div>
+            )}
+            {sortedRadios === null ? (
+              <div className="label-xs" style={{ color: 'var(--fg-3)' }}>
+                Scanning LAN…
+              </div>
+            ) : sortedRadios.length === 0 ? (
+              <div className="label-xs" style={{ color: 'var(--fg-3)' }}>
+                No radios found. Check power, ethernet, and subnet — or switch to Manual.
+              </div>
+            ) : (
+              <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {sortedRadios.map((r) => {
+                  const ep = endpointFor(r);
+                  const isLast = !!ep && ep === lastConnectedEndpoint;
+                  const protocol = r.details?.protocol ?? 'P1';
+                  const isP2 = protocol === 'P2';
+                  return (
+                    <li
+                      key={r.macAddress || r.ipAddress}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 10,
+                        padding: '6px 10px',
+                        background: 'var(--bg-2)',
+                        border: '1px solid var(--panel-border)',
+                        borderRadius: 4,
+                      }}
+                    >
+                      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                        <span style={{ color: 'var(--fg-0)', fontSize: 12, fontWeight: 600 }}>
+                          {r.boardId || 'radio'}{' '}
+                          <span className="label-xs" style={{ color: 'var(--fg-3)' }}>
+                            fw {r.firmwareVersion || '?'}
+                          </span>
+                          <span
+                            className="chip"
+                            style={{ marginLeft: 6 }}
+                            title={`Discovered via Protocol ${protocol === 'P2' ? '2' : '1'}`}
+                          >
+                            <span className="v">{protocol}</span>
+                          </span>
+                          {isLast && (
+                            <span className="chip accent" style={{ marginLeft: 6 }} title="Last connected radio">
+                              <span className="v">LAST</span>
+                            </span>
+                          )}
+                        </span>
+                        <span className="mono label-xs" style={{ color: 'var(--fg-3)' }}>
+                          {ep || '—'} · {r.macAddress || '—'}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleConnect(r)}
+                        disabled={r.busy || inflight || (dspPreparing && !isP2)}
+                        title={
+                          r.busy
+                            ? 'Radio is busy (in use by another client)'
+                            : dspPreparing && !isP2
+                              ? 'DSP is preparing FFTW plans (first-run only, up to ~2 min)'
+                              : isP2
+                                ? 'Protocol 2 path — experimental, RX only'
+                                : undefined
+                        }
+                        className={`btn sm ${r.busy ? '' : 'orange'} ${dspPreparing && !isP2 ? 'pulsing' : ''}`}
+                      >
+                        {r.busy
+                          ? 'Busy'
+                          : dspPreparing && !isP2
+                            ? 'Preparing DSP…'
+                            : inflight
+                              ? 'Connecting…'
+                              : 'Connect'}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </>
+        ) : (
+          <ManualMode
+            ip={manualIp}
+            setIp={setManualIp}
+            port={manualPort}
+            setPort={setManualPort}
+            protocol={manualProtocol}
+            setProtocol={setManualProtocol}
+            sampleRate={manualSampleRate}
+            setSampleRate={setManualSampleRate}
+            save={manualSave}
+            setSave={setManualSave}
+            error={manualError}
+            onConnect={() => handleManualConnect()}
+            inflight={inflight}
+            dspPreparing={dspPreparing}
+            savedEndpoints={sortedSaved}
+            lastConnectedId={lastConnectedId}
+            onReconnect={(e) => {
+              setManualIp(e.ip);
+              setManualPort(e.port);
+              setManualProtocol(e.protocol);
+              setManualSampleRate(e.sampleRate);
+              touchEndpoint(e.id);
+              void handleManualConnect(e);
+            }}
+            onRemove={removeEndpoint}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface ManualModeProps {
+  ip: string; setIp: (v: string) => void;
+  port: number; setPort: (v: number) => void;
+  protocol: ProtocolChoice; setProtocol: (v: ProtocolChoice) => void;
+  sampleRate: SampleRate; setSampleRate: (v: SampleRate) => void;
+  save: boolean; setSave: (v: boolean) => void;
+  error: string | null;
+  onConnect: () => void;
+  inflight: boolean;
+  dspPreparing: boolean;
+  savedEndpoints: SavedEndpoint[];
+  lastConnectedId: string | undefined;
+  onReconnect: (e: SavedEndpoint) => void;
+  onRemove: (id: string) => void;
+}
+
+const inputStyle: React.CSSProperties = {
+  background: 'var(--bg-0)',
+  color: 'var(--fg-0)',
+  border: '1px solid var(--panel-border)',
+  borderRadius: 'var(--r-sm)',
+  padding: '5px 8px',
+  fontFamily: 'var(--font-mono)',
+  fontSize: 12,
+  outline: 'none',
+  width: '100%',
+};
+
+const fieldLabelStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 3,
+};
+
+function ManualMode(p: ManualModeProps) {
+  const p2Disabled = p.protocol === 'P2';
+  const canConnect = !p.inflight && !(p.dspPreparing && p.protocol === 'P1');
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 110px',
+          gap: 8,
+        }}
+      >
+        <label style={fieldLabelStyle}>
+          <span className="label-xs" style={{ color: 'var(--fg-2)' }}>IP address</span>
+          <input
+            type="text"
+            inputMode="decimal"
+            spellCheck={false}
+            value={p.ip}
+            onChange={(e) => p.setIp(e.target.value)}
+            placeholder="192.168.1.20"
+            style={inputStyle}
+          />
+        </label>
+        <label style={fieldLabelStyle}>
+          <span className="label-xs" style={{ color: 'var(--fg-2)' }}>Port</span>
+          <input
+            type="number"
+            min={1}
+            max={65535}
+            value={p.port}
+            onChange={(e) => p.setPort(Number(e.target.value))}
+            style={inputStyle}
+          />
+        </label>
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: 8,
+        }}
+      >
+        <div style={fieldLabelStyle}>
+          <span className="label-xs" style={{ color: 'var(--fg-2)' }}>Protocol</span>
+          <div style={{ display: 'flex', gap: 4 }}>
+            <button
+              type="button"
+              onClick={() => p.setProtocol('P1')}
+              className={`btn sm ${p.protocol === 'P1' ? 'orange' : 'ghost'}`}
+              style={{ flex: 1 }}
+            >
+              P1
+            </button>
+            <button
+              type="button"
+              onClick={() => p.setProtocol('P2')}
+              className={`btn sm ${p.protocol === 'P2' ? 'orange' : 'ghost'}`}
+              style={{ flex: 1 }}
+              title="Protocol 2 — experimental, RX only"
+            >
+              P2
+            </button>
+          </div>
+        </div>
+        <label style={fieldLabelStyle}>
+          <span className="label-xs" style={{ color: 'var(--fg-2)' }}>
+            Sample rate {p2Disabled && <span style={{ color: 'var(--fg-3)' }}>· forced 48k on P2</span>}
+          </span>
+          <select
+            value={p2Disabled ? 48_000 : p.sampleRate}
+            disabled={p2Disabled}
+            onChange={(e) => p.setSampleRate(Number(e.target.value) as SampleRate)}
+            style={{ ...inputStyle, opacity: p2Disabled ? 0.5 : 1, cursor: p2Disabled ? 'not-allowed' : 'pointer' }}
+          >
+            {SAMPLE_RATES.map((r) => (
+              <option key={r} value={r}>{r / 1000} kHz</option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--fg-2)' }}>
+        <input
+          type="checkbox"
+          checked={p.save}
+          onChange={(e) => p.setSave(e.target.checked)}
+        />
+        Save for next time
+      </label>
+
+      {p.error && (
         <div
           className="mono"
           style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
             padding: '6px 10px',
             background: 'rgba(230,58,43,0.12)',
             border: '1px solid rgba(230,58,43,0.35)',
             borderRadius: 4,
             color: 'var(--tx)',
-            marginBottom: 8,
             fontSize: 11,
           }}
         >
-          <span>{error}</span>
-          <button type="button" onClick={handleRetry} className="btn sm">
-            Retry
-          </button>
+          {p.error}
         </div>
       )}
-      {sortedRadios === null ? (
-        <div className="label-xs" style={{ color: 'var(--fg-3)' }}>
-          Scanning LAN…
-        </div>
-      ) : sortedRadios.length === 0 ? (
-        <div className="label-xs" style={{ color: 'var(--fg-3)' }}>
-          No radios found. Check power, ethernet, and subnet.
-        </div>
-      ) : (
-        <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {sortedRadios.map((r) => {
-            const ep = endpointFor(r);
-            const isLast = !!ep && ep === lastConnectedEndpoint;
-            const protocol = r.details?.protocol ?? 'P1';
-            const isP2 = protocol === 'P2';
-            return (
-              <li
-                key={r.macAddress || r.ipAddress}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 10,
-                  padding: '6px 10px',
-                  background: 'var(--bg-2)',
-                  border: '1px solid var(--panel-border)',
-                  borderRadius: 4,
-                }}
-              >
-                <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                  <span style={{ color: 'var(--fg-0)', fontSize: 12, fontWeight: 600 }}>
-                    {r.boardId || 'radio'}{' '}
-                    <span className="label-xs" style={{ color: 'var(--fg-3)' }}>
-                      fw {r.firmwareVersion || '?'}
-                    </span>
-                    <span
-                      className="chip"
-                      style={{ marginLeft: 6 }}
-                      title={`Discovered via Protocol ${protocol === 'P2' ? '2' : '1'}`}
-                    >
-                      <span className="v">{protocol}</span>
-                    </span>
-                    {isLast && (
-                      <span className="chip accent" style={{ marginLeft: 6 }} title="Last connected radio">
-                        <span className="v">LAST</span>
-                      </span>
-                    )}
-                  </span>
-                  <span className="mono label-xs" style={{ color: 'var(--fg-3)' }}>
-                    {ep || '—'} · {r.macAddress || '—'}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleConnect(r)}
-                  disabled={r.busy || inflight || (dspPreparing && !isP2)}
-                  title={
-                    r.busy
-                      ? 'Radio is busy (in use by another client)'
-                      : dspPreparing && !isP2
-                        ? 'DSP is preparing FFTW plans (first-run only, up to ~2 min)'
-                        : isP2
-                          ? 'Protocol 2 path — experimental, RX only'
-                          : undefined
-                  }
-                  className={`btn sm ${r.busy ? '' : 'active'} ${dspPreparing && !isP2 ? 'pulsing' : ''}`}
+
+      <button
+        type="button"
+        onClick={p.onConnect}
+        disabled={!canConnect}
+        className={`btn lg ${canConnect ? 'orange' : ''} ${p.dspPreparing && p.protocol === 'P1' ? 'pulsing' : ''}`}
+        style={{ alignSelf: 'stretch' }}
+      >
+        {p.inflight
+          ? 'Connecting…'
+          : p.dspPreparing && p.protocol === 'P1'
+            ? 'Preparing DSP…'
+            : 'Connect'}
+      </button>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+        <span className="label-xs" style={{ color: 'var(--fg-3)' }}>Saved endpoints</span>
+        {p.savedEndpoints.length === 0 ? (
+          <div
+            className="label-xs"
+            style={{
+              color: 'var(--fg-3)',
+              textTransform: 'none',
+              letterSpacing: 0,
+              fontSize: 11,
+              padding: '10px 12px',
+              background: 'var(--bg-2)',
+              border: '1px dashed var(--panel-border)',
+              borderRadius: 4,
+              textAlign: 'center',
+            }}
+          >
+            Connect manually and leave "Save for next time" ticked to see saved endpoints here.
+          </div>
+        ) : (
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {p.savedEndpoints.map((e) => {
+              const isLast = e.id === p.lastConnectedId;
+              return (
+                <li
+                  key={e.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                    padding: '6px 10px',
+                    background: 'var(--bg-2)',
+                    border: '1px solid var(--panel-border)',
+                    borderRadius: 4,
+                  }}
                 >
-                  {r.busy
-                    ? 'Busy'
-                    : dspPreparing && !isP2
-                      ? 'Preparing DSP…'
-                      : inflight
-                        ? 'Connecting…'
-                        : 'Connect'}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+                  <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                    <span style={{ color: 'var(--fg-0)', fontSize: 12, fontWeight: 600 }}>
+                      {e.label || `${e.ip}:${e.port}`}
+                      <span className="chip" style={{ marginLeft: 6 }}>
+                        <span className="v">{e.protocol}</span>
+                      </span>
+                      {isLast && (
+                        <span className="chip accent" style={{ marginLeft: 6 }}>
+                          <span className="v">LAST</span>
+                        </span>
+                      )}
+                    </span>
+                    <span className="mono label-xs" style={{ color: 'var(--fg-3)' }}>
+                      {e.ip}:{e.port} · {e.sampleRate / 1000} kHz
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    <button
+                      type="button"
+                      onClick={() => p.onReconnect(e)}
+                      disabled={p.inflight}
+                      className={`btn sm ${p.inflight ? '' : 'orange'}`}
+                    >
+                      Connect
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => p.onRemove(e.id)}
+                      disabled={p.inflight}
+                      className="btn sm ghost"
+                      title="Remove from saved endpoints"
+                      aria-label="Remove saved endpoint"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }

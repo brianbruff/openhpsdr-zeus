@@ -6,6 +6,9 @@ zeus-web/dist/
 zeus-web/dev-dist/
 Zeus.Server/wwwroot/
 
+# TypeScript incremental-build cache — rewritten on every `tsc -b`, never code
+*.tsbuildinfo
+
 # .NET
 **/bin/
 **/obj/

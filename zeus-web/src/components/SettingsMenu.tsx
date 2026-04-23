@@ -16,29 +16,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { PaSettingsPanel } from './PaSettingsPanel';
 
-type TabId =
-  | 'general'
-  | 'radio'
-  | 'dsp'
-  | 'display'
-  | 'audio'
-  | 'network'
-  | 'recording'
-  | 'keyboard'
-  | 'pa'
-  | 'advanced';
+type TabId = 'pa';
 
 const TABS: ReadonlyArray<{ id: TabId; label: string }> = [
-  { id: 'general', label: 'GENERAL' },
-  { id: 'radio', label: 'RADIO' },
-  { id: 'dsp', label: 'DSP' },
-  { id: 'display', label: 'DISPLAY' },
-  { id: 'audio', label: 'AUDIO' },
-  { id: 'network', label: 'NETWORK' },
-  { id: 'recording', label: 'RECORDING' },
-  { id: 'keyboard', label: 'KEYBOARD' },
   { id: 'pa', label: 'PA SETTINGS' },
-  { id: 'advanced', label: 'ADVANCED' },
 ];
 
 type Props = {
@@ -51,7 +32,7 @@ type Props = {
 // event-capture surface is the panel rectangle itself; everything outside
 // (panadapter, top-bar buttons) stays clickable.
 export function SettingsMenu({ open, onClose }: Props) {
-  const [active, setActive] = useState<TabId>('general');
+  const [active, setActive] = useState<TabId>('pa');
   // null = use the initial-centering flex layout on first render; after the
   // first drag (or the post-mount centering effect), a concrete {x,y} takes
   // over and the panel positions absolutely. Off-screen values are allowed —
@@ -119,118 +100,184 @@ export function SettingsMenu({ open, onClose }: Props) {
 
   if (!open) return null;
 
+  const basePanel: React.CSSProperties = {
+    position: 'fixed',
+    width: 'min(1100px, 92vw)',
+    height: 'min(640px, 85vh)',
+    zIndex: 50,
+    background: 'var(--bg-1)',
+    border: '1px solid var(--panel-border)',
+    borderRadius: 'var(--r-md)',
+    boxShadow: '0 20px 60px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.03)',
+    color: 'var(--fg-1)',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+  };
   const panelStyle: React.CSSProperties =
     pos === null
-      ? {
-          position: 'fixed',
-          left: '50%',
-          top: '50%',
-          transform: 'translate(-50%, -50%)',
-          width: 'min(1100px, 92vw)',
-          maxHeight: '85vh',
-          zIndex: 50,
-        }
-      : {
-          position: 'fixed',
-          left: `${pos.x}px`,
-          top: `${pos.y}px`,
-          width: 'min(1100px, 92vw)',
-          maxHeight: '85vh',
-          zIndex: 50,
-        };
+      ? { ...basePanel, left: '50%', top: '50%', transform: 'translate(-50%, -50%)' }
+      : { ...basePanel, left: `${pos.x}px`, top: `${pos.y}px` };
 
   return (
     <div
       ref={panelRef}
       style={panelStyle}
-      className="flex flex-col overflow-hidden rounded-lg border border-neutral-700 bg-neutral-900/95 shadow-2xl"
       role="dialog"
       aria-modal="false"
       aria-labelledby="settings-title"
     >
       <div
         onMouseDown={startDrag}
-        className="flex cursor-move select-none items-center justify-between border-b border-neutral-800 px-4 py-3"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          cursor: 'move',
+          userSelect: 'none',
+          height: 44,
+          padding: '0 14px',
+          background:
+            'linear-gradient(180deg, var(--panel-head-top), var(--panel-head-bot))',
+          borderBottom: '1px solid var(--panel-border)',
+          boxShadow: 'inset 0 1px 0 var(--panel-hl-top)',
+        }}
         title="Drag to move"
       >
         <h2
           id="settings-title"
-          className="text-sm font-semibold tracking-widest"
-          style={{ color: '#FFA028' }}
+          style={{
+            margin: 0,
+            fontSize: 12,
+            fontWeight: 700,
+            letterSpacing: '0.18em',
+            color: 'var(--fg-0)',
+            textTransform: 'uppercase',
+          }}
         >
-          SETTINGS
+          Settings
         </h2>
         <button
           type="button"
           onClick={onClose}
           onMouseDown={(e) => e.stopPropagation()}
           aria-label="Close"
-          className="rounded px-2 py-0.5 text-lg leading-none text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100"
+          style={{
+            width: 26,
+            height: 26,
+            borderRadius: 'var(--r-sm)',
+            color: 'var(--fg-2)',
+            fontSize: 18,
+            lineHeight: 1,
+            background: 'transparent',
+            cursor: 'pointer',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = 'rgba(255,255,255,0.06)';
+            e.currentTarget.style.color = 'var(--fg-0)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'transparent';
+            e.currentTarget.style.color = 'var(--fg-2)';
+          }}
         >
           ×
         </button>
       </div>
 
-      <div
-        className="flex flex-wrap gap-1 border-b border-neutral-800 px-3 py-2"
-        role="tablist"
-      >
-        {TABS.map((t) => {
-          const isActive = t.id === active;
-          return (
-            <button
-              key={t.id}
-              type="button"
-              role="tab"
-              aria-selected={isActive}
-              onClick={() => setActive(t.id)}
-              className="rounded px-3 py-1 text-xs font-semibold tracking-wider transition-colors"
-              style={
-                isActive
-                  ? { backgroundColor: '#FFA028', color: '#1a1a1a' }
-                  : undefined
-              }
-            >
-              <span
-                className={
-                  isActive ? '' : 'text-neutral-400 hover:text-neutral-100'
-                }
+      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+        <nav
+          role="tablist"
+          aria-label="Settings sections"
+          style={{
+            width: 168,
+            flexShrink: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            padding: '10px 8px',
+            background: 'var(--bg-0)',
+            borderRight: '1px solid var(--panel-border)',
+            overflowY: 'auto',
+          }}
+        >
+          {TABS.map((t) => {
+            const isActive = t.id === active;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => setActive(t.id)}
+                style={{
+                  textAlign: 'left',
+                  padding: '8px 12px',
+                  borderRadius: 'var(--r-sm)',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: '0.12em',
+                  textTransform: 'uppercase',
+                  color: isActive ? 'var(--fg-0)' : 'var(--fg-2)',
+                  background: isActive ? 'var(--bg-2)' : 'transparent',
+                  borderLeft: isActive
+                    ? '2px solid var(--accent)'
+                    : '2px solid transparent',
+                  cursor: 'pointer',
+                  transition: 'background var(--dur-fast), color var(--dur-fast)',
+                }}
+                onMouseEnter={(e) => {
+                  if (!isActive) {
+                    e.currentTarget.style.background = 'rgba(255,255,255,0.03)';
+                    e.currentTarget.style.color = 'var(--fg-1)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!isActive) {
+                    e.currentTarget.style.background = 'transparent';
+                    e.currentTarget.style.color = 'var(--fg-2)';
+                  }
+                }}
               >
                 {t.label}
-              </span>
-            </button>
-          );
-        })}
+              </button>
+            );
+          })}
+        </nav>
+
+        <div
+          role="tabpanel"
+          style={{
+            flex: 1,
+            minWidth: 0,
+            overflow: 'auto',
+            padding: '18px 22px',
+            background: 'var(--bg-1)',
+            color: 'var(--fg-1)',
+            fontSize: 12,
+          }}
+        >
+          <PaSettingsPanel />
+        </div>
       </div>
 
       <div
-        className="flex-1 overflow-auto px-6 py-6 text-sm text-neutral-300"
-        role="tabpanel"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+          gap: 6,
+          padding: '10px 14px',
+          background: 'var(--bg-0)',
+          borderTop: '1px solid var(--panel-border)',
+        }}
       >
-        {active === 'pa' ? (
-          <PaSettingsPanel />
-        ) : (
-          <p className="italic text-neutral-500">
-            {TABS.find((t) => t.id === active)?.label} settings — coming soon.
-          </p>
-        )}
-      </div>
-
-      <div className="flex items-center justify-between border-t border-neutral-800 px-4 py-3">
-        <button type="button" className="btn sm">
-          EXPORT SETTINGS
+        <button type="button" className="btn sm" onClick={onClose}>
+          CANCEL
         </button>
-        <div className="flex items-center gap-2">
-          <button type="button" className="btn sm" onClick={onClose}>
-            OK
-          </button>
-          <button type="button" className="btn sm" onClick={onClose}>
-            CANCEL
-          </button>
-          <button type="button" className="btn sm">
-            APPLY
-          </button>
-        </div>
+        <button type="button" className="btn sm active" onClick={onClose}>
+          APPLY
+        </button>
       </div>
     </div>
   );

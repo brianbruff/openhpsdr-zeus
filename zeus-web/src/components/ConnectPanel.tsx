@@ -454,7 +454,7 @@ export function ConnectPanel() {
             role="tab"
             aria-selected={mode === 'discover'}
             onClick={() => setMode('discover')}
-            className={`btn sm ${mode === 'discover' ? 'orange' : 'ghost'}`}
+            className={`btn sm ${mode === 'discover' ? 'active' : 'ghost'}`}
           >
             Discover
           </button>
@@ -463,7 +463,7 @@ export function ConnectPanel() {
             role="tab"
             aria-selected={mode === 'manual'}
             onClick={() => setMode('manual')}
-            className={`btn sm ${mode === 'manual' ? 'orange' : 'ghost'}`}
+            className={`btn sm ${mode === 'manual' ? 'active' : 'ghost'}`}
           >
             Manual
           </button>
@@ -557,7 +557,7 @@ export function ConnectPanel() {
                                 ? 'Protocol 2 path — experimental, RX only'
                                 : undefined
                         }
-                        className={`btn sm ${r.busy ? '' : 'orange'} ${dspPreparing && !isP2 ? 'pulsing' : ''}`}
+                        className={`btn sm ${r.busy ? '' : 'active'} ${dspPreparing && !isP2 ? 'pulsing' : ''}`}
                       >
                         {r.busy
                           ? 'Busy'
@@ -692,7 +692,7 @@ function ManualMode(p: ManualModeProps) {
             <button
               type="button"
               onClick={() => p.setProtocol('P1')}
-              className={`btn sm ${p.protocol === 'P1' ? 'orange' : 'ghost'}`}
+              className={`btn sm ${p.protocol === 'P1' ? 'active' : 'ghost'}`}
               style={{ flex: 1 }}
             >
               P1
@@ -700,7 +700,7 @@ function ManualMode(p: ManualModeProps) {
             <button
               type="button"
               onClick={() => p.setProtocol('P2')}
-              className={`btn sm ${p.protocol === 'P2' ? 'orange' : 'ghost'}`}
+              className={`btn sm ${p.protocol === 'P2' ? 'active' : 'ghost'}`}
               style={{ flex: 1 }}
               title="Protocol 2 — experimental, RX only"
             >
@@ -754,7 +754,7 @@ function ManualMode(p: ManualModeProps) {
         type="button"
         onClick={p.onConnect}
         disabled={!canConnect}
-        className={`btn lg ${canConnect ? 'orange' : ''} ${p.dspPreparing && p.protocol === 'P1' ? 'pulsing' : ''}`}
+        className={`btn lg ${canConnect ? 'active' : ''} ${p.dspPreparing && p.protocol === 'P1' ? 'pulsing' : ''}`}
         style={{ alignSelf: 'stretch' }}
       >
         {p.inflight
@@ -822,7 +822,7 @@ function ManualMode(p: ManualModeProps) {
                       type="button"
                       onClick={() => p.onReconnect(e)}
                       disabled={p.inflight}
-                      className={`btn sm ${p.inflight ? '' : 'orange'}`}
+                      className={`btn sm ${p.inflight ? '' : 'active'}`}
                     >
                       Connect
                     </button>

@@ -42,7 +42,7 @@ function OcBitCheckbox({
           const b = 1 << (bit - 1);
           onToggle(e.target.checked ? mask | b : mask & ~b);
         }}
-        className="h-3 w-3 accent-[#FFA028]"
+        className="h-3 w-3 accent-[#4a9eff]"
       />
       {bit}
     </label>
@@ -75,7 +75,7 @@ export function PaSettingsPanel() {
               type="checkbox"
               checked={settings.global.paEnabled}
               onChange={(e) => setGlobal({ paEnabled: e.target.checked })}
-              className="h-4 w-4 accent-[#FFA028]"
+              className="h-4 w-4 accent-[#4a9eff]"
             />
             PA Enabled
           </label>
@@ -153,7 +153,7 @@ export function PaSettingsPanel() {
                         type="checkbox"
                         checked={b.disablePa}
                         onChange={(e) => setBand(b.band, { disablePa: e.target.checked })}
-                        className="h-3 w-3 accent-[#FFA028]"
+                        className="h-3 w-3 accent-[#4a9eff]"
                       />
                     </td>
                     <td className="px-2 py-1">

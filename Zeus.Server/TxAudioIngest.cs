@@ -107,27 +107,35 @@ public sealed class TxAudioIngest : IDisposable
         TxService tx,
         StreamingHub hub,
         ILogger<TxAudioIngest> log)
-        : this(ring, () => pipeline.CurrentEngine, () => tx.IsMoxOn, hub, log)
+        : this(ring, () => pipeline.CurrentEngine, () => tx.IsMoxOn, hub, log,
+               forwardP2: iq => pipeline.ForwardTxIqToP2(iq.Span))
     {
     }
 
     /// <summary>Test-only constructor that wires the engine + MOX lookups
-    /// through plain delegates so unit tests don't need a live pipeline.</summary>
+    /// through plain delegates so unit tests don't need a live pipeline.
+    /// <paramref name="forwardP2"/> is called with the same IQ block that's
+    /// handed to the P1 ring so mic MOX on a Protocol 2 radio (G2 MkII) has
+    /// a TX path. Null in tests that don't exercise the P2 forward.</summary>
     internal TxAudioIngest(
         TxIqRing ring,
         Func<IDspEngine?> engineProvider,
         Func<bool> isMoxOn,
         StreamingHub hub,
-        ILogger<TxAudioIngest> log)
+        ILogger<TxAudioIngest> log,
+        Action<ReadOnlyMemory<float>>? forwardP2 = null)
     {
         _ring = ring;
         _engineProvider = engineProvider;
         _isMoxOn = isMoxOn;
+        _forwardP2 = forwardP2;
         _hub = hub;
         _log = log;
         _handler = OnMicPcmBytes;
         _hub.MicPcmReceived += _handler;
     }
+
+    private readonly Action<ReadOnlyMemory<float>>? _forwardP2;
 
     public long TotalMicSamples { get { lock (_sync) return _totalMicSamples; } }
     public long TotalTxBlocks { get { lock (_sync) return _totalTxBlocks; } }
@@ -214,7 +222,13 @@ public sealed class TxAudioIngest : IDisposable
                     new Span<float>(_scratchIq, 0, 2 * iqOut));
                 if (produced > 0)
                 {
-                    _ring.Write(new ReadOnlySpan<float>(_scratchIq, 0, 2 * produced));
+                    var iqSpan = new ReadOnlySpan<float>(_scratchIq, 0, 2 * produced);
+                    // P1 path — EP2 packer in Protocol1Client drains the ring.
+                    _ring.Write(iqSpan);
+                    // P2 path — Protocol2Client's 1029-port DUC sender. No-op
+                    // when P2 isn't the active backend so both protocols share
+                    // this seam cleanly. Mirrors TxTuneDriver's dual-write.
+                    _forwardP2?.Invoke(new ReadOnlyMemory<float>(_scratchIq, 0, 2 * produced));
                     _totalTxBlocks++;
 
                     // Accumulate peaks for the 1 Hz diagnostic log.

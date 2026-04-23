@@ -109,17 +109,6 @@ export type Contact = {
   qrzUrl?: string;
 };
 
-// Central-US home station — placeholder so the default great-circle runs
-// Ireland ↔ North America. Swap in the operator's real call/grid once the
-// backend surfaces it.
-export const HOME = {
-  call: 'W0NER',
-  lat: 38.63,
-  lon: -90.2,
-  grid: 'EM48',
-  name: 'Home',
-};
-
 export const CONTACTS: Record<string, Contact> = {
   EI6LF: {
     callsign: 'EI6LF',

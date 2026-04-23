@@ -70,7 +70,7 @@ export interface WorkspaceCtx {
   mapAvailable: boolean;
   setMapAvailable: (v: boolean) => void;
   mapInteractive: boolean;
-  effectiveHome: EffectiveHome;
+  effectiveHome: EffectiveHome | null;
   beamOverrideDeg: number | null;
   setBeamOverrideDeg: (v: number | null) => void;
   beamInputStr: string;

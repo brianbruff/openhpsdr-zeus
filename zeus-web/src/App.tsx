@@ -63,7 +63,7 @@ import { VfoDisplay } from './components/VfoDisplay';
 import { Waterfall } from './components/Waterfall';
 import { ZoomControl } from './components/ZoomControl';
 import { AzimuthMap } from './components/design/AzimuthMap';
-import { CONTACTS, HOME, bandOf } from './components/design/data';
+import { CONTACTS, bandOf } from './components/design/data';
 import { CwKeyer } from './components/design/CwKeyer';
 import { Dockable } from './components/design/Dockable';
 import { DspPanel } from './components/DspPanel';
@@ -359,9 +359,8 @@ export default function App() {
   // --- Tx status chip
   const txChip = moxOn || tunOn ? 'TX' : 'RX';
 
-  // --- Effective home station for the map + bearing math. Real QRZ profile
-  // takes precedence; otherwise the design-mock HOME constant keeps the
-  // disconnected demo looking populated.
+  // Effective home for the map + bearing math. Null until QRZ supplies a real
+  // station — the map just omits the home marker and great-circle until then.
   const effectiveHome = qrzHome && qrzHome.lat != null && qrzHome.lon != null
     ? {
         call: qrzHome.callsign,
@@ -370,11 +369,11 @@ export default function App() {
         grid: qrzHome.grid ?? '',
         imageUrl: qrzHome.imageUrl ?? null,
       }
-    : { call: HOME.call, lat: HOME.lat, lon: HOME.lon, grid: HOME.grid, imageUrl: null as string | null };
+    : null;
 
-  const sp = contact ? bearingDeg(effectiveHome.lat, effectiveHome.lon, contact.lat, contact.lon) : 0;
+  const sp = contact && effectiveHome ? bearingDeg(effectiveHome.lat, effectiveHome.lon, contact.lat, contact.lon) : 0;
   const lp = (sp + 180) % 360;
-  const dist = contact ? distanceKm(effectiveHome.lat, effectiveHome.lon, contact.lat, contact.lon) : 0;
+  const dist = contact && effectiveHome ? distanceKm(effectiveHome.lat, effectiveHome.lon, contact.lat, contact.lon) : 0;
 
   function submitBeam(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -707,6 +706,7 @@ export default function App() {
                 }}
                 fallback={null}
               >
+                {effectiveHome && (
                 <LeafletWorldMap
                   home={{
                     call: effectiveHome.call,
@@ -745,6 +745,7 @@ export default function App() {
                     void rot.setAzimuth(normalized);
                   }}
                 />
+                )}
               </LeafletMapErrorBoundary>
             </div>
             <div

@@ -50,8 +50,11 @@ namespace Zeus.Contracts.Tests;
 /// </summary>
 public class AutoAttControlLoopTests
 {
-    private static RadioService MakeService() =>
-        new(NullLoggerFactory.Instance);
+    private static RadioService MakeService()
+    {
+        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance);
+        return new(NullLoggerFactory.Instance, dspStore);
+    }
 
     private static readonly AdcOverloadStatus Overload = new(Adc0: true, Adc1: false);
     private static readonly AdcOverloadStatus Clean = new(Adc0: false, Adc1: false);

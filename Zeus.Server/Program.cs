@@ -125,6 +125,7 @@ builder.Services.AddHttpClient("Qrz", c => c.Timeout = TimeSpan.FromSeconds(10))
 builder.Services.AddSingleton<CredentialStore>();
 builder.Services.AddSingleton<BandMemoryStore>();
 builder.Services.AddSingleton<LayoutStore>();
+builder.Services.AddSingleton<DspSettingsStore>();
 builder.Services.AddSingleton<QrzService>();
 builder.Services.AddSingleton<LogService>();
 

@@ -77,7 +77,8 @@ public class TxMetersSwrTripTests
     private static TxMetersService BuildService(out TxService tx, out StreamingHub hub)
     {
         var loggerFactory = NullLoggerFactory.Instance;
-        var radio = new RadioService(loggerFactory);
+        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance);
+        var radio = new RadioService(loggerFactory, dspStore);
         hub = new StreamingHub(new NullLogger<StreamingHub>());
         var pipeline = new DspPipelineService(radio, hub, loggerFactory);
         tx = new TxService(radio, pipeline, hub, new NullLogger<TxService>());

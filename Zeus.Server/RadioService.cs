@@ -49,22 +49,9 @@ public sealed class RadioService : IDisposable
     private readonly object _sync = new();
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<RadioService> _log;
+    private readonly DspSettingsStore _dspSettingsStore;
 
-    private StateDto _state = new(
-        Status: ConnectionStatus.Disconnected,
-        Endpoint: null,
-        VfoHz: 14_200_000,
-        Mode: RxMode.USB,
-        FilterLowHz: 150,
-        FilterHighHz: 2850,
-        SampleRate: 192_000,
-        AgcTopDb: 80.0,
-        AttenDb: 0,
-        Nr: new NrConfig(),
-        ZoomLevel: 1,
-        AutoAttEnabled: true,
-        AttOffsetDb: 0,
-        AdcOverloadWarning: false);
+    private StateDto _state;
 
     // Latched MOX bit — populated via SetMox so the auto-ATT loop can pause
     // itself during TX without a service-locator pattern back to TxService.
@@ -101,11 +88,31 @@ public sealed class RadioService : IDisposable
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
-    public RadioService(ILoggerFactory loggerFactory, Zeus.Protocol1.ITxIqSource? txIqSource = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, Zeus.Protocol1.ITxIqSource? txIqSource = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
+        _dspSettingsStore = dspSettingsStore;
         _txIqSource = txIqSource;
+
+        // Load persisted DSP settings from the store, or use defaults if not found
+        var persistedNr = _dspSettingsStore.Get() ?? new NrConfig();
+
+        _state = new(
+            Status: ConnectionStatus.Disconnected,
+            Endpoint: null,
+            VfoHz: 14_200_000,
+            Mode: RxMode.USB,
+            FilterLowHz: 150,
+            FilterHighHz: 2850,
+            SampleRate: 192_000,
+            AgcTopDb: 80.0,
+            AttenDb: 0,
+            Nr: persistedNr,
+            ZoomLevel: 1,
+            AutoAttEnabled: true,
+            AttOffsetDb: 0,
+            AdcOverloadWarning: false);
     }
 
     public IProtocol1Client? ActiveClient
@@ -378,6 +385,10 @@ public sealed class RadioService : IDisposable
     {
         ArgumentNullException.ThrowIfNull(cfg);
         Mutate(s => s with { Nr = cfg });
+
+        // Persist the new DSP settings to the store
+        _dspSettingsStore.Upsert(cfg);
+
         return Snapshot();
     }
 

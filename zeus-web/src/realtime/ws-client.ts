@@ -41,6 +41,7 @@ import { getAudioClient } from '../audio/audio-client';
 import { useConnectionStore, type WisdomPhase } from '../state/connection-store';
 import { useDisplayStore } from '../state/display-store';
 import { useTxStore } from '../state/tx-store';
+import { useBandPlanStore } from '../state/bandPlan';
 import { warnOnce } from '../util/logger';
 
 const INITIAL_BACKOFF_MS = 1000;
@@ -80,6 +81,11 @@ const PA_TEMP_BYTES = 1 + 4;
 // Connect button and pulses while phase=building so the user doesn't try to
 // talk to the radio while FFTW is still planning.
 export const MSG_TYPE_WISDOM_STATUS = 0x15;
+
+// Band plan changed notification: 1 type byte, no payload. Broadcast by the
+// server when the active region changes or a plan override is saved. The
+// frontend refetches /api/bands/current on receipt.
+export const MSG_TYPE_BAND_PLAN_CHANGED = 0x18;
 const WISDOM_STATUS_BYTES = 1 + 1;
 
 // Mic uplink (client → server). Payload: 960 × f32le = 3840 bytes preceded by
@@ -263,6 +269,10 @@ export function startRealtime(path = '/ws'): () => void {
           const msgBytes = new Uint8Array(ev.data, 2);
           const message = new TextDecoder('utf-8').decode(msgBytes);
           useTxStore.getState().setAlert({ kind, message });
+          return;
+        }
+        if (peekType === MSG_TYPE_BAND_PLAN_CHANGED) {
+          useBandPlanStore.getState().refresh();
           return;
         }
         warnOnce(

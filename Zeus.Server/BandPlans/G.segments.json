@@ -1,0 +1,14 @@
+{
+  "regionId": "G",
+  "source": "Ofcom (Office of Communications) amateur radio licence conditions, United Kingdom. Inherits IARU R1 baseline. Best-effort — verify against current Ofcom UK amateur radio licence before operating.",
+  "lastVerified": "2026-04-01",
+  "segments": [
+    { "lowHz": 5258000,   "highHz": 5267999,   "label": "60M Ch 1 (UK)",       "allocation": "Amateur",   "modeRestriction": "Any",      "maxPowerW": 100,  "notes": "UK secondary 60m sub-band. 100 W EIRP max — Ofcom licence" },
+    { "lowHz": 5278000,   "highHz": 5287999,   "label": "60M Ch 2 (UK)",       "allocation": "Amateur",   "modeRestriction": "Any",      "maxPowerW": 100,  "notes": "UK secondary 60m sub-band. 100 W EIRP max — Ofcom licence" },
+    { "lowHz": 5298000,   "highHz": 5307999,   "label": "60M Ch 3 (UK)",       "allocation": "Amateur",   "modeRestriction": "Any",      "maxPowerW": 100,  "notes": "UK secondary 60m sub-band. 100 W EIRP max — Ofcom licence" },
+    { "lowHz": 5318000,   "highHz": 5327999,   "label": "60M Ch 4 (UK)",       "allocation": "Amateur",   "modeRestriction": "Any",      "maxPowerW": 100,  "notes": "UK secondary 60m sub-band. 100 W EIRP max — Ofcom licence" },
+    { "lowHz": 5338000,   "highHz": 5347999,   "label": "60M Ch 5 (UK)",       "allocation": "Amateur",   "modeRestriction": "Any",      "maxPowerW": 100,  "notes": "UK secondary 60m sub-band. 100 W EIRP max — Ofcom licence" },
+    { "lowHz": 5351500,   "highHz": 5366500,   "label": "60M WRC-15 (UK)",     "allocation": "Amateur",   "modeRestriction": "Any",      "maxPowerW": 15,   "notes": "WRC-15 secondary allocation, 15 W EIRP max" },
+    { "lowHz": 5405000,   "highHz": 5407999,   "label": "60M Ch 6 (UK)",       "allocation": "Amateur",   "modeRestriction": "Any",      "maxPowerW": 100,  "notes": "UK secondary 60m sub-band. 100 W EIRP max — Ofcom licence" }
+  ]
+}

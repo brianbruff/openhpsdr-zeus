@@ -78,6 +78,7 @@ import { LeafletMapErrorBoundary } from './components/design/LeafletMapErrorBoun
 import { startRealtime } from './realtime/ws-client';
 import { getAudioClient } from './audio/audio-client';
 import { useMicUplink } from './audio/use-mic-uplink';
+import { BandPlanProvider } from './context/BandPlanContext';
 import { fetchState } from './api/client';
 import { useConnectionStore } from './state/connection-store';
 import { useQrzStore } from './state/qrz-store';
@@ -516,6 +517,7 @@ export default function App() {
   ]);
 
   return (
+    <BandPlanProvider>
     <WorkspaceContext.Provider value={workspaceCtx}>
     <SpectrumWheelActionsContext.Provider value={spectrumWheelActions}>
     <div className="app" data-screen-label="01 Main Console" style={{ position: 'relative' }}>
@@ -919,6 +921,7 @@ export default function App() {
     </div>
     </SpectrumWheelActionsContext.Provider>
     </WorkspaceContext.Provider>
+    </BandPlanProvider>
   );
 }
 

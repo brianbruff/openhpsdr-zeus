@@ -257,6 +257,13 @@ public sealed class StreamingHub
         return buf;
     }
 
+    public void BroadcastBandPlanChanged()
+    {
+        if (_clients.IsEmpty) return;
+        var payload = new byte[] { (byte)MsgType.BandPlanChanged };
+        foreach (var client in _clients.Values) client.TryEnqueue(payload);
+    }
+
     public void Broadcast(in AlertFrame frame)
     {
         if (_clients.IsEmpty) return;

@@ -1,0 +1,8 @@
+{
+  "regionId": "EI",
+  "source": "ComReg (Commission for Communications Regulation) amateur radio licence conditions, Ireland. Inherits IARU R1 baseline. Best-effort — verify against current ComReg documentation before operating.",
+  "lastVerified": "2026-04-01",
+  "segments": [
+    { "lowHz": 5351500,   "highHz": 5366500,   "label": "60M (secondary)",     "allocation": "Amateur",   "modeRestriction": "Any",      "maxPowerW": 15,   "notes": "Secondary allocation, 15 W EIRP max — see ComReg amateur radio licence" }
+  ]
+}

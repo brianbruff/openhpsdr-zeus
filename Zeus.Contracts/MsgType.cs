@@ -79,4 +79,9 @@ public enum MsgType : byte
     // seconds timescale, so bolting it onto the 10 Hz TX meter cadence
     // would be overkill. Broadcast at 2 Hz always.
     PaTemp = 0x17,
+
+    // Server → client (band plan changed notification). Payload: 1 byte (type only).
+    // Broadcast when the active region changes or a plan override is saved.
+    // Frontend refetches /api/bands/current on receipt.
+    BandPlanChanged = 0x18,
 }

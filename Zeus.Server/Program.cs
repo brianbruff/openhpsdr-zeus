@@ -130,6 +130,13 @@ builder.Services.AddSingleton<PaSettingsStore>();
 builder.Services.AddSingleton<QrzService>();
 builder.Services.AddSingleton<LogService>();
 
+// Band plan: static JSON loaded from BandPlans/ directory at startup.
+// BandPlanService exposes IBandPlanService (inBand, getSegment) for the
+// filter-overlay consumer and the REST endpoints below.
+builder.Services.AddSingleton<BandPlanStore>();
+builder.Services.AddSingleton<BandPlanService>();
+builder.Services.AddSingleton<IBandPlanService>(sp => sp.GetRequiredService<BandPlanService>());
+
 // rotctld (hamlib rotator daemon) client. BackgroundService with persistent
 // TCP and reconnect-on-failure. Singleton so config/state survive across
 // requests; hosted-service registration runs ExecuteAsync.
@@ -509,6 +516,37 @@ app.MapPut("/api/bands/memory/{band}", (string band, BandMemorySetRequest req, B
         return Results.BadRequest(new { error = "hz must be positive" });
     store.Upsert(band, req.Hz, req.Mode);
     return Results.Ok(new BandMemoryDto(band, req.Hz, req.Mode));
+});
+
+// Band plan: region catalog, per-region resolved plan, and active-region management.
+// GET /api/bands/regions — full region catalog.
+// GET /api/bands/plan?region=EI — resolved plan for the given region (parent merged with overrides).
+// GET /api/bands/current — current region id + resolved plan.
+// POST /api/bands/current — set active region; persists via DspSettingsStore.
+app.MapGet("/api/bands/regions", (BandPlanService bp) =>
+    Results.Ok(bp.Store.Regions));
+
+app.MapGet("/api/bands/plan", (BandPlanService bp, string? region) =>
+{
+    var regionId = region ?? bp.CurrentRegion.Id;
+    var segments = bp.Store.ResolvePlan(regionId);
+    return Results.Ok(new { regionId, segments });
+});
+
+app.MapGet("/api/bands/current", (BandPlanService bp) =>
+    Results.Ok(new { regionId = bp.CurrentRegion.Id, segments = bp.CurrentPlan }));
+
+app.MapPost("/api/bands/current", (BandPlanCurrentSetRequest req, BandPlanService bp, StreamingHub hub) =>
+{
+    if (string.IsNullOrWhiteSpace(req.RegionId))
+        return Results.BadRequest(new { error = "regionId required" });
+    if (!bp.Store.Regions.Any(r =>
+            string.Equals(r.Id, req.RegionId, StringComparison.OrdinalIgnoreCase)))
+        return Results.BadRequest(new { error = $"Unknown region '{req.RegionId}'" });
+
+    bp.SetRegion(req.RegionId);
+    hub.BroadcastBandPlanChanged();
+    return Results.Ok(new { regionId = bp.CurrentRegion.Id, segments = bp.CurrentPlan });
 });
 
 // PA settings — per-band gain/OC masks + globals. Single PUT replaces the

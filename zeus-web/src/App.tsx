@@ -56,6 +56,7 @@ import { PaTempChip } from './components/PaTempChip';
 import { PreampButton } from './components/PreampButton';
 import { QrzStatusPill } from './components/QrzStatusPill';
 import { RotatorStatusPill } from './components/RotatorStatusPill';
+import { SettingsMenu } from './components/SettingsMenu';
 import { SMeterLive } from './components/SMeterLive';
 import { OverdriveIndicator, TxStageMeters } from './components/TxStageMeters';
 import { TunButton } from './components/TunButton';
@@ -93,6 +94,7 @@ import type { Contact } from './components/design/data';
 const STATE_POLL_MS = 333;
 
 export default function App() {
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const status = useConnectionStore((s) => s.status);
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   const mode = useConnectionStore((s) => s.mode);
@@ -607,6 +609,15 @@ export default function App() {
           <span className="led on" style={{ marginRight: 6 }} />
           {terminatorActive ? 'QRZ ENGAGED' : 'Engage QRZ'}
         </button>
+
+        <button
+          type="button"
+          className="btn"
+          onClick={() => setSettingsOpen(true)}
+          title="Open settings menu"
+        >
+          MENU
+        </button>
       </div>
 
       {/* Control strip — real wired controls rebuilt into the design's chassis */}
@@ -902,6 +913,7 @@ export default function App() {
       </div>
 
       {disconnectedOverlay}
+      <SettingsMenu open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
     </SpectrumWheelActionsContext.Provider>
     </WorkspaceContext.Provider>

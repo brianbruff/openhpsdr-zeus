@@ -45,6 +45,7 @@ import { AudioToggle } from './components/AudioToggle';
 import { BandButtons } from './components/BandButtons';
 import { ConnectPanel } from './components/ConnectPanel';
 import { DriveSlider } from './components/DriveSlider';
+import { TunePowerSlider } from './components/TunePowerSlider';
 import { MicGainSlider } from './components/MicGainSlider';
 import { MicMeter } from './components/MicMeter';
 import { MobilePttButton } from './components/MobilePttButton';
@@ -649,6 +650,7 @@ export default function App() {
               <ZoomControl />
             </div>
             <DriveSlider />
+            <TunePowerSlider />
             <MicGainSlider />
           </div>
         </div>

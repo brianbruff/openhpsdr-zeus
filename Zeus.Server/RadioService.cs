@@ -59,6 +59,15 @@ public sealed class RadioService : IDisposable
     // edge is crossed or a PA setting is edited, we recompute without needing
     // to wait for the next SetDrive call.
     private int _drivePct;
+    // Independent TUN drive %. When TUN is keyed, the recompute uses this in
+    // place of _drivePct so the operator can pre-set a lower tune level (and
+    // the same per-band PA gain gives equal watts at equal percentages). piHPSDR
+    // default is 10 — a 0 default would be "press TUN, nothing happens".
+    private int _tunePct = 10;
+    // Which drive % the next frame uses. Latched via NotifyTunActive from
+    // TxService whenever the MOX/TUN keying state changes so a drag on either
+    // slider during a live TX picks the right source without polling.
+    private bool _tunActive;
 
     private StateDto _state;
 
@@ -408,6 +417,24 @@ public sealed class RadioService : IDisposable
         RecomputePaAndPush();
     }
 
+    // Independent TUN drive %. Applies on the very next frame if TUN is already
+    // keyed; otherwise it sits until TxService flips _tunActive.
+    public void SetTuneDrive(int percent)
+    {
+        int clamped = Math.Clamp(percent, 0, 100);
+        Interlocked.Exchange(ref _tunePct, clamped);
+        RecomputePaAndPush();
+    }
+
+    // TxService calls this on every MOX/TUN edge. Runs the same recompute the
+    // drive-slider path uses so the drive byte on the wire always reflects the
+    // just-applied keying state (Thetis PreviousPWR swap, `console.cs:30094`).
+    public void NotifyTunActive(bool on)
+    {
+        lock (_sync) _tunActive = on;
+        RecomputePaAndPush();
+    }
+
     // DspPipelineService calls this right after a P2 client is created so the
     // fresh connection sees the current PA snapshot without waiting for the
     // next state change.
@@ -429,8 +456,12 @@ public sealed class RadioService : IDisposable
             ? cfg.Bands.FirstOrDefault(b => b.Band == bandName) ?? new PaBandSettingsDto(bandName)
             : new PaBandSettingsDto("unknown");
 
-        int drivePct = Volatile.Read(ref _drivePct);
-        byte driveByte = ComputeDriveByte(drivePct, bandCfg.PaGainDb, cfg.Global.PaMaxPowerWatts);
+        bool tunActive;
+        lock (_sync) tunActive = _tunActive;
+        int activePct = tunActive
+            ? Volatile.Read(ref _tunePct)
+            : Volatile.Read(ref _drivePct);
+        byte driveByte = ComputeDriveByte(activePct, bandCfg.PaGainDb, cfg.Global.PaMaxPowerWatts);
         bool paEnabled = cfg.Global.PaEnabled && !bandCfg.DisablePa;
 
         ActiveClient?.SetDriveByte(driveByte);

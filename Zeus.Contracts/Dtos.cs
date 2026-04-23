@@ -122,6 +122,12 @@ public sealed record MoxSetRequest(bool On);
 
 public sealed record DriveSetRequest(int Percent);
 
+// TUN has its own drive % so the operator can pre-set a lower tune level
+// without touching the MOX drive. Same per-band PA gain compensates both,
+// so equal slider positions yield equal watts on air (Thetis parity —
+// `console.cs:46756-46788`).
+public sealed record TuneDriveSetRequest(int Percent);
+
 public sealed record NrSetRequest(NrConfig Nr);
 
 // Panadapter/waterfall zoom levels. Level=1 means the analyzer covers the full

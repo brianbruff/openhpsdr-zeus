@@ -90,6 +90,11 @@ export type TxState = {
   // can't flash full power into the PA.
   drivePercent: number;
   setDrivePercent: (p: number) => void;
+  // TUN has its own drive %. Same PA-gain calibration as drive, so equal
+  // percentages produce equal watts. Default 10 matches piHPSDR — zero would
+  // make a first TUN press appear broken ("nothing happens").
+  tunePercent: number;
+  setTunePercent: (p: number) => void;
   // PRD FR-3: mic-gain slider 0..+20 dB (default 0). Server applies via
   // WDSP SetTXAPanelGain1(TXA, 10^(db/20)). Kept as int dB on the wire.
   micGainDb: number;
@@ -162,6 +167,8 @@ export const useTxStore = create<TxState>()(
       setTunOn: (on) => set(on ? { tunOn: true, moxOn: false } : { tunOn: false }),
       drivePercent: 10,
       setDrivePercent: (p) => set({ drivePercent: p }),
+      tunePercent: 10,
+      setTunePercent: (p) => set({ tunePercent: p }),
       micGainDb: 0,
       setMicGainDb: (db) => set({ micGainDb: db }),
       levelerMaxGainDb: 5,
@@ -226,6 +233,7 @@ export const useTxStore = create<TxState>()(
       // else (mox/tun/meters/alert) is transient per-session.
       partialize: (s) => ({
         drivePercent: s.drivePercent,
+        tunePercent: s.tunePercent,
         micGainDb: s.micGainDb,
         levelerMaxGainDb: s.levelerMaxGainDb,
       }),

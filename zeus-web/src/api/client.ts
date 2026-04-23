@@ -568,6 +568,28 @@ export function setDrive(
   );
 }
 
+// Tune-drive endpoint: POST /api/tx/tune-drive { percent }. Returns
+// { tunePercent }. Backend picks this in place of drivePercent while TUN is
+// keyed; same PA-gain calibration applies.
+export function setTuneDrive(
+  percent: number,
+  signal?: AbortSignal,
+): Promise<{ tunePercent: number }> {
+  return jsonFetch(
+    '/api/tx/tune-drive',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ percent: Math.round(percent) }),
+      signal,
+    },
+    (raw) => {
+      const v = (raw as { tunePercent?: unknown }).tunePercent;
+      return { tunePercent: typeof v === 'number' ? v : 0 };
+    },
+  );
+}
+
 // TUN endpoint: POST /api/tx/tun { on }. Returns { tunOn }. Keys a single-tone
 // carrier via WDSP SetTXAPostGen* and is mutually exclusive with MOX on the
 // server. Same 404-tolerant pattern as setMicGain because the backend handler

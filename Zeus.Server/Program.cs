@@ -462,6 +462,19 @@ app.MapPost("/api/tx/drive", (DriveSetRequest req, RadioService r) =>
     return Results.Ok(new { drivePercent = req.Percent });
 });
 
+// TUN drive %. Symmetric with /api/tx/drive; the same PA-gain math applies,
+// so equal slider positions emit equal watts. Backend selects between the
+// two sources based on whether TUN is keyed (TxService.TrySetTun →
+// RadioService.NotifyTunActive).
+app.MapPost("/api/tx/tune-drive", (TuneDriveSetRequest req, RadioService r) =>
+{
+    log.LogInformation("api.tx.tune-drive percent={Pct}", req.Percent);
+    if (req.Percent < 0 || req.Percent > 100)
+        return Results.BadRequest(new { error = "percent must be 0..100" });
+    r.SetTuneDrive(req.Percent);
+    return Results.Ok(new { tunePercent = req.Percent });
+});
+
 app.MapPost("/api/rx/nr", (NrSetRequest req, RadioService r) =>
 {
     log.LogInformation(

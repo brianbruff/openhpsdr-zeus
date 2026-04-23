@@ -105,6 +105,10 @@ public sealed class TxService
         // Engine handles the RXA/TXA pair atomically under its own lock.
         _pipeline.SetMox(on);
         _radio.SetMox(on);
+        // MOX-edge unconditionally deactivates TUN on the drive-source side —
+        // MOX-on preempts TUN above, MOX-off should also leave the recompute
+        // pointing at _drivePct for the next half-key.
+        _radio.NotifyTunActive(false);
         _log.LogInformation("tx.mox on={On}", on);
         error = null;
         return true;
@@ -148,6 +152,9 @@ public sealed class TxService
         _pipeline.SetMox(on);
         _radio.SetMox(on);
         _pipeline.SetTxTune(on);
+        // Swap the drive source AFTER the engine flip so the DriveFilter byte
+        // on the first TUN frame carries the tune % (not the stale drive %).
+        _radio.NotifyTunActive(on);
         _log.LogInformation("tx.tun on={On}", on);
         error = null;
         return true;
@@ -178,6 +185,7 @@ public sealed class TxService
             _pipeline.SetMox(false);
             _radio.SetMox(false);
             if (wasTunOn) _pipeline.SetTxTune(false);
+            _radio.NotifyTunActive(false);
             _log.LogWarning("tx.trip kind={Kind} reason={Reason}", kind, reason);
             _hub.Broadcast(new AlertFrame(kind, reason));
         }

@@ -44,6 +44,7 @@ import {
   fetchRadios,
   fetchState,
   setDrive,
+  setTuneDrive,
   setLevelerMaxGain,
   setMicGain,
   type RadioInfoDto,
@@ -84,6 +85,7 @@ function applyPostConnectEffects() {
   void getAudioClient().start();
   const tx = useTxStore.getState();
   void setDrive(tx.drivePercent).catch(() => {});
+  void setTuneDrive(tx.tunePercent).catch(() => {});
   void setMicGain(tx.micGainDb).catch(() => {});
   void setLevelerMaxGain(tx.levelerMaxGainDb).catch(() => {});
 }

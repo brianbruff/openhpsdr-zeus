@@ -782,7 +782,7 @@
 .logbook { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg-1); }
 .log-head {
   display: grid;
-  grid-template-columns: 50px 80px 70px 50px 40px 1fr;
+  grid-template-columns: 2rem 60px 55px 85px 70px 50px 70px 1fr;
   gap: 8px;
   padding: 5px 10px;
   font-size: 10px;
@@ -797,7 +797,7 @@
 .log-rows { flex: 1; overflow-y: auto; min-height: 0; }
 .log-row {
   display: grid;
-  grid-template-columns: 50px 80px 70px 50px 40px 1fr;
+  grid-template-columns: 2rem 60px 55px 85px 70px 50px 70px 1fr;
   gap: 8px;
   padding: 5px 10px;
   font-size: 12px;

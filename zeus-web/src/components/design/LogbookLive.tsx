@@ -108,7 +108,7 @@ export function LogbookLive() {
             className={`log-row mono ${selectedIds.has(entry.id) ? 'selected' : ''}`}
             onClick={() => toggleSelected(entry.id)}
           >
-            <span style={{ width: '2rem' }}>
+            <span>
               <input
                 type="checkbox"
                 checked={selectedIds.has(entry.id)}
@@ -123,12 +123,16 @@ export function LogbookLive() {
             <span>{entry.frequencyMhz.toFixed(3)}</span>
             <span className="t-mode">{entry.mode}</span>
             <span>{entry.rstSent}/{entry.rstRcvd}</span>
-            <span className="t-name">{entry.name ?? '—'}</span>
-            {entry.qrzLogId && (
-              <span style={{ marginLeft: '0.5rem', color: 'var(--accent)', fontSize: '0.7em' }}>
-                ✓ QRZ
+            <span className="t-name" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {entry.name ?? '—'}
               </span>
-            )}
+              {entry.qrzLogId && (
+                <span style={{ color: 'var(--accent)', fontSize: '0.7em', flexShrink: 0 }}>
+                  ✓ QRZ
+                </span>
+              )}
+            </span>
           </button>
         ))}
       </div>

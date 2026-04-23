@@ -946,9 +946,10 @@ function qrzStationToContact(s: QrzStation | null, home: QrzStation | null): Con
   const last = (s.name || '').trim().split(/\s+/).pop()?.charAt(0).toUpperCase() ?? '';
   const initials = (first + last) || s.callsign.slice(0, 2);
   const location = [s.city, s.state, s.country].filter(Boolean).join(', ') || (s.country ?? '—');
+  const fullName = [s.firstName, s.name].filter(Boolean).join(' ') || '—';
   return {
     callsign: s.callsign,
-    name: s.name ?? '—',
+    name: fullName,
     location,
     grid: s.grid ?? '—',
     cq: s.cqZone != null ? String(s.cqZone).padStart(2, '0') : '—',

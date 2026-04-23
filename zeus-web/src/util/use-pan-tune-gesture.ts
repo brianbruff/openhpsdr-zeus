@@ -266,33 +266,22 @@ export function usePanTuneGesture(
       // Normalise delta units to pixels. Most browsers emit DOM_DELTA_PIXEL
       // (0); some Firefox mouse-wheel builds still emit LINE (1) or PAGE (2).
       const unit = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1;
-      const dxPx = e.deltaX * unit;
-      const dyPx = e.deltaY * unit;
-
-      // alt (no shift) → pan the background map. Raw pixel deltas feel right
-      // on mouse (one notch ≈ 100px) and trackpad (continuous). No
-      // accumulation so the motion stays smooth.
-      if (alt && !shift) {
-        wheelActions.onMapPan?.(dxPx, dyPx);
-        return;
-      }
-
-      // Everything else is notched. Many browsers remap shift+wheel to the
-      // horizontal axis (deltaY → 0, deltaX carries the motion); prefer
-      // whichever axis is non-zero.
-      const primary = dyPx !== 0 ? dyPx : dxPx;
+      // Many browsers remap shift+wheel to the horizontal axis (deltaY → 0,
+      // deltaX carries the motion); prefer whichever axis is non-zero.
+      const primary = (e.deltaY !== 0 ? e.deltaY : e.deltaX) * unit;
       wheelAccum += primary;
       if (Math.abs(wheelAccum) < WHEEL_NOTCH_PX) return;
       // One step per emission, regardless of how large the accumulated delta
-      // is. A single mouse notch should produce exactly one 500 Hz tune step
-      // (or one zoom level) — not multiple. Reset the accumulator so
-      // momentum-scroll bursts on trackpads don't build up a queue.
+      // is. A single mouse notch should produce exactly one step — not
+      // multiple. Reset the accumulator so momentum-scroll bursts on
+      // trackpads don't build up a queue.
       const dir = wheelAccum > 0 ? -1 : 1;
       wheelAccum = 0;
 
       // Zoom convention (both spectrum and map): wheel forward = zoom OUT.
-      // Operator preference — flip if this ever feels backwards.
-      if (alt && shift) {
+      // Map pan lives on alt+drag, not alt+wheel — matches the standard
+      // web-map gesture where wheel over the map is zoom.
+      if (alt) {
         wheelActions.onMapZoom?.(-dir);
         return;
       }

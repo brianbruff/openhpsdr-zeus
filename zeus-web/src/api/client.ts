@@ -92,6 +92,8 @@ export type RadioStateDto = {
   filterHighHz: number;
   // Null after a drag edit without a named-slot context (PRD §4.1).
   filterPresetName: string | null;
+  // Advanced-filter ribbon visibility; persisted server-side.
+  filterAdvancedPaneOpen: boolean;
   sampleRate: number;
   agcTopDb: number;
   attenDb: number;
@@ -227,6 +229,7 @@ export function normalizeState(raw: unknown): RadioStateDto {
     filterLowHz: typeof r.filterLowHz === 'number' ? r.filterLowHz : 0,
     filterHighHz: typeof r.filterHighHz === 'number' ? r.filterHighHz : 0,
     filterPresetName: typeof r.filterPresetName === 'string' ? r.filterPresetName : null,
+    filterAdvancedPaneOpen: typeof r.filterAdvancedPaneOpen === 'boolean' ? r.filterAdvancedPaneOpen : false,
     sampleRate: typeof r.sampleRate === 'number' ? r.sampleRate : 0,
     // Default 80 matches WdspDspEngine.ApplyAgcDefaults and the Thetis
     // AGC_MEDIUM preset. Missing from older servers — tolerate absence.
@@ -468,6 +471,22 @@ export function getFilterPresets(
         return p ? [p] : [];
       });
     },
+  );
+}
+
+export function setFilterAdvancedPaneOpen(
+  open: boolean,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/filter/advanced-pane',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ open }),
+      signal,
+    },
+    normalizeState,
   );
 }
 

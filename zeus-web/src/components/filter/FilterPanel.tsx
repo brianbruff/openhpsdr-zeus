@@ -12,15 +12,25 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useConnectionStore } from '../../state/connection-store';
-import { setFilter, getFilterPresets, type FilterPresetDto } from '../../api/client';
+import { setFilter, getFilterPresets, setFilterAdvancedPaneOpen, type FilterPresetDto } from '../../api/client';
 import { getPresetsForMode, formatFilterWidth, type FilterPresetSlot } from './filterPresets';
+
+const LOCAL_STORAGE_KEY = 'zeus.filter.advancedPaneOpen';
 
 export function FilterPanel() {
   const mode = useConnectionStore((s) => s.mode);
   const filterLow = useConnectionStore((s) => s.filterLowHz);
   const filterHigh = useConnectionStore((s) => s.filterHighHz);
   const filterPresetName = useConnectionStore((s) => s.filterPresetName);
+  const advancedOpen = useConnectionStore((s) => s.filterAdvancedPaneOpen);
   const applyState = useConnectionStore((s) => s.applyState);
+
+  const toggleAdvanced = useCallback(() => {
+    const next = !advancedOpen;
+    useConnectionStore.setState({ filterAdvancedPaneOpen: next });
+    try { window.localStorage.setItem(LOCAL_STORAGE_KEY, next ? '1' : '0'); } catch { /* ok */ }
+    setFilterAdvancedPaneOpen(next).catch(() => {});
+  }, [advancedOpen]);
 
   // Per-mode VAR1/VAR2 overrides fetched from the server. Seeded on mount
   // and after any VAR* write. Falls back to the local Thetis-default table
@@ -95,6 +105,16 @@ export function FilterPanel() {
               : slot.label}
           </button>
         ))}
+        <button
+          type="button"
+          onClick={toggleAdvanced}
+          className={`btn sm hide-mobile ${advancedOpen ? 'active' : ''}`}
+          title={advancedOpen ? 'Close advanced filter ribbon' : 'Open advanced filter ribbon'}
+          aria-pressed={advancedOpen}
+          style={{ marginLeft: 4 }}
+        >
+          {advancedOpen ? '≡ ×' : '≡'}
+        </button>
       </div>
     </div>
   );

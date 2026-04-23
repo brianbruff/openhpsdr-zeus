@@ -22,13 +22,37 @@ namespace Zeus.Server;
 // (PRD §9 open question: preserve Zeus's low-cut as VAR1 on first run).
 public sealed class FilterPresetStore : IDisposable
 {
+    // BsonMapper.Global is a shared, lazily-built entity map. When multiple
+    // WebApplicationFactory hosts boot in parallel (xUnit test collections),
+    // concurrent first-touches of a type can lose the race with EnsureIndex's
+    // LINQ resolver and throw "Member X not found on BsonMapper". Force the
+    // entity mapping to be materialized once, under a static lock, before any
+    // collection constructs a LINQ expression that walks its members.
+    private static readonly object _mapperInitLock = new();
+    private static bool _mapperInitialized;
+
+    private static void EnsureMapperRegistered()
+    {
+        if (_mapperInitialized) return;
+        lock (_mapperInitLock)
+        {
+            if (_mapperInitialized) return;
+            BsonMapper.Global.Entity<FilterPresetStoreEntry>()
+                .Id(x => x.Id);
+            _mapperInitialized = true;
+        }
+    }
+
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<FilterPresetStoreEntry> _entries;
     private readonly ILogger<FilterPresetStore> _log;
+    private readonly object _sync = new();
 
     public FilterPresetStore(ILogger<FilterPresetStore> log)
     {
         _log = log;
+        EnsureMapperRegistered();
+
         var dbPath = GetDatabasePath();
 
         var dir = Path.GetDirectoryName(dbPath);
@@ -37,73 +61,125 @@ public sealed class FilterPresetStore : IDisposable
 
         _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
         _entries = _db.GetCollection<FilterPresetStoreEntry>("filter_presets");
-        _entries.EnsureIndex(x => x.ModeKey, unique: true);
+        _entries.EnsureIndex("ModeKey", "$.ModeKey", unique: true);
 
         SeedDefaults();
         _log.LogInformation("FilterPresetStore initialized at {Path}", dbPath);
     }
 
+    private FilterPresetStoreEntry? FindByMode(string key) =>
+        _entries.FindOne("$.ModeKey = @0", key);
+
     // Returns the stored override for a VAR slot, or null if not overridden.
     public (int LowHz, int HighHz)? GetVarOverride(RxMode mode, string slotName)
     {
-        var e = _entries.FindOne(x => x.ModeKey == mode.ToString());
-        if (e is null) return null;
-        return slotName == "VAR1"
-            ? (e.HasVar1 ? (e.Var1Lo, e.Var1Hi) : null)
-            : slotName == "VAR2"
-                ? (e.HasVar2 ? (e.Var2Lo, e.Var2Hi) : null)
-                : null;
+        lock (_sync)
+        {
+            var e = FindByMode(mode.ToString());
+            if (e is null) return null;
+            return slotName == "VAR1"
+                ? (e.HasVar1 ? (e.Var1Lo, e.Var1Hi) : null)
+                : slotName == "VAR2"
+                    ? (e.HasVar2 ? (e.Var2Lo, e.Var2Hi) : null)
+                    : null;
+        }
     }
 
     public void UpsertVarOverride(RxMode mode, string slotName, int loHz, int hiHz)
     {
         var key = mode.ToString();
-        var existing = _entries.FindOne(x => x.ModeKey == key);
-        if (existing is null)
+        lock (_sync)
         {
-            existing = new FilterPresetStoreEntry { ModeKey = key };
-            if (slotName == "VAR1") { existing.HasVar1 = true; existing.Var1Lo = loHz; existing.Var1Hi = hiHz; }
-            else                    { existing.HasVar2 = true; existing.Var2Lo = loHz; existing.Var2Hi = hiHz; }
-            existing.UpdatedUtc = DateTime.UtcNow;
-            _entries.Insert(existing);
-        }
-        else
-        {
-            if (slotName == "VAR1") { existing.HasVar1 = true; existing.Var1Lo = loHz; existing.Var1Hi = hiHz; }
-            else                    { existing.HasVar2 = true; existing.Var2Lo = loHz; existing.Var2Hi = hiHz; }
-            existing.UpdatedUtc = DateTime.UtcNow;
-            _entries.Update(existing);
+            var existing = FindByMode(key);
+            if (existing is null)
+            {
+                existing = new FilterPresetStoreEntry { ModeKey = key };
+                if (slotName == "VAR1") { existing.HasVar1 = true; existing.Var1Lo = loHz; existing.Var1Hi = hiHz; }
+                else                    { existing.HasVar2 = true; existing.Var2Lo = loHz; existing.Var2Hi = hiHz; }
+                existing.UpdatedUtc = DateTime.UtcNow;
+                _entries.Insert(existing);
+            }
+            else
+            {
+                if (slotName == "VAR1") { existing.HasVar1 = true; existing.Var1Lo = loHz; existing.Var1Hi = hiHz; }
+                else                    { existing.HasVar2 = true; existing.Var2Lo = loHz; existing.Var2Hi = hiHz; }
+                existing.UpdatedUtc = DateTime.UtcNow;
+                _entries.Update(existing);
+            }
         }
     }
 
     public string? GetLastSelectedPreset(RxMode mode)
     {
-        var e = _entries.FindOne(x => x.ModeKey == mode.ToString());
-        return e?.LastPreset;
+        lock (_sync)
+        {
+            return FindByMode(mode.ToString())?.LastPreset;
+        }
     }
 
     public void UpsertLastSelectedPreset(RxMode mode, string presetName)
     {
         var key = mode.ToString();
-        var existing = _entries.FindOne(x => x.ModeKey == key);
-        if (existing is null)
+        lock (_sync)
         {
-            _entries.Insert(new FilterPresetStoreEntry
+            var existing = FindByMode(key);
+            if (existing is null)
             {
-                ModeKey = key,
-                LastPreset = presetName,
-                UpdatedUtc = DateTime.UtcNow,
-            });
-        }
-        else
-        {
-            existing.LastPreset = presetName;
-            existing.UpdatedUtc = DateTime.UtcNow;
-            _entries.Update(existing);
+                _entries.Insert(new FilterPresetStoreEntry
+                {
+                    ModeKey = key,
+                    LastPreset = presetName,
+                    UpdatedUtc = DateTime.UtcNow,
+                });
+            }
+            else
+            {
+                existing.LastPreset = presetName;
+                existing.UpdatedUtc = DateTime.UtcNow;
+                _entries.Update(existing);
+            }
         }
     }
 
     public void Dispose() => _db.Dispose();
+
+    // Sentinel mode key used for pane-visibility and other ribbon-scope flags
+    // that aren't tied to any particular RX mode. Keeps the schema flat while
+    // avoiding a second LiteDB collection just for a bool.
+    private const string SettingsKey = "__SETTINGS__";
+
+    // Advanced-ribbon visibility, persisted across server restarts so the
+    // operator's close-the-ribbon choice sticks.
+    public bool GetAdvancedPaneOpen()
+    {
+        lock (_sync)
+        {
+            return FindByMode(SettingsKey)?.AdvancedPaneOpen ?? false;
+        }
+    }
+
+    public void SetAdvancedPaneOpen(bool open)
+    {
+        lock (_sync)
+        {
+            var existing = FindByMode(SettingsKey);
+            if (existing is null)
+            {
+                _entries.Insert(new FilterPresetStoreEntry
+                {
+                    ModeKey = SettingsKey,
+                    AdvancedPaneOpen = open,
+                    UpdatedUtc = DateTime.UtcNow,
+                });
+            }
+            else
+            {
+                existing.AdvancedPaneOpen = open;
+                existing.UpdatedUtc = DateTime.UtcNow;
+                _entries.Update(existing);
+            }
+        }
+    }
 
     // Seed USB and LSB VAR1 with Zeus's 150/2850 default on first run so the
     // operator sees a familiar starting point (PRD §9 decision).
@@ -116,7 +192,7 @@ public sealed class FilterPresetStore : IDisposable
     private void SeedVarIfAbsent(RxMode mode, string slotName, int loHz, int hiHz)
     {
         var key = mode.ToString();
-        var existing = _entries.FindOne(x => x.ModeKey == key);
+        var existing = FindByMode(key);
         if (existing is null)
         {
             var entry = new FilterPresetStoreEntry
@@ -164,5 +240,7 @@ public sealed class FilterPresetStoreEntry
     public int Var2Hi { get; set; }
     public bool HasVar2 { get; set; }
     public string? LastPreset { get; set; }
+    // Ribbon-scope flag, only meaningful on the sentinel "__SETTINGS__" row.
+    public bool AdvancedPaneOpen { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

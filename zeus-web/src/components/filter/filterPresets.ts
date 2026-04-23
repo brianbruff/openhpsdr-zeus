@@ -151,3 +151,65 @@ export function formatFilterWidth(lowHz: number, highHz: number): string {
   }
   return `${width} Hz`;
 }
+
+// Format a passband width for the ribbon's PASSBAND readout.
+// Always 2-decimal kHz (e.g. "2.70 kHz") to match mockup precision.
+export function formatRibbonWidth(lowHz: number, highHz: number): string {
+  const width = Math.abs(highHz - lowHz);
+  return `${(width / 1000).toFixed(2)} kHz`;
+}
+
+// Format an absolute Hz frequency as "MM.kkk.hhh" (MHz.kHz-3.Hz-3). Matches
+// the mockup's LOW CUT / HIGH CUT columns (e.g. "14.254.650").
+export function formatAbsFreq(hz: number): string {
+  const abs = Math.abs(Math.round(hz));
+  const mhz = Math.floor(abs / 1_000_000);
+  const khzPart = Math.floor((abs - mhz * 1_000_000) / 1000);
+  const hzPart = abs - mhz * 1_000_000 - khzPart * 1000;
+  const sign = hz < 0 ? '-' : '';
+  return `${sign}${mhz}.${String(khzPart).padStart(3, '0')}.${String(hzPart).padStart(3, '0')}`;
+}
+
+// Ribbon's six-preset subset. PRD §3.2 "a 3×2 grid of chip buttons". We map
+// each ribbon width to the nearest real F-slot for the active mode so the
+// chip is a second view of the compact panel's row, not a parallel preset
+// system. When no exact F-slot match exists we pick the closest by width.
+const RIBBON_SLOT_NAMES_BY_MODE: Record<RxMode, readonly string[]> = {
+  // SSB: a spread of tight-to-AM-wide SSB widths.
+  USB: ['F10', 'F7', 'F6', 'F5', 'F3', 'F1'],
+  LSB: ['F10', 'F7', 'F6', 'F5', 'F3', 'F1'],
+  // CW: narrow-to-wide CW widths.
+  CWU: ['F10', 'F9', 'F8', 'F7', 'F6', 'F4'],
+  CWL: ['F10', 'F9', 'F8', 'F7', 'F6', 'F4'],
+  // AM/SAM: wide-audio widths.
+  AM:  ['F10', 'F9', 'F7', 'F5', 'F3', 'F1'],
+  SAM: ['F10', 'F9', 'F7', 'F5', 'F3', 'F1'],
+  DSB: ['F10', 'F7', 'F5', 'F3', 'F2', 'F1'],
+  DIGL: ['F10', 'F8', 'F5', 'F3', 'F2', 'F1'],
+  DIGU: ['F10', 'F8', 'F5', 'F3', 'F2', 'F1'],
+  FM:  [],
+};
+
+// Return the 6 ribbon-chip slots for the active mode. Falls back gracefully
+// when the mode has no table (FM returns [] — caller hides the grid).
+export function getRibbonPresetsForMode(mode: RxMode): readonly FilterPresetSlot[] {
+  const names = RIBBON_SLOT_NAMES_BY_MODE[mode] ?? RIBBON_SLOT_NAMES_BY_MODE.USB;
+  const table = getPresetsForMode(mode);
+  return names.flatMap((n) => {
+    const hit = table.find((s) => s.slotName === n);
+    return hit ? [hit] : [];
+  });
+}
+
+// Per-mode nudge step for edge adjustments (keyboard arrow keys in the ribbon,
+// eventually the compact-panel Lo/Hi pairs in Phase 5). PRD §3.2.1 /
+// §3.4 open question — defaults are: SSB 10 Hz, CW 10 Hz, AM/SAM/DSB 100 Hz,
+// DIGL/DIGU 50 Hz.
+export function nudgeStepHz(mode: RxMode): number {
+  switch (mode) {
+    case 'USB': case 'LSB': case 'CWU': case 'CWL': return 10;
+    case 'DIGL': case 'DIGU': return 50;
+    case 'AM': case 'SAM': case 'DSB': case 'FM': return 100;
+    default: return 10;
+  }
+}

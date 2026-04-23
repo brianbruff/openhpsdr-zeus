@@ -91,7 +91,10 @@ public sealed record StateDto(
     bool AdcOverloadWarning = false,
     // Currently active filter preset slot name (e.g. "F6", "VAR1"). Null when
     // the filter was set by a drag edit without a named slot context.
-    string? FilterPresetName = null);
+    string? FilterPresetName = null,
+    // Advanced-filter ribbon visibility, persisted across server restarts via
+    // FilterPresetStore so the operator's close-the-ribbon choice sticks.
+    bool FilterAdvancedPaneOpen = false);
 
 public sealed record RadioInfo(
     string MacAddress,

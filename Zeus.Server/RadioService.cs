@@ -158,7 +158,17 @@ public sealed class RadioService : IDisposable
             AttOffsetDb: 0,
             AdcOverloadWarning: false,
             // Zeus default filter (150/2850) maps to the seeded USB VAR1 slot.
-            FilterPresetName: "VAR1");
+            FilterPresetName: "VAR1",
+            FilterAdvancedPaneOpen: filterPresetStore?.GetAdvancedPaneOpen() ?? false);
+    }
+
+    // Ribbon-visibility setter — frontend toggles via REST, server broadcasts
+    // a StateDto so other browser tabs stay in sync.
+    public StateDto SetFilterAdvancedPaneOpen(bool open)
+    {
+        _filterPresetStore?.SetAdvancedPaneOpen(open);
+        Mutate(s => s with { FilterAdvancedPaneOpen = open });
+        return Snapshot();
     }
 
     public IProtocol1Client? ActiveClient

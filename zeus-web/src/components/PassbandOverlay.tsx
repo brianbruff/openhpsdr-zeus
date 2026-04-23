@@ -38,13 +38,20 @@
 import { useDisplayStore } from '../state/display-store';
 import { useConnectionStore } from '../state/connection-store';
 
-// Translucent rectangle drawn inside the panadapter container to show the
-// active receive filter passband, mapped from [filterLowHz, filterHighHz]
-// relative to the VFO centre. Asymmetric by design: USB lives to the right
-// of carrier, LSB to the left, CW narrow around zero, AM symmetric.
-// Positioned by percentage of the total span so it tracks resize and tune
-// without measuring DOM width.
-export function PassbandOverlay() {
+type PassbandOverlayProps = {
+  // When true, render the amber fill only (no edge lines). The waterfall
+  // variant uses this; the panadapter carries the resolution for fine
+  // alignment and keeps the edge lines.
+  fillOnly?: boolean;
+};
+
+// Translucent rectangle drawn inside the panadapter/waterfall container to
+// show the active receive filter passband, mapped from [filterLowHz,
+// filterHighHz] relative to the VFO centre. Asymmetric by design: USB lives
+// to the right of carrier, LSB to the left, CW narrow around zero, AM
+// symmetric. Positioned by percentage of the total span so it tracks resize
+// and tune without measuring DOM width.
+export function PassbandOverlay({ fillOnly = false }: PassbandOverlayProps = {}) {
   const centerHz = useDisplayStore((s) => s.centerHz);
   const hzPerPixel = useDisplayStore((s) => s.hzPerPixel);
   const width = useDisplayStore((s) => s.panDb?.length ?? 0);
@@ -73,8 +80,8 @@ export function PassbandOverlay() {
         left: `${leftPct}%`,
         width: `${widthPct}%`,
         background: 'rgba(255, 160, 40, 0.18)',
-        borderLeft: '1px solid rgba(255, 160, 40, 0.6)',
-        borderRight: '1px solid rgba(255, 160, 40, 0.6)',
+        borderLeft: fillOnly ? 'none' : '1px solid rgba(255, 160, 40, 0.6)',
+        borderRight: fillOnly ? 'none' : '1px solid rgba(255, 160, 40, 0.6)',
       }}
     />
   );

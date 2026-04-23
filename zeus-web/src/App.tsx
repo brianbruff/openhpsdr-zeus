@@ -52,6 +52,7 @@ import { MobilePttButton } from './components/MobilePttButton';
 import { MobileZoomSlider } from './components/MobileZoomSlider';
 import { ModeBandwidth } from './components/ModeBandwidth';
 import { FilterPanel } from './components/filter/FilterPanel';
+import { FilterRibbon, useFilterRibbonOpenSync } from './components/filter/FilterRibbon';
 import { MoxButton } from './components/MoxButton';
 import { Panadapter } from './components/Panadapter';
 import { PaTempChip } from './components/PaTempChip';
@@ -110,6 +111,7 @@ export default function App() {
 
   useKeyboardShortcuts();
   useMicUplink();
+  useFilterRibbonOpenSync();
 
   useEffect(() => {
     const stop = startRealtime();
@@ -657,6 +659,12 @@ export default function App() {
             <MicGainSlider />
           </div>
         </div>
+      </div>
+
+      {/* Advanced filter ribbon — desktop only. Visibility persists server-side
+          via /api/filter/advanced-pane. On mobile the ribbon is never mounted. */}
+      <div className="hide-mobile">
+        <FilterRibbon />
       </div>
 
       <AlertBanner />

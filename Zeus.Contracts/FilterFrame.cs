@@ -71,3 +71,6 @@ public sealed record FilterPresetDto(
     int LowHz,
     int HighHz,
     bool IsVar);
+
+// Advanced-ribbon pane visibility toggle.
+public sealed record FilterAdvancedPaneRequest(bool Open);

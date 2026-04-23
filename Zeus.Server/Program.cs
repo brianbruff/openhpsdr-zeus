@@ -404,6 +404,14 @@ app.MapPost("/api/filter/presets", (FilterPresetWriteRequest req, RadioService r
     return Results.Ok(r.GetFilterPresets(req.Mode));
 });
 
+// Advanced-ribbon pane visibility. Persisted via FilterPresetStore so the
+// operator's close-the-ribbon choice survives a Zeus.Server restart.
+app.MapPost("/api/filter/advanced-pane", (FilterAdvancedPaneRequest req, RadioService r) =>
+{
+    log.LogInformation("api.filter.advancedPane open={Open}", req.Open);
+    return r.SetFilterAdvancedPaneOpen(req.Open);
+});
+
 app.MapPost("/api/sampleRate", (SampleRateSetRequest req, RadioService r) =>
 {
     log.LogInformation("api.sampleRate rate={Rate}", req.Rate);

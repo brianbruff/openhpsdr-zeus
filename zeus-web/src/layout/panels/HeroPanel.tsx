@@ -161,6 +161,7 @@ export function HeroPanel() {
             }}
             fallback={null}
           >
+            {effectiveHome && (
             <LeafletWorldMap
               home={{
                 call: effectiveHome.call,
@@ -185,6 +186,7 @@ export function HeroPanel() {
               interactive={mapInteractive}
               onRotateToBearing={handleRotateToBearing}
             />
+            )}
           </LeafletMapErrorBoundary>
         </div>
         <div

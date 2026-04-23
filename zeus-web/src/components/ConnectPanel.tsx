@@ -335,43 +335,84 @@ export function ConnectPanel() {
           : 'Refreshes every 10 s';
 
   return (
-    <div className="panel" style={{ padding: 0, minWidth: 460, maxWidth: 580 }}>
+    <div className="panel" style={{ padding: 0, minWidth: 460, maxWidth: 580, position: 'relative', overflow: 'hidden' }}>
+      <div
+        aria-hidden
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 360,
+          backgroundImage: 'url(/zeus-clouds.jpg)',
+          backgroundSize: 'cover',
+          backgroundPosition: 'center 18%',
+          zIndex: 0,
+          pointerEvents: 'none',
+        }}
+      />
+      <div
+        aria-hidden
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 360,
+          background:
+            'linear-gradient(180deg, rgba(10,15,24,0.25) 0%, rgba(10,15,24,0.55) 55%, var(--bg-1) 92%)',
+          zIndex: 1,
+          pointerEvents: 'none',
+        }}
+      />
+      <div style={{ position: 'relative', zIndex: 2 }}>
       <div
         style={{
-          position: 'relative',
-          height: 140,
-          overflow: 'hidden',
-          borderBottom: '1px solid var(--panel-border)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          height: 40,
+          padding: '0 12px',
           background:
-            'radial-gradient(ellipse at center, #1a2740 0%, #0a0f18 70%, #05080d 100%)',
+            'linear-gradient(180deg, rgba(58,59,63,0.55), rgba(35,36,39,0.75))',
+          backdropFilter: 'blur(6px)',
+          borderBottom: '1px solid rgba(0,0,0,0.5)',
+          boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.06)',
         }}
       >
-        <img
-          src="/zeus-hero.png"
-          alt=""
-          aria-hidden
-          style={{
-            position: 'absolute',
-            top: '50%',
-            left: '50%',
-            transform: 'translate(-50%, -50%)',
-            height: '110%',
-            width: 'auto',
-            objectFit: 'contain',
-            filter: 'drop-shadow(0 4px 10px rgba(0,0,0,0.7))',
-            pointerEvents: 'none',
-          }}
-        />
-        <div
-          style={{
-            position: 'absolute',
-            inset: 0,
-            background:
-              'linear-gradient(180deg, rgba(0,0,0,0) 55%, rgba(0,0,0,0.55) 100%)',
-            pointerEvents: 'none',
-          }}
-        />
+        <div style={{ width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden>
+            <circle cx="12" cy="12" r="3" fill="var(--accent)" />
+            <circle cx="12" cy="12" r="7" fill="none" stroke="var(--accent)" strokeWidth="1" opacity="0.5" />
+            <circle cx="12" cy="12" r="11" fill="none" stroke="var(--accent)" strokeWidth="1" opacity="0.25" />
+          </svg>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.05 }}>
+          <span
+            className="mono"
+            style={{
+              fontSize: 14,
+              fontWeight: 700,
+              letterSpacing: '0.02em',
+              color: 'var(--fg-0)',
+              textShadow: '0 1px 2px rgba(0,0,0,0.8)',
+            }}
+          >
+            ZEUS
+          </span>
+          <span
+            className="label-xs"
+            style={{
+              color: 'var(--fg-1)',
+              fontSize: 9,
+              textShadow: '0 1px 2px rgba(0,0,0,0.8)',
+            }}
+          >
+            OpenHPSDR · Protocol 1 / 2
+          </span>
+        </div>
       </div>
+      <div style={{ height: 180 }} />
 
       <div
         style={{
@@ -392,7 +433,7 @@ export function ConnectPanel() {
         </span>
       </div>
 
-      <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12, background: 'var(--bg-1)' }}>
         <div
           role="tablist"
           aria-label="Connect mode"
@@ -559,6 +600,7 @@ export function ConnectPanel() {
             onRemove={removeEndpoint}
           />
         )}
+      </div>
       </div>
     </div>
   );

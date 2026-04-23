@@ -38,6 +38,7 @@
 using System.Net;
 using Microsoft.Extensions.Logging;
 using Zeus.Contracts;
+using Zeus.Dsp;
 using Zeus.Protocol1;
 
 namespace Zeus.Server;
@@ -394,8 +395,14 @@ public sealed class RadioService : IDisposable
 
     public StateDto SetZoom(int level)
     {
-        if (level is not (1 or 2 or 4 or 8))
-            throw new ArgumentException($"zoom level must be 1, 2, 4, or 8; got {level}", nameof(level));
+        // Accepts the full DSP range (1..16); Program.cs already range-checks
+        // the HTTP payload against these same bounds. A prior powers-of-two
+        // guard here silently rejected 3/5/6/7 with a 500, causing the
+        // frontend slider (step=1, 1..8) to appear stuck after valid steps.
+        if (level < SyntheticDspEngine.MinZoomLevel || level > SyntheticDspEngine.MaxZoomLevel)
+            throw new ArgumentException(
+                $"zoom level must be in [{SyntheticDspEngine.MinZoomLevel},{SyntheticDspEngine.MaxZoomLevel}]; got {level}",
+                nameof(level));
         Mutate(s => s with { ZoomLevel = level });
         return Snapshot();
     }

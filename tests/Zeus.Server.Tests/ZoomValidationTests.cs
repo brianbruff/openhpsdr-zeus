@@ -1,0 +1,85 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF),
+//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//
+// This program is free software: you can redistribute it and/or modify it
+// under the terms of the GNU General Public License as published by the
+// Free Software Foundation, either version 2 of the License, or (at your
+// option) any later version. See the LICENSE file at the root of this
+// repository for the full text, or https://www.gnu.org/licenses/.
+//
+// Zeus is an independent reimplementation in .NET — not a fork. Its
+// Protocol-1 / Protocol-2 framing, WDSP integration, meter pipelines, and
+// TX behaviour were informed by studying the Thetis project
+// (https://github.com/ramdor/Thetis), the authoritative reference
+// implementation in the OpenHPSDR ecosystem. Zeus gratefully acknowledges
+// the Thetis contributors whose work made this possible:
+//
+//   Richard Samphire (MW0LGE), Warren Pratt (NR0V),
+//   Laurence Barker (G8NJJ),   Rick Koch (N1GP),
+//   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
+//   Doug Wigley (W5WC),        FlexRadio Systems,
+//   Richard Allen (W5SD),      Joe Torrey (WD5Y),
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//
+// Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
+// and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
+// here. See ATTRIBUTIONS.md at the repository root for the full provenance
+// statement and per-component attribution.
+//
+// WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
+// (NR0V), distributed under GPL v2 or later.
+//
+// Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
+// License for details.
+
+using Microsoft.Extensions.Logging.Abstractions;
+using Xunit;
+
+namespace Zeus.Server.Tests;
+
+/// <summary>
+/// Regression coverage for RadioService.SetZoom. An earlier guard rejected
+/// anything that wasn't a power of two (1/2/4/8), which silently 500'd the
+/// frontend's step=1 slider for levels 3/5/6/7 and left the UI "stuck"
+/// bouncing against the next state-poll. Service must accept the full
+/// DSP-engine range (1..16) and reject anything outside it.
+/// </summary>
+public class ZoomValidationTests
+{
+    private static RadioService BuildRadio()
+    {
+        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance);
+        return new RadioService(NullLoggerFactory.Instance, dspStore);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(6)]
+    [InlineData(7)]
+    [InlineData(8)]
+    [InlineData(16)]
+    public void SetZoom_AcceptsInRangeLevels(int level)
+    {
+        using var radio = BuildRadio();
+        var snap = radio.SetZoom(level);
+        Assert.Equal(level, snap.ZoomLevel);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(17)]
+    [InlineData(100)]
+    public void SetZoom_RejectsOutOfRangeLevels(int level)
+    {
+        using var radio = BuildRadio();
+        Assert.Throws<ArgumentException>(() => radio.SetZoom(level));
+    }
+}

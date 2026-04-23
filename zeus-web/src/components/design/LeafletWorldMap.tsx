@@ -35,7 +35,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type MutableRefObject } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { bearingDeg, destinationPoint, distanceKm, greatCircleSegments } from './geo';
@@ -69,6 +69,10 @@ type LeafletWorldMapProps = {
   /** If present, the target popup shows a "Rotate to NNN°" button that calls
    *  this with the current great-circle bearing. Wire to rotator-store. */
   onRotateToBearing?: (bearingDeg: number) => void;
+  /** Optional out-ref: populated with the L.Map instance once mounted, null
+   *  after unmount. Lets a parent drive pan/zoom imperatively (wheel bindings
+   *  on the spectrum canvas above call panBy/setZoom through this). */
+  mapRef?: MutableRefObject<L.Map | null>;
 };
 
 // Esri World Imagery — free satellite photo tiles, no API key. Dark oceans
@@ -220,6 +224,7 @@ export function LeafletWorldMap({
   active,
   interactive = false,
   onRotateToBearing,
+  mapRef: externalMapRef,
 }: LeafletWorldMapProps) {
   // Wrapper owns our dynamic className (`interactive`, aria-hidden). Leaflet
   // mounts into an inner div whose className we never touch, so the
@@ -281,6 +286,7 @@ export function LeafletWorldMap({
 
     layerRef.current = L.layerGroup().addTo(map);
     mapRef.current = map;
+    if (externalMapRef) externalMapRef.current = map;
 
     const ro = new ResizeObserver(() => map.invalidateSize());
     ro.observe(el);
@@ -290,8 +296,9 @@ export function LeafletWorldMap({
       map.remove();
       mapRef.current = null;
       layerRef.current = null;
+      if (externalMapRef) externalMapRef.current = null;
     };
-  }, []);
+  }, [externalMapRef]);
 
   // Toggle pan/zoom handlers in response to the `interactive` prop. Keeping
   // the map mounted (rather than recreating it) preserves the current pan

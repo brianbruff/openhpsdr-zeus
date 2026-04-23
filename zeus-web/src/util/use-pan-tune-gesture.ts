@@ -35,8 +35,8 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useEffect, type RefObject } from 'react';
-import { setVfo } from '../api/client';
+import { createContext, useContext, useEffect, type RefObject } from 'react';
+import { setVfo, setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useDisplayStore } from '../state/display-store';
 
@@ -46,12 +46,38 @@ const CLICK_SLOP_PX = 3;
 // and band presets bypass it. Ham-friendly default; becomes user-settable
 // once the UX exists.
 const PAN_STEP_HZ = 500;
+// Wheel tune step. Kept in sync with the ArrowLeft/ArrowRight step in
+// use-keyboard-shortcuts.ts (TUNE_STEP_HZ) so wheel and arrow keys feel the
+// same. TODO: replace this constant with a user-settable tune-step control
+// (operator preference, bands commonly want 10/50/100/500/1000 Hz).
+const WHEEL_TUNE_STEP_HZ = 500;
+// Scroll-wheel notches normalise mouse clicks (~100px/tick) and trackpad
+// deltas to one discrete tick per this many pixels of deltaY.
+const WHEEL_NOTCH_PX = 40;
 
 function snapHz(hz: number): number {
   if (!Number.isFinite(hz)) return 0;
   const snapped = Math.round(hz / PAN_STEP_HZ) * PAN_STEP_HZ;
   return Math.min(MAX_HZ, Math.max(0, snapped));
 }
+
+function clampHz(hz: number): number {
+  if (!Number.isFinite(hz)) return 0;
+  return Math.min(MAX_HZ, Math.max(0, hz));
+}
+
+function clampZoom(z: number): ZoomLevel {
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z)));
+}
+
+// Optional map actions for alt / alt+shift + wheel. App wires these to the
+// Leaflet world map; if absent (map not mounted), alt-wheel is swallowed.
+export type SpectrumWheelActions = {
+  onMapPan?: (dx: number, dy: number) => void;
+  onMapZoom?: (delta: number) => void;
+};
+
+export const SpectrumWheelActionsContext = createContext<SpectrumWheelActions>({});
 
 function readView(): { centerHz: number; spanHz: number } | null {
   const s = useDisplayStore.getState();
@@ -72,15 +98,27 @@ function readView(): { centerHz: number; spanHz: number } | null {
 export function usePanTuneGesture(
   canvasRef: RefObject<HTMLCanvasElement | null>,
 ) {
+  const wheelActions = useContext(SpectrumWheelActionsContext);
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     type Drag = { startX: number; startHz: number; spanHz: number; moved: boolean };
+    type MapDrag = { lastX: number; lastY: number };
     let drag: Drag | null = null;
+    // alt-held pointer drag — delegates to the background map via the
+    // SpectrumWheelActionsContext so it feels like M-hold drag without
+    // swapping pointer-events on the spectrum stack.
+    let mapDrag: MapDrag | null = null;
     let pendingHz: number | null = null;
     let pendingAbort: AbortController | null = null;
     let pendingRaf = 0;
+
+    // Wheel bookkeeping: accumulate deltas so trackpad micro-deltas feel
+    // consistent, but emit at most one step per physical wheel event — one
+    // notch on a mouse wheel should be one tune/zoom step, not three.
+    let wheelAccum = 0;
+    let zoomInflight: AbortController | null = null;
 
     const flushPending = () => {
       pendingRaf = 0;
@@ -113,8 +151,41 @@ export function usePanTuneGesture(
         .catch(() => {});
     };
 
+    // Wheel-driven VFO nudge: fine-tune step, no snap to PAN_STEP_HZ. Coalesces
+    // to one POST per rAF via the same pending pipeline as drag-to-pan.
+    const nudgeVfo = (deltaHz: number) => {
+      const cur = pendingHz ?? useConnectionStore.getState().vfoHz;
+      pendingHz = clampHz(cur + deltaHz);
+      scheduleFlush();
+    };
+
+    const nudgeZoom = (delta: number) => {
+      if (delta === 0) return;
+      const cur = useConnectionStore.getState().zoomLevel;
+      const next = clampZoom(cur + delta);
+      if (next === cur) return;
+      useConnectionStore.getState().setZoomLevel(next);
+      zoomInflight?.abort();
+      const ctrl = new AbortController();
+      zoomInflight = ctrl;
+      setZoom(next, ctrl.signal)
+        .then((s) => {
+          if (!ctrl.signal.aborted) useConnectionStore.getState().applyState(s);
+        })
+        .catch(() => {});
+    };
+
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
+      // alt held → drag the background map instead of panning the spectrum.
+      // Mirrors M-hold drag behavior without the pointer-events:none swap.
+      if (e.altKey) {
+        e.preventDefault();
+        try { canvas.setPointerCapture(e.pointerId); } catch { /* ok */ }
+        mapDrag = { lastX: e.clientX, lastY: e.clientY };
+        canvas.style.cursor = 'grabbing';
+        return;
+      }
       const view = readView();
       if (!view) return;
       e.preventDefault();
@@ -133,6 +204,17 @@ export function usePanTuneGesture(
     };
 
     const onPointerMove = (e: PointerEvent) => {
+      if (mapDrag) {
+        const dx = e.clientX - mapDrag.lastX;
+        const dy = e.clientY - mapDrag.lastY;
+        mapDrag.lastX = e.clientX;
+        mapDrag.lastY = e.clientY;
+        if (dx === 0 && dy === 0) return;
+        // Negate: panBy shifts the view, but grab-drag should move the visible
+        // content *with* the finger — so the view must shift the opposite way.
+        wheelActions.onMapPan?.(-dx, -dy);
+        return;
+      }
       if (!drag) return;
       const dx = e.clientX - drag.startX;
       if (!drag.moved && Math.abs(dx) <= CLICK_SLOP_PX) return;
@@ -145,6 +227,12 @@ export function usePanTuneGesture(
     };
 
     const onPointerUp = (e: PointerEvent) => {
+      if (mapDrag) {
+        mapDrag = null;
+        canvas.style.cursor = 'grab';
+        if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+        return;
+      }
       const d = drag;
       if (!d) return;
       drag = null;
@@ -166,19 +254,72 @@ export function usePanTuneGesture(
       }
     };
 
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY === 0 && e.deltaX === 0) return;
+      // Always swallow — we don't want the page or a parent container to
+      // scroll while the cursor is over the spectrum.
+      e.preventDefault();
+
+      const alt = e.altKey;
+      const shift = e.shiftKey;
+
+      // Normalise delta units to pixels. Most browsers emit DOM_DELTA_PIXEL
+      // (0); some Firefox mouse-wheel builds still emit LINE (1) or PAGE (2).
+      const unit = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1;
+      const dxPx = e.deltaX * unit;
+      const dyPx = e.deltaY * unit;
+
+      // alt (no shift) → pan the background map. Raw pixel deltas feel right
+      // on mouse (one notch ≈ 100px) and trackpad (continuous). No
+      // accumulation so the motion stays smooth.
+      if (alt && !shift) {
+        wheelActions.onMapPan?.(dxPx, dyPx);
+        return;
+      }
+
+      // Everything else is notched. Many browsers remap shift+wheel to the
+      // horizontal axis (deltaY → 0, deltaX carries the motion); prefer
+      // whichever axis is non-zero.
+      const primary = dyPx !== 0 ? dyPx : dxPx;
+      wheelAccum += primary;
+      if (Math.abs(wheelAccum) < WHEEL_NOTCH_PX) return;
+      // One step per emission, regardless of how large the accumulated delta
+      // is. A single mouse notch should produce exactly one 500 Hz tune step
+      // (or one zoom level) — not multiple. Reset the accumulator so
+      // momentum-scroll bursts on trackpads don't build up a queue.
+      const dir = wheelAccum > 0 ? -1 : 1;
+      wheelAccum = 0;
+
+      // Zoom convention (both spectrum and map): wheel forward = zoom OUT.
+      // Operator preference — flip if this ever feels backwards.
+      if (alt && shift) {
+        wheelActions.onMapZoom?.(-dir);
+        return;
+      }
+      if (shift) {
+        nudgeZoom(-dir);
+        return;
+      }
+      nudgeVfo(dir * WHEEL_TUNE_STEP_HZ);
+    };
+
     canvas.style.cursor = 'grab';
     canvas.addEventListener('pointerdown', onPointerDown);
     canvas.addEventListener('pointermove', onPointerMove);
     canvas.addEventListener('pointerup', onPointerUp);
     canvas.addEventListener('pointercancel', onPointerUp);
+    // passive:false so preventDefault() can stop page scrolling.
+    canvas.addEventListener('wheel', onWheel, { passive: false });
 
     return () => {
       if (pendingRaf !== 0) cancelAnimationFrame(pendingRaf);
       pendingAbort?.abort();
+      zoomInflight?.abort();
       canvas.removeEventListener('pointerdown', onPointerDown);
       canvas.removeEventListener('pointermove', onPointerMove);
       canvas.removeEventListener('pointerup', onPointerUp);
       canvas.removeEventListener('pointercancel', onPointerUp);
+      canvas.removeEventListener('wheel', onWheel);
     };
-  }, [canvasRef]);
+  }, [canvasRef, wheelActions]);
 }

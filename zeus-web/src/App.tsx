@@ -83,6 +83,8 @@ import { useRotatorStore } from './state/rotator-store';
 import { useLoggerStore } from './state/logger-store';
 import { useTxStore } from './state/tx-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
+import { SpectrumWheelActionsContext, type SpectrumWheelActions } from './util/use-pan-tune-gesture';
+import type L from 'leaflet';
 import type { QrzStation } from './api/qrz';
 import type { Contact } from './components/design/data';
 
@@ -276,6 +278,19 @@ export default function App() {
     nrState.nbpNotchesEnabled;
 
   const csInputRef = useRef<HTMLInputElement | null>(null);
+  // Handle on the Leaflet map so spectrum wheel bindings (alt / alt+shift +
+  // wheel) can drive pan/zoom imperatively. Null until LeafletWorldMap mounts.
+  const mapApiRef = useRef<L.Map | null>(null);
+  const spectrumWheelActions = useMemo<SpectrumWheelActions>(() => ({
+    onMapPan: (dx, dy) => {
+      mapApiRef.current?.panBy([dx, dy], { animate: false });
+    },
+    onMapZoom: (delta) => {
+      const m = mapApiRef.current;
+      if (!m || delta === 0) return;
+      m.setZoom(m.getZoom() + delta, { animate: false });
+    },
+  }), []);
 
   const engageTerminator = useCallback((cs?: string) => {
     const target = (cs ?? callsign).toUpperCase();
@@ -499,6 +514,7 @@ export default function App() {
 
   return (
     <WorkspaceContext.Provider value={workspaceCtx}>
+    <SpectrumWheelActionsContext.Provider value={spectrumWheelActions}>
     <div className="app" data-screen-label="01 Main Console" style={{ position: 'relative' }}>
       {/* Top bar — sits above the disconnected overlay (zIndex 200) so QRZ
           sign-in and Discover Radio stay usable before the HL2 is connected. */}
@@ -736,6 +752,7 @@ export default function App() {
                   }
                   active={terminatorActive}
                   interactive={mapInteractive}
+                  mapRef={mapApiRef}
                   onRotateToBearing={(brg) => {
                     const rot = useRotatorStore.getState();
                     if (!rot.config.enabled || !rot.status?.connected) return;
@@ -886,6 +903,7 @@ export default function App() {
 
       {disconnectedOverlay}
     </div>
+    </SpectrumWheelActionsContext.Provider>
     </WorkspaceContext.Provider>
   );
 }

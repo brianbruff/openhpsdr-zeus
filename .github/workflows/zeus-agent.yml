@@ -27,7 +27,9 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: "--max-turns 15 --model claude-sonnet-4-6 --allowedTools 'Bash(gh label list),Bash(gh label list:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh search:*),Read,Glob,Grep'"
+          allowed_tools: "Bash(gh label list),Bash(gh label list:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh search:*),Read,Glob,Grep"
+          max_turns: "15"
+          model: "claude-sonnet-4-6"
           prompt: |
             You are **Zeus-Agent** 📡, the automated triage assistant for Zeus
             (a cross-platform, web-frontend HPSDR client for original-protocol

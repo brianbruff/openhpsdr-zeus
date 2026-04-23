@@ -35,10 +35,12 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { bearingDeg, destinationPoint, distanceKm, greatCircleSegments } from './geo';
+import { DayNightOverlay } from './DayNightOverlay';
+import { GrayLineOverlay } from './GrayLineOverlay';
 
 type MapStation = {
   call: string;
@@ -69,6 +71,10 @@ type LeafletWorldMapProps = {
   /** If present, the target popup shows a "Rotate to NNN°" button that calls
    *  this with the current great-circle bearing. Wire to rotator-store. */
   onRotateToBearing?: (bearingDeg: number) => void;
+  /** Show greyline (solar terminator + DX zone). Default: false. */
+  showGreyline?: boolean;
+  /** Show day/night shading overlay. Default: false. */
+  showDayNight?: boolean;
 };
 
 // Esri World Imagery — free satellite photo tiles, no API key. Dark oceans
@@ -220,6 +226,8 @@ export function LeafletWorldMap({
   active,
   interactive = false,
   onRotateToBearing,
+  showGreyline = false,
+  showDayNight = false,
 }: LeafletWorldMapProps) {
   // Wrapper owns our dynamic className (`interactive`, aria-hidden). Leaflet
   // mounts into an inner div whose className we never touch, so the
@@ -237,6 +245,15 @@ export function LeafletWorldMap({
   // without invalidating the marker itself.
   const onRotateRef = useRef(onRotateToBearing);
   useEffect(() => { onRotateRef.current = onRotateToBearing; }, [onRotateToBearing]);
+
+  // Current time for overlay updates — refresh every 60 seconds
+  const [currentTime, setCurrentTime] = useState(() => new Date());
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 60000); // 60-second refresh matches Log4YM cadence
+    return () => clearInterval(interval);
+  }, []);
 
   // One-time init: Leaflet map, tile layer, attribution control in the corner.
   useEffect(() => {
@@ -421,6 +438,8 @@ export function LeafletWorldMap({
       aria-hidden={interactive ? undefined : true}
     >
       <div ref={containerRef} className="leaflet-host" />
+      {showDayNight && <DayNightOverlay map={mapRef.current} currentTime={currentTime} />}
+      {showGreyline && <GrayLineOverlay map={mapRef.current} currentTime={currentTime} />}
     </div>
   );
 }

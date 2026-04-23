@@ -73,6 +73,10 @@ export function HeroPanel() {
     lp,
     heroTitle,
     submitBeam,
+    showGreyline,
+    setShowGreyline,
+    showDayNight,
+    setShowDayNight,
   } = useWorkspace();
   const connected = useConnectionStore((s) => s.status === 'Connected');
   const hzPerPixel = useDisplayHzPerPixel();
@@ -139,6 +143,28 @@ export function HeroPanel() {
           </>
         )}
         {terminatorActive && mapAvailable && (
+          <>
+            <button
+              type="button"
+              className={`chip mono ${showGreyline ? 'accent' : ''}`}
+              onClick={() => setShowGreyline(!showGreyline)}
+              title="Toggle greyline (solar terminator + DX zone)"
+            >
+              <span className="k">GREY</span>
+              <span className="v">{showGreyline ? 'ON' : 'OFF'}</span>
+            </button>
+            <button
+              type="button"
+              className={`chip mono ${showDayNight ? 'accent' : ''}`}
+              onClick={() => setShowDayNight(!showDayNight)}
+              title="Toggle day/night shading"
+            >
+              <span className="k">D/N</span>
+              <span className="v">{showDayNight ? 'ON' : 'OFF'}</span>
+            </button>
+          </>
+        )}
+        {terminatorActive && mapAvailable && (
           <span
             className={`chip mono ${mapInteractive ? 'accent' : ''}`}
             title="Hold M to pan/zoom the map (click-to-tune paused)"
@@ -185,6 +211,8 @@ export function HeroPanel() {
               active={terminatorActive}
               interactive={mapInteractive}
               onRotateToBearing={handleRotateToBearing}
+              showGreyline={showGreyline}
+              showDayNight={showDayNight}
             />
             )}
           </LeafletMapErrorBoundary>

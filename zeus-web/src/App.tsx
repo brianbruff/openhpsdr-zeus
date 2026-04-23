@@ -173,6 +173,11 @@ export default function App() {
   // is hidden.
   const [mapAvailable, setMapAvailable] = useState(true);
 
+  // Greyline and day/night overlay toggles — off by default per CLAUDE.md
+  // (operators notice overlays on first connect). Wire to HeroPanel chips.
+  const [showGreyline, setShowGreyline] = useState(false);
+  const [showDayNight, setShowDayNight] = useState(false);
+
   const qrzHome = useQrzStore((s) => s.home);
   const qrzLookup = useQrzStore((s) => s.lastLookup);
   const qrzHasXml = useQrzStore((s) => s.hasXmlSubscription);
@@ -475,6 +480,10 @@ export default function App() {
     lp,
     dist,
     heroTitle,
+    showGreyline,
+    setShowGreyline,
+    showDayNight,
+    setShowDayNight,
     csInputRef,
     engageTerminator,
     disengageTerminator,
@@ -491,6 +500,7 @@ export default function App() {
     callsign, terminatorActive, enriching, lookupKey, contact,
     qrzLookupError, qrzActive, mapAvailable, mapInteractive, effectiveHome,
     beamOverrideDeg, beamInputStr, rotLiveAz, sp, lp, dist,
+    showGreyline, showDayNight,
     // heroTitle and logbookActions are ReactNodes (new objects each render);
     // their underlying primitive deps are already above, so omit them here.
     dspActive, wpm, logbookTitle,

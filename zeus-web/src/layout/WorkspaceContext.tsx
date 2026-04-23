@@ -80,6 +80,10 @@ export interface WorkspaceCtx {
   lp: number;
   dist: number;
   heroTitle: ReactNode;
+  showGreyline: boolean;
+  setShowGreyline: (v: boolean) => void;
+  showDayNight: boolean;
+  setShowDayNight: (v: boolean) => void;
   csInputRef: RefObject<HTMLInputElement | null>;
   engageTerminator: (cs?: string) => void;
   disengageTerminator: () => void;

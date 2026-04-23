@@ -5,31 +5,42 @@
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 //
 // Filter visualization PRD §3.2.1 — mini-panadapter inside the advanced
-// filter ribbon. Renders a 10 kHz-span spectrum strip centered on the VFO,
-// with a translucent amber passband overlay and edge-drag handles.
+// filter ribbon. Matches the mockup at docs/pics/filterpanel_mockup.png:
+// light-gray spectrum trace, hollow blue passband rectangle with corner
+// triangle handles, x-axis tick labels at 2 kHz intervals around the VFO.
 //
-// Implementation note: uses Canvas 2D rather than a second WebGL context.
-// At the ribbon's small target size (~640×80 px) the 2D path comfortably
-// hits the <2 ms/frame target on integrated GPUs without the complexity of
-// scissor-clipping the main canvas. If a future profile shows 2D as the
-// bottleneck we can swap in a shared-context GL renderer without changing
-// the component's surface.
+// Uses Canvas 2D (not a second WebGL context) — at ~640×110 CSS pixels the
+// 2D path hits the <2 ms/frame budget comfortably and avoids the complexity
+// of scissor-clipping or sharing the main panadapter's GL context.
 
 import { useEffect, useRef } from 'react';
 import { useDisplayStore } from '../../state/display-store';
 import { useConnectionStore } from '../../state/connection-store';
 import { setFilter } from '../../api/client';
 
-const RIBBON_SPAN_HZ = 10_000;
+const RIBBON_SPAN_HZ = 10_000;        // 10 kHz span centered on VFO
+const TICK_STEP_HZ = 2_000;           // label a tick every 2 kHz
 const DB_FLOOR = -130;
 const DB_CEIL = -30;
 const DRAG_MIN_INTERVAL_MS = 50;
 const EDGE_HIT_PX = 6;
 
+// Mockup palette.
+const COL_ACCENT = '#4a9eff';          // passband outline / corner handles
+const COL_TRACE = 'rgba(215, 225, 240, 0.85)'; // spectrum line
+const COL_TICK_LABEL = '#5a7598';      // axis tick text
+const COL_VFO_CENTER = 'rgba(74, 158, 255, 0.35)'; // subtle VFO center line
+
 type DragMode = 'lo' | 'hi' | 'inside';
 
 function presetIsFixed(name: string | null): boolean {
   return !!name && /^F([1-9]|10)$/.test(name);
+}
+
+// Format VFO-relative Hz offset as absolute-MHz with 3 decimals (e.g. 14.249).
+// Used for x-axis tick labels.
+function formatTickMhz(absHz: number): string {
+  return (absHz / 1_000_000).toFixed(3);
 }
 
 export function FilterMiniPan() {
@@ -48,12 +59,10 @@ export function FilterMiniPan() {
     pointerId: number;
   } | null>(null);
 
-  // Subscribe imperatively to avoid a React re-render per frame — we paint
-  // from display-store snapshots whenever the frame seq ticks.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d', { alpha: false });
+    const ctx = canvas.getContext('2d', { alpha: true });
     if (!ctx) return;
 
     let rafHandle = 0;
@@ -66,8 +75,6 @@ export function FilterMiniPan() {
       if (d.lastSeq === lastSeq) return;
       lastSeq = d.lastSeq;
 
-      // Size canvas to its CSS box. Guarded against zero-sized offscreen
-      // mounts during the first paint.
       const dpr = window.devicePixelRatio || 1;
       const cssW = canvas.clientWidth;
       const cssH = canvas.clientHeight;
@@ -77,31 +84,31 @@ export function FilterMiniPan() {
       if (canvas.width !== w) canvas.width = w;
       if (canvas.height !== h) canvas.height = h;
 
-      // Fill background.
-      ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, w, h);
+      ctx.clearRect(0, 0, w, h);
 
+      // Reserve the bottom ~16 px (dpr-adjusted) for the x-axis labels so the
+      // trace never overlaps them.
+      const axisH = Math.round(14 * dpr);
+      const plotH = h - axisH;
+
+      const vfo = Number(c.vfoHz);
       const panDb = d.panDb;
       const binsPerHz = d.hzPerPixel > 0 ? 1 / d.hzPerPixel : 0;
 
       if (panDb && binsPerHz > 0) {
-        const vfo = Number(d.centerHz);
-        const loHz = vfo - RIBBON_SPAN_HZ / 2;
-
-        // Map full pan span to bins; the ribbon extracts a 10 kHz window
-        // centered on the VFO. If the main pan span is narrower than the
-        // ribbon's 10 kHz we render what we have — the rest stays floor.
+        const displayCenter = Number(d.centerHz);
         const fullSpanHz = panDb.length * d.hzPerPixel;
-        const fullStartHz = vfo - fullSpanHz / 2;
+        const fullStartHz = displayCenter - fullSpanHz / 2;
+        const loHz = vfo - RIBBON_SPAN_HZ / 2;
         const binStart = Math.max(0, Math.floor((loHz - fullStartHz) * binsPerHz));
         const binEnd = Math.min(panDb.length, Math.ceil((loHz + RIBBON_SPAN_HZ - fullStartHz) * binsPerHz));
 
-        // Decimate to w px, max-of-bins per pixel column.
-        ctx.strokeStyle = '#FFA028';
-        ctx.lineWidth = 1 * dpr;
-        ctx.beginPath();
+        // Decimated spectrum trace.
         const bins = binEnd - binStart;
         if (bins > 0) {
+          ctx.lineWidth = 1 * dpr;
+          ctx.strokeStyle = COL_TRACE;
+          ctx.beginPath();
           for (let x = 0; x < w; x++) {
             const b0 = binStart + Math.floor((x * bins) / w);
             const b1 = binStart + Math.floor(((x + 1) * bins) / w);
@@ -112,60 +119,90 @@ export function FilterMiniPan() {
             }
             if (peak === -Infinity) peak = DB_FLOOR;
             const norm = (peak - DB_FLOOR) / (DB_CEIL - DB_FLOOR);
-            const y = h - Math.max(0, Math.min(1, norm)) * h;
+            const y = plotH - Math.max(0, Math.min(1, norm)) * plotH;
             if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
           }
           ctx.stroke();
         }
-
-        // Passband rectangle (amber fill).
-        const passLeftPx = ((c.filterLowHz + RIBBON_SPAN_HZ / 2) / RIBBON_SPAN_HZ) * w;
-        const passRightPx = ((c.filterHighHz + RIBBON_SPAN_HZ / 2) / RIBBON_SPAN_HZ) * w;
-        const passW = Math.max(0, passRightPx - passLeftPx);
-        ctx.fillStyle = 'rgba(255, 160, 40, 0.18)';
-        ctx.fillRect(passLeftPx, 0, passW, h);
-        ctx.strokeStyle = 'rgba(255, 160, 40, 0.85)';
-        ctx.lineWidth = 1 * dpr;
-        ctx.beginPath();
-        ctx.moveTo(Math.round(passLeftPx) + 0.5, 0);
-        ctx.lineTo(Math.round(passLeftPx) + 0.5, h);
-        ctx.moveTo(Math.round(passRightPx) + 0.5, 0);
-        ctx.lineTo(Math.round(passRightPx) + 0.5, h);
-        ctx.stroke();
-
-        // Corner handles (triangular amber marks).
-        const handle = 6 * dpr;
-        ctx.fillStyle = 'rgba(255, 160, 40, 0.9)';
-        ctx.beginPath();
-        ctx.moveTo(passLeftPx, 0);
-        ctx.lineTo(passLeftPx + handle, 0);
-        ctx.lineTo(passLeftPx, handle);
-        ctx.closePath();
-        ctx.fill();
-        ctx.beginPath();
-        ctx.moveTo(passRightPx, 0);
-        ctx.lineTo(passRightPx - handle, 0);
-        ctx.lineTo(passRightPx, handle);
-        ctx.closePath();
-        ctx.fill();
-
-        // VFO center tick.
-        ctx.strokeStyle = 'rgba(255, 160, 40, 0.35)';
-        ctx.beginPath();
-        ctx.moveTo(w / 2, 0);
-        ctx.lineTo(w / 2, h);
-        ctx.stroke();
       }
+
+      // VFO center line — subtle, in the plot area only.
+      ctx.strokeStyle = COL_VFO_CENTER;
+      ctx.lineWidth = 1 * dpr;
+      ctx.beginPath();
+      ctx.moveTo(w / 2, 0);
+      ctx.lineTo(w / 2, plotH);
+      ctx.stroke();
+
+      // Passband rectangle — hollow (PRD §3.2.1 mockup) with corner triangles.
+      const passLeftPx = ((c.filterLowHz + RIBBON_SPAN_HZ / 2) / RIBBON_SPAN_HZ) * w;
+      const passRightPx = ((c.filterHighHz + RIBBON_SPAN_HZ / 2) / RIBBON_SPAN_HZ) * w;
+      const onScreen = passRightPx > 0 && passLeftPx < w;
+      if (onScreen) {
+        const clampedL = Math.max(0, passLeftPx);
+        const clampedR = Math.min(w, passRightPx);
+        // Outline: 4 sides, 1.5 px blue.
+        ctx.strokeStyle = COL_ACCENT;
+        ctx.lineWidth = 1.5 * dpr;
+        ctx.beginPath();
+        ctx.rect(
+          Math.round(clampedL) + 0.5,
+          0.5,
+          Math.max(0, Math.round(clampedR - clampedL) - 1),
+          plotH - 1,
+        );
+        ctx.stroke();
+
+        // Corner triangle handles (top-left, top-right).
+        const tri = Math.round(8 * dpr);
+        ctx.fillStyle = COL_ACCENT;
+        ctx.beginPath();
+        ctx.moveTo(clampedL, 0);
+        ctx.lineTo(clampedL + tri, 0);
+        ctx.lineTo(clampedL, tri);
+        ctx.closePath();
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(clampedR, 0);
+        ctx.lineTo(clampedR - tri, 0);
+        ctx.lineTo(clampedR, tri);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // X-axis tick labels. One label every TICK_STEP_HZ (2 kHz), centered
+      // on the VFO. VFO sits at the middle tick.
+      ctx.fillStyle = COL_TICK_LABEL;
+      ctx.font = `${Math.round(9.5 * dpr)}px "SFMono-Regular", ui-monospace, monospace`;
+      ctx.textBaseline = 'middle';
+      const labelY = plotH + Math.round(axisH / 2);
+      const nTicks = Math.floor(RIBBON_SPAN_HZ / TICK_STEP_HZ) + 1; // inclusive both ends
+      const tickOffsets: number[] = [];
+      // Center-out so VFO tick is guaranteed; symmetric ticks either side.
+      const halfTicks = Math.floor(nTicks / 2);
+      for (let i = -halfTicks; i <= halfTicks; i++) tickOffsets.push(i * TICK_STEP_HZ);
+      tickOffsets.forEach((offHz) => {
+        const absHz = vfo + offHz;
+        const xPx = ((offHz + RIBBON_SPAN_HZ / 2) / RIBBON_SPAN_HZ) * w;
+        if (xPx < 0 || xPx > w) return;
+        const text = formatTickMhz(absHz);
+        const m = ctx.measureText(text);
+        // Bold the center (VFO) label via a brighter fill.
+        ctx.fillStyle = offHz === 0 ? '#a9b9d3' : COL_TICK_LABEL;
+        ctx.fillText(text, Math.max(2, Math.min(w - m.width - 2, xPx - m.width / 2)), labelY);
+      });
     };
 
-    // Schedule repaint whenever display-store updates (frame arrival or
-    // resize). Also repaint when the filter edges move optimistically.
     const unsubDisplay = useDisplayStore.subscribe(() => {
       if (rafHandle === 0) rafHandle = requestAnimationFrame(draw);
     });
     const unsubConn = useConnectionStore.subscribe((s, p) => {
-      if (s.filterLowHz !== p.filterLowHz || s.filterHighHz !== p.filterHighHz) {
-        lastSeq = -1; // force redraw — same FFT, different overlay
+      if (
+        s.filterLowHz !== p.filterLowHz ||
+        s.filterHighHz !== p.filterHighHz ||
+        s.vfoHz !== p.vfoHz
+      ) {
+        lastSeq = -1;
         if (rafHandle === 0) rafHandle = requestAnimationFrame(draw);
       }
     });
@@ -176,9 +213,7 @@ export function FilterMiniPan() {
     });
     ro.observe(canvas);
 
-    // Initial paint
     rafHandle = requestAnimationFrame(draw);
-
     return () => {
       if (rafHandle !== 0) cancelAnimationFrame(rafHandle);
       unsubDisplay();
@@ -187,7 +222,6 @@ export function FilterMiniPan() {
     };
   }, []);
 
-  // Drag logic — identical rate-limiting strategy to FilterEdgeDrag.
   const flushPending = () => {
     const d = dragRef.current;
     if (!d) return;
@@ -256,7 +290,6 @@ export function FilterMiniPan() {
     e.stopPropagation();
 
     const hzPerPx = RIBBON_SPAN_HZ / d.rect.width;
-
     let loHz = d.startLoHz;
     let hiHz = d.startHiHz;
     if (d.mode === 'lo') {
@@ -283,7 +316,6 @@ export function FilterMiniPan() {
     const d = dragRef.current;
     if (!d || e.pointerId !== d.pointerId) return;
     e.stopPropagation();
-
     const canvas = canvasRef.current;
     if (canvas && canvas.hasPointerCapture(e.pointerId)) {
       try { canvas.releasePointerCapture(e.pointerId); } catch { /* ok */ }
@@ -297,14 +329,11 @@ export function FilterMiniPan() {
     const slot = d.activeSlot;
     dragRef.current = null;
     const applyState = useConnectionStore.getState().applyState;
-    setFilter(lo, hi, slot)
-      .then(applyState)
-      .catch(() => {});
+    setFilter(lo, hi, slot).then(applyState).catch(() => {});
   };
 
-  // Hover-driven cursor hint (ew-resize on edges, move inside).
   const onPointerMoveHover = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (dragRef.current) return; // during drag, don't fight the cursor
+    if (dragRef.current) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -329,6 +358,7 @@ export function FilterMiniPan() {
         width: '100%',
         height: '100%',
         touchAction: 'none',
+        background: 'transparent',
       }}
       onPointerDown={onPointerDown}
       onPointerMove={(e) => {

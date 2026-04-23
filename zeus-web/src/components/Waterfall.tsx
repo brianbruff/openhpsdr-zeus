@@ -41,7 +41,6 @@ import { createWfRenderer } from '../gl/waterfall';
 import { useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
-import { PassbandOverlay } from './PassbandOverlay';
 
 // Throttle row uploads so the waterfall scrolls at ~(server tick / N).
 // With a 30 Hz server tick N=2 gives ~15 Hz, which is a comfortable scroll
@@ -168,7 +167,6 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       }}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
-      <PassbandOverlay fillOnly />
       <div
         className="tuning-cursor"
         style={{ left: '50%', pointerEvents: 'none' }}

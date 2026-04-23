@@ -661,12 +661,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Advanced filter ribbon — desktop only. Visibility persists server-side
-          via /api/filter/advanced-pane. On mobile the ribbon is never mounted. */}
-      <div className="hide-mobile">
-        <FilterRibbon />
-      </div>
-
       <AlertBanner />
 
       {useFlexLayout ? (
@@ -926,6 +920,11 @@ export default function App() {
       </div>
 
       {disconnectedOverlay}
+      {/* Filter ribbon — self-contained floating panel; renders via React
+          portal into document.body, so it does not join the `.app` CSS grid
+          and never disturbs the existing panadapter / waterfall layout.
+          When closed, FilterRibbon returns null (no DOM). */}
+      <FilterRibbon />
       <SettingsMenu open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
     </SpectrumWheelActionsContext.Provider>

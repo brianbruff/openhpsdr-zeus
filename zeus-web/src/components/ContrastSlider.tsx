@@ -61,12 +61,12 @@ export function ContrastSlider() {
       const d = dragState.current;
       if (!d || e.pointerId !== d.pointerId) return;
       const dySig = e.clientY - d.startY;
-      // Drag UP (dy < 0) increases γ — peaks stand out, noise floor goes
-      // dark. Drag DOWN lifts weak signal at the cost of noise. Mapping:
-      // top of column = CONTRAST_MAX, bottom = CONTRAST_MIN, so a dy of
+      // Drag DOWN (dy > 0) increases γ — peaks stand out, noise floor goes
+      // dark. Drag UP lifts weak signal at the cost of noise. Mapping:
+      // top of column = CONTRAST_MIN, bottom = CONTRAST_MAX, so a dy of
       // +containerHeight covers the full range.
       const gammaPerPixel = (CONTRAST_MAX - CONTRAST_MIN) / d.containerHeight;
-      const next = d.startContrast - dySig * gammaPerPixel;
+      const next = d.startContrast + dySig * gammaPerPixel;
       setContrast(next);
     },
     [setContrast],
@@ -82,14 +82,14 @@ export function ContrastSlider() {
     [],
   );
 
-  // Tick label position: top 0% = CONTRAST_MAX, top 100% = CONTRAST_MIN.
+  // Tick label position: top 0% = CONTRAST_MIN, top 100% = CONTRAST_MAX.
   const ticks = TICK_VALUES.map((g) => ({
     g,
-    topPct: ((CONTRAST_MAX - g) / (CONTRAST_MAX - CONTRAST_MIN)) * 100,
+    topPct: ((g - CONTRAST_MIN) / (CONTRAST_MAX - CONTRAST_MIN)) * 100,
   }));
 
   const currentTopPct =
-    ((CONTRAST_MAX - contrast) / (CONTRAST_MAX - CONTRAST_MIN)) * 100;
+    ((contrast - CONTRAST_MIN) / (CONTRAST_MAX - CONTRAST_MIN)) * 100;
 
   return (
     <div
@@ -102,7 +102,7 @@ export function ContrastSlider() {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
-      title={`Waterfall contrast (γ): ${contrast.toFixed(2)} — drag UP to suppress noise floor, DOWN to lift weak signal`}
+      title={`Waterfall contrast (γ): ${contrast.toFixed(2)} — drag DOWN to suppress noise floor, UP to lift weak signal`}
       className="absolute left-0 top-0 bottom-0 z-10 w-10 cursor-ns-resize touch-none select-none bg-neutral-950/60"
     >
       {/* γ header so it's discoverable that this column is contrast, not dB */}

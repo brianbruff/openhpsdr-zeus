@@ -101,7 +101,8 @@ export function HeroPanel() {
             <button
               type="button"
               className="chip mono"
-              onClick={() => setBeamInputStr((((sp % 360) + 360) % 360).toFixed(0))}
+              onClick={() => handleRotateToBearing(sp)}
+              title="Short path — click to rotate"
             >
               <span className="k">SP</span>
               <span className="v">{sp.toFixed(0)}°</span>
@@ -109,7 +110,8 @@ export function HeroPanel() {
             <button
               type="button"
               className="chip mono"
-              onClick={() => setBeamInputStr((((lp % 360) + 360) % 360).toFixed(0))}
+              onClick={() => handleRotateToBearing(lp)}
+              title="Long path — click to rotate"
             >
               <span className="k">LP</span>
               <span className="v">{lp.toFixed(0)}°</span>

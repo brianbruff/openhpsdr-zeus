@@ -399,6 +399,16 @@ export default function App() {
   const lp = (sp + 180) % 360;
   const dist = contact && effectiveHome ? distanceKm(effectiveHome.lat, effectiveHome.lon, contact.lat, contact.lon) : 0;
 
+  function rotateToBearing(brg: number) {
+    const normalized = ((brg % 360) + 360) % 360;
+    setBeamOverrideDeg(normalized);
+    setBeamInputStr(normalized.toFixed(0));
+    const rot = useRotatorStore.getState();
+    if (rot.config.enabled && rot.status?.connected) {
+      void rot.setAzimuth(normalized);
+    }
+  }
+
   function submitBeam(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const trimmed = beamInputStr.trim();
@@ -408,14 +418,7 @@ export default function App() {
     }
     const parsed = Number(trimmed);
     if (!Number.isFinite(parsed)) return;
-    const normalized = ((parsed % 360) + 360) % 360;
-    setBeamOverrideDeg(normalized);
-    // Also command the rotator if it's enabled — visual override + physical
-    // rotation in one click, same UX as Log4YM's map beam control.
-    const rot = useRotatorStore.getState();
-    if (rot.config.enabled && rot.status?.connected) {
-      void rot.setAzimuth(normalized);
-    }
+    rotateToBearing(parsed);
   }
 
   // --- Hero title
@@ -694,7 +697,8 @@ export default function App() {
                 <button
                   type="button"
                   className="chip mono"
-                  onClick={() => setBeamInputStr((((sp % 360) + 360) % 360).toFixed(0))}
+                  onClick={() => rotateToBearing(sp)}
+                  title="Short path — click to rotate"
                 >
                   <span className="k">SP</span>
                   <span className="v">{sp.toFixed(0)}°</span>
@@ -702,7 +706,8 @@ export default function App() {
                 <button
                   type="button"
                   className="chip mono"
-                  onClick={() => setBeamInputStr((((lp % 360) + 360) % 360).toFixed(0))}
+                  onClick={() => rotateToBearing(lp)}
+                  title="Long path — click to rotate"
                 >
                   <span className="k">LP</span>
                   <span className="v">{lp.toFixed(0)}°</span>

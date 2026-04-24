@@ -11,3 +11,4 @@ Add a lesson when:
 |---|---|---|
 | [wdsp-init-gotchas](wdsp-init-gotchas.md) | WDSP channel / meter init ordering | `OpenChannel` state flag, `SetChannelState` transition semantics, the `-400` meter sentinel, `ch[]` global lifecycle |
 | [dev-conventions](dev-conventions.md) | Running Zeus locally | Port allocations, Chrome's getUserMedia on LAN IP, Vite dev vs static-served, panadapter amber color |
+| [hl2-drive-byte-quantization](hl2-drive-byte-quantization.md) | HL2 TX power capped at 1–2 W | HL2 honours only the top 4 bits of the drive byte; piHPSDR's 40.5 dB calibration rounds drive to nibble 0x3; how to recognise, calibrate, and eventually fix at the `ComputeDriveByte` seam |

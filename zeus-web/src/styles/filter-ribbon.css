@@ -1,18 +1,17 @@
 /* ===========================================================
    Filter visualization PRD §3.2 — advanced filter ribbon.
-   Matches docs/pics/filterpanel_mockup.png: near-black panel with
-   a subtle top-to-bottom grey-blue gradient, muted blue-grey
-   labels, neon-blue passband outline with corner triangle handles,
-   light-grey spectrum trace, mockup-exact chip widths.
 
-   Lives as a dedicated row inside `.workspace` column 1 — above
-   `.hero`, beside `.side-stack`. When `.workspace.has-filter-
-   ribbon` is not set (ribbon closed), the row never exists.
+   Palette: NEUTRAL WARM GRAY (no blue, no cyan). Body is a
+   #26292f → #1e2025 gradient; preset panel is #2a2d33 with a
+   hairline border and 8px radius. Selected state brightens the
+   chip base and edges but stays in the gray family.
+
+   Layout lives as a dedicated row inside `.workspace` column 1
+   — above `.hero`, beside `.side-stack`. When
+   `.workspace.has-filter-ribbon` is not set (ribbon closed), the
+   row never exists.
    =========================================================== */
 
-/* Workspace becomes a 3-row grid when the ribbon is open. Hero and
-   bottom-row shift down one slot; side-stack grows to span all three
-   rows so the vertical layout stays stable. */
 .workspace.has-filter-ribbon {
   grid-template-rows: auto 1fr 200px;
 }
@@ -23,54 +22,44 @@
 
 .filter-ribbon {
   position: relative;
-  color: #e8edf5;
+  color: #edeef1;
   font-family: inherit;
   min-height: 0;
-  border-radius: 8px;
-  padding: 12px 18px 12px 20px;
-  border: 1px solid #1c2636;
-  /* Subtle grey-blue gradient: lighter on top, darker mid/bottom.
-     Keeps the panel distinct from the panadapter below without
-     breaking the near-black body. */
-  background:
-    linear-gradient(
-      180deg,
-      #141b28 0%,
-      #0e141e 28%,
-      #0a0f18 72%,
-      #090d15 100%
-    );
+  border-radius: 10px;
+  padding: 10px 12px 8px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: linear-gradient(180deg, #26292f 0%, #1e2025 100%);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.03),
-    0 2px 6px rgba(0, 0, 0, 0.35);
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 30px 80px rgba(0, 0, 0, 0.45);
 }
 
 .filter-ribbon__close {
   position: absolute;
-  top: 8px;
+  top: 10px;
   right: 10px;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   background: transparent;
   border: none;
-  color: #6a8bb0;
+  color: #7c8088;
   cursor: pointer;
-  font-size: 20px;
+  font-size: 18px;
   line-height: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 3px;
 }
-.filter-ribbon__close:hover { color: #cfd9ea; background: rgba(255, 255, 255, 0.04); }
+.filter-ribbon__close:hover { color: #edeef1; background: rgba(255, 255, 255, 0.04); }
 
-/* Two-column layout: wide left area (readouts + mini-pan + hint) and
-   a narrower preset rail on the right. */
+/* Two-column layout: wide left area (readouts + mini-pan + hint)
+   and a fixed-width preset panel on the right. */
 .filter-ribbon__body {
   display: grid;
-  grid-template-columns: 1fr 216px;
-  column-gap: 28px;
+  grid-template-columns: 1fr 280px;
+  column-gap: 14px;
   align-items: stretch;
 }
 
@@ -84,10 +73,9 @@
 
 .filter-ribbon__topRow {
   display: grid;
-  /* BANDWIDTH    LOW CUT        PASSBAND   HIGH CUT */
-  grid-template-columns: 120px 1fr 1fr 1fr;
-  column-gap: 24px;
-  align-items: center;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  align-items: start;
+  column-gap: 8px;
   padding: 2px 6px 6px;
 }
 .filter-ribbon__topCol {
@@ -96,135 +84,171 @@
   gap: 4px;
   min-width: 0;
 }
-.filter-ribbon__topCol--bw { align-items: flex-start; }
-.filter-ribbon__topCol--lo { align-items: center; }
-.filter-ribbon__topCol--pb { align-items: center; }
-.filter-ribbon__topCol--hi { align-items: center; }
+.filter-ribbon__topCol--bw { align-items: flex-start; text-align: left; }
+.filter-ribbon__topCol--lo { align-items: center;    text-align: center; }
+.filter-ribbon__topCol--pb { align-items: center;    text-align: center; }
+.filter-ribbon__topCol--hi { align-items: flex-end;  text-align: right; }
 
-/* Uppercase, letter-spaced, muted blue-grey labels */
+/* Uppercase, letter-spaced, muted neutral labels */
 .filter-ribbon__label {
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 1.8px;
-  color: #7590b3;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  color: #7c8088;
   text-transform: uppercase;
   line-height: 1;
 }
+.filter-ribbon__topCol--bw .filter-ribbon__label { color: #b4b7bd; }
+
 .filter-ribbon__label--icon {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 8px;
+  margin-bottom: 2px;
+  color: #b4b7bd;
 }
-.filter-ribbon__presets-icon { opacity: 0.7; font-size: 12px; }
+.filter-ribbon__presets-icon { opacity: 0.75; font-size: 12px; }
 
 /* LOW CUT / HIGH CUT value */
 .filter-ribbon__freq {
-  font-size: 22px;
-  font-weight: 400;
-  color: #e8edf5;
-  letter-spacing: 0.4px;
+  font-size: 17px;
+  font-weight: 600;
+  color: #edeef1;
+  letter-spacing: 0.02em;
   font-variant-numeric: tabular-nums;
   line-height: 1.15;
 }
 
-/* PASSBAND focal readout: big white number with small "kHz" suffix */
+/* PASSBAND focal readout: bigger white number with small "kHz" suffix */
 .filter-ribbon__passband {
-  color: #ffffff;
+  color: #edeef1;
   font-variant-numeric: tabular-nums;
   line-height: 1;
   display: inline-flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 4px;
 }
-.filter-ribbon__passband-value { font-size: 30px; font-weight: 500; letter-spacing: 0.4px; }
-.filter-ribbon__passband-unit  { font-size: 13px; color: #a9b9d3; font-weight: 400; }
+.filter-ribbon__passband-value { font-size: 22px; font-weight: 600; letter-spacing: 0.02em; }
+.filter-ribbon__passband-unit  { font-size: 12px; color: #b4b7bd; font-weight: 500; }
 
 /* Mini-pan — fills the remaining vertical space in the main column */
 .filter-ribbon__minipan {
   position: relative;
   flex: 1 1 auto;
-  min-height: 90px;
-  height: 120px;
+  min-height: 80px;
+  height: 100px;
+  border-radius: 4px;
+  overflow: hidden;
 }
 
 /* Footer hint — centered, tiny, muted, letter-spaced, uppercase */
 .filter-ribbon__hint {
   text-align: center;
-  font-size: 9.5px;
-  letter-spacing: 2.2px;
-  color: #5a7598;
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  color: #7c8088;
   text-transform: uppercase;
   padding-top: 2px;
 }
 
-/* ===== Preset rail (right column) ===== */
+/* ===== Preset panel (right column) — its own framed card ===== */
 .filter-ribbon__presets {
+  background: #2a2d33;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 10px 10px 8px;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: 10px;
-  border-left: 1px solid rgba(255, 255, 255, 0.03);
-  padding-left: 16px;
+  gap: 6px;
 }
 .filter-ribbon__preset-grid {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
-  gap: 8px;
+  gap: 6px;
 }
 
+/* Beveled neutral-gray chip — sized to match the app's .btn.sm. */
 .filter-ribbon__chip {
-  padding: 9px 6px;
-  font-size: 11px;
+  appearance: none;
+  font-family: inherit;
+  padding: 5px 6px;
+  font-size: clamp(10px, 0.1vw + 9.5px, 12px);
   font-weight: 500;
-  letter-spacing: 0.3px;
+  letter-spacing: 0.02em;
+  color: #e0e2e6;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0) 45%, rgba(0, 0, 0, 0.12) 100%),
+    linear-gradient(180deg, #3a3e45 0%, #2a2d33 100%);
+  border: 1px solid #4a4e55;
+  border-top-color: #585c63;
+  border-bottom-color: #32353b;
   border-radius: 4px;
-  border: 1px solid #1f2c42;
-  background: linear-gradient(180deg, #101724 0%, #0a1019 100%);
-  color: #a9b9d3;
   cursor: pointer;
   font-variant-numeric: tabular-nums;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+  transition: border-color 120ms ease, filter 120ms ease, color 120ms ease;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+    0 1px 0 rgba(0, 0, 0, 0.35);
   text-align: center;
 }
 .filter-ribbon__chip:hover {
-  border-color: #2f4466;
-  color: #dbe6f5;
+  filter: brightness(1.12);
+  border-color: #626670;
 }
-/* Active preset chip: neon-blue border with a soft halo, subtly lighter
-   inner gradient, white text. Matches the mockup's "selected" state. */
 .filter-ribbon__chip.is-active {
-  border-color: #6cb4ff;
-  background: linear-gradient(180deg, #1a2942 0%, #121c30 100%);
   color: #ffffff;
+  border-color: #8a8e97;
+  border-top-color: #a4a8b0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0.02) 45%, rgba(0, 0, 0, 0.10) 100%),
+    linear-gradient(180deg, #52565e 0%, #3a3e45 100%);
   box-shadow:
-    0 0 0 1px rgba(108, 180, 255, 0.25),
-    0 0 10px rgba(74, 158, 255, 0.22);
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 0 0 1px rgba(220, 225, 232, 0.15),
+    0 0 10px rgba(200, 205, 212, 0.10),
+    0 1px 0 rgba(0, 0, 0, 0.40);
 }
 
 .filter-ribbon__custom {
-  padding: 9px 12px;
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 1.6px;
+  appearance: none;
+  font-family: inherit;
+  padding: 6px 10px;
+  font-size: clamp(10px, 0.1vw + 9.5px, 12px);
+  font-weight: 600;
+  letter-spacing: 0.18em;
   border-radius: 4px;
-  border: 1px solid #1f2c42;
-  background: linear-gradient(180deg, #101724 0%, #0a1019 100%);
-  color: #a9b9d3;
+  color: #e0e2e6;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0) 45%, rgba(0, 0, 0, 0.12) 100%),
+    linear-gradient(180deg, #3a3e45 0%, #2a2d33 100%);
+  border: 1px solid #4a4e55;
+  border-top-color: #585c63;
+  border-bottom-color: #32353b;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: space-between;
   text-transform: uppercase;
+  margin-top: 2px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+    0 1px 0 rgba(0, 0, 0, 0.35);
 }
 .filter-ribbon__custom:hover {
-  border-color: #2f4466;
-  color: #dbe6f5;
+  filter: brightness(1.12);
+  border-color: #626670;
 }
 .filter-ribbon__custom.is-active {
-  border-color: #6cb4ff;
-  background: linear-gradient(180deg, #1a2942 0%, #121c30 100%);
   color: #ffffff;
-  box-shadow: 0 0 0 1px rgba(108, 180, 255, 0.25);
+  border-color: #8a8e97;
+  border-top-color: #a4a8b0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0.02) 45%, rgba(0, 0, 0, 0.10) 100%),
+    linear-gradient(180deg, #52565e 0%, #3a3e45 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 0 0 1px rgba(220, 225, 232, 0.15),
+    0 0 10px rgba(200, 205, 212, 0.10),
+    0 1px 0 rgba(0, 0, 0, 0.40);
 }
-.filter-ribbon__custom-icon { opacity: 0.65; margin-left: 8px; font-size: 12px; }
+.filter-ribbon__custom-icon { opacity: 0.75; margin-left: 8px; font-size: 12px; }

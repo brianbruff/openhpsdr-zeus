@@ -25,14 +25,15 @@ const DB_CEIL = -30;
 const DRAG_MIN_INTERVAL_MS = 50;
 const EDGE_HIT_PX = 6;
 
-// Mockup palette — neon-blue passband with a soft halo, light-grey
-// trace, muted tick labels.
-const COL_ACCENT = '#7fc2ff';          // passband outline / corner handles (bright cyan-blue)
-const COL_ACCENT_GLOW = 'rgba(127, 194, 255, 0.45)'; // halo under the outline
+// Mockup palette — neutral warm gray. Passband is bright silvery walls
+// with a soft neutral halo and square corner dots (NOT a cyan box).
 const COL_TRACE = 'rgba(210, 222, 238, 0.8)'; // spectrum line
-const COL_TICK_LABEL = '#5a7598';      // axis tick text
-const COL_TICK_LABEL_CENTER = '#b3c3dd'; // center (VFO) tick — slightly brighter
-const COL_VFO_CENTER = 'rgba(127, 194, 255, 0.22)'; // subtle VFO center line
+const COL_TICK_LABEL = '#7c8088';      // axis tick text
+const COL_TICK_LABEL_CENTER = '#edeef1'; // center (VFO) tick — brighter
+const COL_VFO_CENTER = 'rgba(200, 205, 215, 0.08)'; // very subtle neutral VFO line
+const COL_PB_WASH = 'rgba(220, 232, 245, 0.035)';   // almost-invisible interior wash
+const COL_WALL_HALO = 'rgba(220, 225, 232, 0.45)';  // soft neutral halo behind walls
+const COL_DOT = 'rgba(245, 247, 250, 0.95)';        // bright white corner dots
 
 type DragMode = 'lo' | 'hi' | 'inside';
 
@@ -137,47 +138,59 @@ export function FilterMiniPan() {
       ctx.lineTo(w / 2, plotH);
       ctx.stroke();
 
-      // Passband rectangle — hollow with a neon glow (PRD §3.2.1 mockup).
-      // Uses canvas shadowBlur to get a soft halo around the outline; ctx
-      // state is isolated via save/restore so the halo doesn't bleed onto
-      // the trace or axis labels.
+      // Passband — bright silver walls + soft neutral halo + corner dots.
+      // NOT a cyan box: the interior is an almost-invisible light wash, the
+      // two vertical walls are 2px with a white→light-gray vertical gradient,
+      // and four 6×6 square dots punctuate the corners.
       const passLeftPx = ((c.filterLowHz + RIBBON_SPAN_HZ / 2) / RIBBON_SPAN_HZ) * w;
       const passRightPx = ((c.filterHighHz + RIBBON_SPAN_HZ / 2) / RIBBON_SPAN_HZ) * w;
       const onScreen = passRightPx > 0 && passLeftPx < w;
       if (onScreen) {
         const clampedL = Math.max(0, passLeftPx);
         const clampedR = Math.min(w, passRightPx);
-        ctx.save();
-        ctx.shadowColor = COL_ACCENT_GLOW;
-        ctx.shadowBlur = 6 * dpr;
-        ctx.strokeStyle = COL_ACCENT;
-        ctx.lineWidth = 1.75 * dpr;
-        ctx.beginPath();
-        ctx.rect(
-          Math.round(clampedL) + 0.5,
-          0.5,
-          Math.max(0, Math.round(clampedR - clampedL) - 1),
-          plotH - 1,
+        const pbTop = Math.round(4 * dpr);
+        const pbBottom = plotH - Math.round(4 * dpr);
+        const wallW = Math.max(2, Math.round(2 * dpr));
+        const dotSize = Math.round(6 * dpr);
+        const halo = Math.round(6 * dpr);
+
+        // Interior wash.
+        ctx.fillStyle = COL_PB_WASH;
+        ctx.fillRect(
+          Math.round(clampedL),
+          pbTop,
+          Math.max(0, Math.round(clampedR - clampedL)),
+          pbBottom - pbTop,
         );
-        ctx.stroke();
+
+        // Walls — vertical gradient top→bottom, painted with a soft halo.
+        const wallGrad = ctx.createLinearGradient(0, pbTop, 0, pbBottom);
+        wallGrad.addColorStop(0.00, 'rgba(245, 247, 250, 0.95)');
+        wallGrad.addColorStop(0.40, 'rgba(225, 228, 232, 0.85)');
+        wallGrad.addColorStop(1.00, 'rgba(195, 200, 208, 0.55)');
+
+        ctx.save();
+        ctx.shadowColor = COL_WALL_HALO;
+        ctx.shadowBlur = halo;
+        ctx.fillStyle = wallGrad;
+        // Left wall straddles the left edge (1px outside / 1px inside).
+        ctx.fillRect(Math.round(clampedL) - Math.floor(wallW / 2), pbTop, wallW, pbBottom - pbTop);
+        // Right wall straddles the right edge.
+        ctx.fillRect(Math.round(clampedR) - Math.ceil(wallW / 2), pbTop, wallW, pbBottom - pbTop);
         ctx.restore();
 
-        // Corner triangle handles (top-left + top-right), bright fill,
-        // no shadow so they punch through crisply.
-        const tri = Math.round(8 * dpr);
-        ctx.fillStyle = COL_ACCENT;
-        ctx.beginPath();
-        ctx.moveTo(clampedL, 0);
-        ctx.lineTo(clampedL + tri, 0);
-        ctx.lineTo(clampedL, tri);
-        ctx.closePath();
-        ctx.fill();
-        ctx.beginPath();
-        ctx.moveTo(clampedR, 0);
-        ctx.lineTo(clampedR - tri, 0);
-        ctx.lineTo(clampedR, tri);
-        ctx.closePath();
-        ctx.fill();
+        // Four corner dots — bright white squares flush to each wall corner.
+        ctx.save();
+        ctx.shadowColor = COL_WALL_HALO;
+        ctx.shadowBlur = Math.round(4 * dpr);
+        ctx.fillStyle = COL_DOT;
+        const dotL = Math.round(clampedL) - Math.floor(dotSize / 2);
+        const dotR = Math.round(clampedR) - Math.floor(dotSize / 2);
+        ctx.fillRect(dotL, pbTop - Math.floor(dotSize / 2), dotSize, dotSize);
+        ctx.fillRect(dotR, pbTop - Math.floor(dotSize / 2), dotSize, dotSize);
+        ctx.fillRect(dotL, pbBottom - Math.ceil(dotSize / 2), dotSize, dotSize);
+        ctx.fillRect(dotR, pbBottom - Math.ceil(dotSize / 2), dotSize, dotSize);
+        ctx.restore();
       }
 
       // X-axis tick labels. One label every TICK_STEP_HZ (2 kHz), centered

@@ -45,6 +45,7 @@ import { DspFlexPanel } from './panels/DspFlexPanel';
 import { CwPanel } from './panels/CwPanel';
 import { LogbookPanel } from './panels/LogbookPanel';
 import { TxMetersPanel } from './panels/TxMetersPanel';
+import { FilterRibbonPanel } from './panels/FilterRibbonPanel';
 
 export type PanelCategory = 'spectrum' | 'vfo' | 'meters' | 'dsp' | 'log' | 'tools';
 
@@ -122,5 +123,12 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'meters',
     tags: ['tx', 'power', 'swr', 'alc', 'meters'],
     component: TxMetersPanel,
+  },
+  filter: {
+    id: 'filter',
+    name: 'Bandwidth Filter',
+    category: 'dsp',
+    tags: ['filter', 'bandwidth', 'passband', 'ribbon'],
+    component: FilterRibbonPanel,
   },
 };

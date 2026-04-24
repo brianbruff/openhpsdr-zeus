@@ -53,13 +53,20 @@ export const DEFAULT_LAYOUT = {
     type: 'row',
     children: [
       {
-        // Left column: hero above, bottom row below
+        // Left column: filter ribbon on top, hero in the middle, bottom row below
         type: 'row',
         weight: 75,
         children: [
           {
             type: 'tabset',
-            weight: 70,
+            weight: 14,
+            children: [
+              { type: 'tab', name: 'Bandwidth Filter', component: 'filter' },
+            ],
+          },
+          {
+            type: 'tabset',
+            weight: 58,
             children: [
               { type: 'tab', name: 'Panadapter · World Map', component: 'hero' },
             ],
@@ -67,7 +74,7 @@ export const DEFAULT_LAYOUT = {
           {
             // Bottom row: logbook + TX meters side by side
             type: 'row',
-            weight: 30,
+            weight: 28,
             children: [
               {
                 type: 'tabset',

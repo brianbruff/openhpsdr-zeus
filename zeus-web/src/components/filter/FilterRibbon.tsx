@@ -50,7 +50,7 @@ export function useFilterRibbonOpenSync() {
   }, []);
 }
 
-export function FilterRibbon() {
+export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) {
   const mode = useConnectionStore((s) => s.mode);
   const filterLow = useConnectionStore((s) => s.filterLowHz);
   const filterHigh = useConnectionStore((s) => s.filterHighHz);
@@ -89,9 +89,9 @@ export function FilterRibbon() {
   }, []);
 
   useEffect(() => {
-    if (!open) return;
+    if (!embedded && !open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { closeRibbon(); return; }
+      if (e.key === 'Escape' && !embedded) { closeRibbon(); return; }
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
       const step = nudgeStepHz(mode) * (e.shiftKey ? 10 : 1);
       const dir = e.key === 'ArrowRight' ? 1 : -1;
@@ -104,28 +104,29 @@ export function FilterRibbon() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, mode, applyState, closeRibbon]);
+  }, [embedded, open, mode, applyState, closeRibbon]);
 
-  if (!open) return null;
+  if (!embedded && !open) return null;
   if (presets.length === 0) return null;
 
   const currentWidth = Math.abs(filterHigh - filterLow);
 
   return (
     <div
-      className="filter-ribbon"
+      className={`filter-ribbon ${embedded ? 'filter-ribbon--embedded' : ''}`}
       role="region"
       aria-label="Advanced filter ribbon"
     >
-      {/* Close × (top-right of the whole ribbon) */}
-      <button
-        type="button"
-        aria-label="Close filter ribbon"
-        onClick={closeRibbon}
-        className="filter-ribbon__close"
-      >
-        ×
-      </button>
+      {!embedded && (
+        <button
+          type="button"
+          aria-label="Close filter ribbon"
+          onClick={closeRibbon}
+          className="filter-ribbon__close"
+        >
+          ×
+        </button>
+      )}
 
       <div className="filter-ribbon__body">
         {/* Left column: top readout row, full-width mini-pan, footer hint */}

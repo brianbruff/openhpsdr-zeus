@@ -40,6 +40,28 @@ import { create } from 'zustand';
 // Opaque flexlayout-react JSON blob — we don't strongly-type the tree.
 type FlexLayoutJson = Record<string, unknown>;
 
+// Bump whenever DEFAULT_LAYOUT gains/loses a panel, or when weights
+// change in a way existing users should pick up on next load. Stored in
+// localStorage; on mismatch we discard the server-side layout and fall
+// through to DEFAULT_LAYOUT.
+//   v2 (2026-04-24): added 'filter' bandwidth-filter panel above hero.
+//   v3 (2026-04-24): shrunk filter tabset weight for tighter default.
+const LAYOUT_SCHEMA_VERSION = 3;
+const VERSION_KEY = 'zeus.layout.schemaVersion';
+
+function getStoredVersion(): number {
+  try {
+    const v = window.localStorage.getItem(VERSION_KEY);
+    return v ? parseInt(v, 10) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function setStoredVersion(v: number) {
+  try { window.localStorage.setItem(VERSION_KEY, String(v)); } catch { /* ok */ }
+}
+
 interface LayoutState {
   layout: FlexLayoutJson | null;
   isLoaded: boolean;
@@ -57,6 +79,13 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   isLoaded: false,
 
   loadFromServer: async () => {
+    // Stale schema: discard any server-side layout so DEFAULT_LAYOUT wins.
+    if (getStoredVersion() !== LAYOUT_SCHEMA_VERSION) {
+      await fetch('/api/ui/layout', { method: 'DELETE' }).catch(() => {});
+      setStoredVersion(LAYOUT_SCHEMA_VERSION);
+      set({ layout: null, isLoaded: true });
+      return;
+    }
     try {
       const res = await fetch('/api/ui/layout');
       if (res.status === 404) {

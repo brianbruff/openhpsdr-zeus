@@ -222,3 +222,15 @@ public sealed record PaSettingsDto(
 public sealed record PaSettingsSetRequest(
     PaGlobalSettingsDto Global,
     IReadOnlyList<PaBandSettingsDto> Bands);
+
+// Radio-selection header for the Settings menu. `Preferred` is the operator's
+// explicit pick ("Auto" = no override); `Connected` is what discovery found
+// on the wire ("Unknown" when nothing's connected); `Effective` is the board
+// whose defaults the PA / per-band tables seed from. Discovery wins whenever
+// a radio is actually connected — the preference is a before-connect hint.
+public sealed record RadioSelectionDto(
+    string Preferred,
+    string Connected,
+    string Effective);
+
+public sealed record RadioSelectionSetRequest(string Preferred);

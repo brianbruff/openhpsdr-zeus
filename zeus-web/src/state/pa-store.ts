@@ -16,6 +16,7 @@
 import { create } from 'zustand';
 import {
   fetchPaSettings,
+  fetchPaDefaults,
   updatePaSettings,
   type PaBandSettings,
   type PaGlobalSettings,
@@ -55,10 +56,18 @@ type PaStore = {
   loaded: boolean;
   inflight: boolean;
   error: string | null;
-  load: () => Promise<void>;
+  // boardOverride lets the radio-selector preview another board's defaults
+  // for empty rows without persisting the preference. Undefined = use the
+  // server's effective board (connected > preferred).
+  load: (boardOverride?: string) => Promise<void>;
   save: () => Promise<void>;
   setGlobal: (patch: Partial<PaGlobalSettings>) => void;
   setBand: (band: string, patch: Partial<Omit<PaBandSettings, 'band'>>) => void;
+  // Overwrite per-band PaGainDb + global PaMaxPowerWatts with the requested
+  // board's pure defaults. Does NOT persist — the operator still has to
+  // press APPLY. OC masks / Disable-PA / PaEnabled / OcTune are preserved
+  // because those are wiring preferences, not per-board data.
+  resetToBoardDefaults: (boardOverride?: string) => Promise<void>;
 };
 
 export const usePaStore = create<PaStore>((set, get) => ({
@@ -67,10 +76,10 @@ export const usePaStore = create<PaStore>((set, get) => ({
   inflight: false,
   error: null,
 
-  load: async () => {
+  load: async (boardOverride) => {
     set({ inflight: true, error: null });
     try {
-      const s = await fetchPaSettings();
+      const s = await fetchPaSettings(undefined, boardOverride);
       set({ settings: canonicalize(s), loaded: true, inflight: false });
     } catch (err) {
       set({
@@ -103,4 +112,30 @@ export const usePaStore = create<PaStore>((set, get) => ({
         bands: s.settings.bands.map((b) => (b.band === band ? { ...b, ...patch } : b)),
       },
     })),
+
+  resetToBoardDefaults: async (boardOverride) => {
+    set({ inflight: true, error: null });
+    try {
+      const defaults = await fetchPaDefaults(boardOverride);
+      const byBand = new Map(defaults.bands.map((b) => [b.band, b]));
+      set((s) => ({
+        settings: {
+          global: {
+            ...s.settings.global,
+            paMaxPowerWatts: defaults.global.paMaxPowerWatts,
+          },
+          bands: s.settings.bands.map((b) => ({
+            ...b,
+            paGainDb: byBand.get(b.band)?.paGainDb ?? b.paGainDb,
+          })),
+        },
+        inflight: false,
+      }));
+    } catch (err) {
+      set({
+        error: err instanceof Error ? err.message : String(err),
+        inflight: false,
+      });
+    }
+  },
 }));

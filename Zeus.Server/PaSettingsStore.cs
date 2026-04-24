@@ -86,6 +86,23 @@ public sealed class PaSettingsStore : IDisposable
         }
     }
 
+    // Pure board defaults — used by the "Reset to defaults" action in the
+    // settings panel to stomp any prior per-operator calibration back to the
+    // piHPSDR/Thetis-published seed values for the selected radio. Does NOT
+    // consult the pa_bands / pa_globals collections; OC masks and DisablePa
+    // stay out of this because they're wiring decisions, not per-board data.
+    public PaSettingsDto GetDefaults(HpsdrBoardKind board)
+    {
+        var global = new PaGlobalSettingsDto(
+            PaEnabled: true,
+            PaMaxPowerWatts: PaDefaults.GetMaxPowerWatts(board),
+            OcTune: 0);
+        var bands = BandUtils.HfBands
+            .Select(b => new PaBandSettingsDto(b, PaGainDb: PaDefaults.GetPaGainDb(board, b)))
+            .ToArray();
+        return new PaSettingsDto(global, bands);
+    }
+
     public PaBandSettingsDto GetBand(string band, HpsdrBoardKind board = HpsdrBoardKind.Unknown)
     {
         lock (_sync)

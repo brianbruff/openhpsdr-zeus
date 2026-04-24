@@ -14,7 +14,7 @@ namespace Zeus.Server.Tests;
 // Defaults have to be correct on first connect — operator sees them before
 // any calibration. Pin the per-board seeds so a "cosmetic" refactor in
 // PaDefaults doesn't silently flip HL2 back to the old piHPSDR 40.5 dB
-// mis-interpretation.
+// mis-interpretation (see docs/lessons/hl2-drive-model.md).
 //
 // These tests use a per-class temp DB to stay hermetic — pre-isolation they
 // shared zeus-prefs.db with production and any operator APPLY would break
@@ -97,6 +97,34 @@ public class PaSettingsStoreDefaultsTests : IDisposable
         using var store = NewStore();
         var s = store.GetAll(HpsdrBoardKind.HermesLite2);
         Assert.Equal(BandUtils.HfBands.ToArray(), s.Bands.Select(b => b.Band).ToArray());
+    }
+
+    [Fact]
+    public void GetDefaults_Ignores_Stored_Calibration()
+    {
+        // Reset-to-defaults must stomp any saved per-band tweak. Asking for
+        // pure HL2 defaults returns 100 % on HF / 38.8 % on 6 m regardless
+        // of whatever is stored — percentage model, not dB (see
+        // HermesLite2DriveProfile and docs/lessons/hl2-drive-model.md).
+        using var store = NewStore();
+        var d = store.GetDefaults(HpsdrBoardKind.HermesLite2);
+        Assert.Equal(5, d.Global.PaMaxPowerWatts);
+        Assert.True(d.Global.PaEnabled);
+        foreach (var b in d.Bands.Where(x => x.Band != "6m"))
+        {
+            Assert.Equal(100.0, b.PaGainDb);
+        }
+        Assert.Equal(38.8, FindGain(d, "6m"));
+    }
+
+    [Fact]
+    public void GetDefaults_OrionMkII_Uses_G2_Table()
+    {
+        using var store = NewStore();
+        var d = store.GetDefaults(HpsdrBoardKind.OrionMkII);
+        Assert.Equal(100, d.Global.PaMaxPowerWatts);
+        Assert.Equal(47.9, FindGain(d, "160m"));
+        Assert.Equal(50.9, FindGain(d, "20m"));
     }
 
     private static double FindGain(PaSettingsDto s, string band) =>

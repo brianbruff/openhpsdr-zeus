@@ -127,6 +127,7 @@ builder.Services.AddSingleton<BandMemoryStore>();
 builder.Services.AddSingleton<LayoutStore>();
 builder.Services.AddSingleton<DspSettingsStore>();
 builder.Services.AddSingleton<PaSettingsStore>();
+builder.Services.AddSingleton<PreferredRadioStore>();
 builder.Services.AddSingleton<FilterPresetStore>();
 builder.Services.AddSingleton<QrzService>();
 builder.Services.AddSingleton<LogService>();
@@ -565,10 +566,27 @@ app.MapPut("/api/bands/memory/{band}", (string band, BandMemorySetRequest req, B
 // PA settings — per-band gain/OC masks + globals. Single PUT replaces the
 // whole snapshot because the UI edits rows as a table; incremental PATCHing
 // would deadlock with the RadioService recompute subscription fired on Save.
-// The GET uses the currently connected board's defaults to fill missing
-// rows so the panel opens with model-appropriate seeds on first load.
-app.MapGet("/api/pa-settings", (PaSettingsStore store, RadioService radio) =>
-    Results.Ok(store.GetAll(radio.ConnectedBoardKind)));
+// The GET uses the effective board's defaults to fill missing rows so the
+// panel opens with model-appropriate seeds on first load. Optional
+// ?board= override lets the radio-selector preview defaults for a board
+// other than the effective one without persisting the preference — the
+// operator's saved per-band calibration still wins over the preview.
+app.MapGet("/api/pa-settings", (string? board, PaSettingsStore store, RadioService radio) =>
+{
+    var preview = ParseBoardKind(board);
+    var effective = preview ?? radio.EffectiveBoardKind;
+    return Results.Ok(store.GetAll(effective));
+});
+
+// Pure board defaults — "Reset to defaults" button in the PA panel. Skips
+// the pa_bands collection entirely and returns piHPSDR/Thetis seed values
+// for the requested board (or the effective board if none specified).
+app.MapGet("/api/pa-settings/defaults", (string? board, PaSettingsStore store, RadioService radio) =>
+{
+    var preview = ParseBoardKind(board);
+    var target = preview ?? radio.EffectiveBoardKind;
+    return Results.Ok(store.GetDefaults(target));
+});
 
 app.MapPut("/api/pa-settings", (PaSettingsSetRequest req, PaSettingsStore store, RadioService radio) =>
 {
@@ -577,8 +595,57 @@ app.MapPut("/api/pa-settings", (PaSettingsSetRequest req, PaSettingsStore store,
     if (req.Global.PaMaxPowerWatts < 0)
         return Results.BadRequest(new { error = "paMaxPowerWatts must be >= 0" });
     store.Save(new PaSettingsDto(req.Global, req.Bands));
-    return Results.Ok(store.GetAll(radio.ConnectedBoardKind));
+    return Results.Ok(store.GetAll(radio.EffectiveBoardKind));
 });
+
+// Radio selection — operator preference seeding, with discovery as the
+// tiebreaker. Preferred=="Auto" removes the override (stored as absence,
+// not a sentinel enum value). Effective = Connected when connected,
+// Preferred when not, Unknown otherwise.
+app.MapGet("/api/radio/selection", (PreferredRadioStore prefs, RadioService radio) =>
+{
+    var preferred = prefs.Get();
+    return Results.Ok(new RadioSelectionDto(
+        Preferred: preferred?.ToString() ?? "Auto",
+        Connected: radio.ConnectedBoardKind.ToString(),
+        Effective: radio.EffectiveBoardKind.ToString()));
+});
+
+app.MapPut("/api/radio/selection", (RadioSelectionSetRequest req, PreferredRadioStore prefs, RadioService radio) =>
+{
+    if (req is null || string.IsNullOrWhiteSpace(req.Preferred))
+        return Results.BadRequest(new { error = "preferred required" });
+
+    HpsdrBoardKind? chosen;
+    if (string.Equals(req.Preferred, "Auto", StringComparison.OrdinalIgnoreCase))
+    {
+        chosen = null;
+    }
+    else if (Enum.TryParse<HpsdrBoardKind>(req.Preferred, ignoreCase: true, out var kind)
+             && kind != HpsdrBoardKind.Unknown)
+    {
+        chosen = kind;
+    }
+    else
+    {
+        return Results.BadRequest(new { error = $"unknown board '{req.Preferred}'" });
+    }
+
+    prefs.Set(chosen);
+    return Results.Ok(new RadioSelectionDto(
+        Preferred: chosen?.ToString() ?? "Auto",
+        Connected: radio.ConnectedBoardKind.ToString(),
+        Effective: radio.EffectiveBoardKind.ToString()));
+});
+
+static HpsdrBoardKind? ParseBoardKind(string? raw)
+{
+    if (string.IsNullOrWhiteSpace(raw)) return null;
+    if (string.Equals(raw, "Auto", StringComparison.OrdinalIgnoreCase)) return null;
+    return Enum.TryParse<HpsdrBoardKind>(raw, ignoreCase: true, out var kind)
+        ? kind
+        : null;
+}
 
 // UI layout: flexlayout-react panel arrangement, persisted per operator profile.
 // GET returns 404 when no layout has been saved yet (frontend falls back to

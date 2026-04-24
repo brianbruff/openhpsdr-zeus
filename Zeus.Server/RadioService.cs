@@ -53,6 +53,7 @@ public sealed class RadioService : IDisposable
     private readonly ILogger<RadioService> _log;
     private readonly DspSettingsStore _dspSettingsStore;
     private readonly PaSettingsStore _paStore;
+    private readonly PreferredRadioStore? _preferredRadioStore;
     private readonly FilterPresetStore? _filterPresetStore;
     // Last-known preset name per mode, preserved across mode switches.
     // Accessed only from inside Mutate (under _sync) or at init.
@@ -127,14 +128,17 @@ public sealed class RadioService : IDisposable
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
         _dspSettingsStore = dspSettingsStore;
         _paStore = paStore;
+        _preferredRadioStore = preferredRadioStore;
         _filterPresetStore = filterPresetStore;
         _paStore.Changed += RecomputePaAndPush;
+        if (_preferredRadioStore is not null)
+            _preferredRadioStore.Changed += RecomputePaAndPush;
         _txIqSource = txIqSource;
 
         // Load persisted DSP settings from the store, or use defaults if not found
@@ -599,7 +603,10 @@ public sealed class RadioService : IDisposable
     private void RecomputePaAndPush()
     {
         var stateSnap = Snapshot();
-        var cfg = _paStore.GetAll(ConnectedBoardKind);
+        // PA config uses the effective board so the operator can pre-stage
+        // PA Settings for a radio not yet connected; once a radio IS on the
+        // wire, EffectiveBoardKind == ConnectedBoardKind (discovery wins).
+        var cfg = _paStore.GetAll(EffectiveBoardKind);
         var bandName = BandUtils.FreqToBand(stateSnap.VfoHz);
         var bandCfg = bandName is not null
             ? cfg.Bands.FirstOrDefault(b => b.Band == bandName) ?? new PaBandSettingsDto(bandName)
@@ -748,6 +755,21 @@ public sealed class RadioService : IDisposable
                 if (_p2Active) return HpsdrBoardKind.OrionMkII;
                 return HpsdrBoardKind.Unknown;
             }
+        }
+    }
+
+    // Board used to seed PA defaults / power-math tables. Discovery is
+    // authoritative when a radio is on the wire — an operator's explicit
+    // pick can't override what the hardware actually is. Before first
+    // connect, the stored preference takes over so the PA panel shows
+    // sane values for the radio the operator is about to plug in.
+    public HpsdrBoardKind EffectiveBoardKind
+    {
+        get
+        {
+            var connected = ConnectedBoardKind;
+            if (connected != HpsdrBoardKind.Unknown) return connected;
+            return _preferredRadioStore?.Get() ?? HpsdrBoardKind.Unknown;
         }
     }
 

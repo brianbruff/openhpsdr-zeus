@@ -85,9 +85,36 @@ function normalize(raw: PaSettingsDtoRaw): PaSettings {
   };
 }
 
-export async function fetchPaSettings(signal?: AbortSignal): Promise<PaSettings> {
-  const res = await fetch('/api/pa-settings', { signal });
-  if (!res.ok) throw new Error(`GET /api/pa-settings → ${res.status}`);
+// boardOverride=undefined → use the effective board (connected > preferred).
+// Passing a board name lets the radio-selector preview another board's
+// defaults for empty rows without mutating the stored preference. Existing
+// saved per-band calibration is unaffected either way.
+export async function fetchPaSettings(
+  signal?: AbortSignal,
+  boardOverride?: string,
+): Promise<PaSettings> {
+  const url = boardOverride
+    ? `/api/pa-settings?board=${encodeURIComponent(boardOverride)}`
+    : '/api/pa-settings';
+  const res = await fetch(url, { signal });
+  if (!res.ok) throw new Error(`GET ${url} → ${res.status}`);
+  const raw = (await res.json()) as PaSettingsDtoRaw;
+  return normalize(raw);
+}
+
+// Pure board defaults — hits /api/pa-settings/defaults which skips the
+// LiteDB pa_bands collection entirely and returns the piHPSDR/Thetis seed
+// values for the requested board. Used by the "Reset to defaults" button
+// to stomp prior calibration.
+export async function fetchPaDefaults(
+  boardOverride?: string,
+  signal?: AbortSignal,
+): Promise<PaSettings> {
+  const url = boardOverride
+    ? `/api/pa-settings/defaults?board=${encodeURIComponent(boardOverride)}`
+    : '/api/pa-settings/defaults';
+  const res = await fetch(url, { signal });
+  if (!res.ok) throw new Error(`GET ${url} → ${res.status}`);
   const raw = (await res.json()) as PaSettingsDtoRaw;
   return normalize(raw);
 }

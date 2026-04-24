@@ -85,24 +85,40 @@ hardware).
 default). The 26 dB value is per-unit and lives in the operator's
 LiteDB, not in code.
 
-## The forever-fix (not yet implemented)
+## The forever-fix (landed)
 
-`ComputeDriveByte` should quantise to the HL2's actual 4-bit scale when
-the connected board is HL2. Proposed shape — keep the same watts math,
-then round to the nearest nibble-step at the end:
+`Zeus.Server/RadioDriveProfile.cs` introduces an `IRadioDriveProfile`
+abstraction. `RadioService.RecomputePaAndPush` looks up the profile by
+`ConnectedBoardKind` and delegates. HL2 gets `HermesLite2DriveProfile`
+which runs the same watts math as everyone else, then rounds the
+resulting byte to the nearest 16-count step (nibble-aligned) before
+it hits the wire:
 
 ```csharp
-byte driveByte = (byte)(Math.Round(norm * 15.0) * 16);   // 0x00, 0x10, 0x20 ... 0xF0
+int nibble = (int)Math.Round(raw / 16.0);
+if (nibble > 15) nibble = 15;
+return (byte)(nibble * 16);
 ```
 
-This makes the slider honest (every visible step corresponds to a real
-HL2 power step) and keeps piHPSDR's 40.5 dB default working — the
-quantiser just rounds the computed byte up to the next nibble, so the
-operator sees power at the first slider position above 6 % instead of
-waiting until they've crossed the nibble boundary.
+Every other board (Hermes, ANAN, Orion, G2, Metis, Griffin, Unknown)
+falls through to `FullByteDriveProfile` which doesn't quantise — the
+full 8-bit drive-byte math that Thetis / piHPSDR publish still wins
+for them.
 
-Gate the quantiser on `board == HermesLite2`; other HPSDR radios use
-the full 8 bits and shouldn't lose resolution.
+With the profile in place:
+- piHPSDR's published 40.5 dB on HL2 now rounds to nibble 0x3 (the
+  RadioDriveProfileTests pin this as an anti-regression — if someone
+  "fixes" the default upward, that test fails on purpose).
+- Operator-calibrated 26 dB on HL2 produces nibble 0xF, rated
+  output, no wasted slider travel.
+- Slider motion now maps to real HL2 power steps — no more invisible
+  fine-grained moves under the nibble boundary.
+
+**When adding a new HPSDR board to Zeus**, implement
+`IRadioDriveProfile` if the board has wire-level quirks, and extend
+`RadioDriveProfiles.For(...)` to dispatch on it. Do NOT reintroduce
+per-board branching inside `RadioService` — that's exactly the shape
+the HL2 regression took before this abstraction landed.
 
 ## References
 

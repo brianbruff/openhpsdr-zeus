@@ -610,12 +610,18 @@ public sealed class RadioService : IDisposable
         int activePct = tunActive
             ? Volatile.Read(ref _tunePct)
             : Volatile.Read(ref _drivePct);
-        byte driveByte = ComputeDriveByte(activePct, bandCfg.PaGainDb, cfg.Global.PaMaxPowerWatts);
+        // Route through the per-board drive-profile so HL2's 4-bit drive
+        // register is respected (bottom nibble ignored by gateware). See
+        // Zeus.Server.RadioDriveProfile + docs/lessons/hl2-drive-byte-
+        // quantization.md. Non-HL2 boards get the straight 8-bit math via
+        // FullByteDriveProfile.
+        var driveProfile = RadioDriveProfiles.For(ConnectedBoardKind);
+        byte driveByte = driveProfile.EncodeDriveByte(activePct, bandCfg.PaGainDb, cfg.Global.PaMaxPowerWatts);
         bool paEnabled = cfg.Global.PaEnabled && !bandCfg.DisablePa;
 
         _log.LogInformation(
-            "pa.recompute tunActive={Tun} pct={Pct} band={Band} gainDb={Gain:F2} maxW={Max} -> byte={Byte} paEn={PaEn}",
-            tunActive, activePct, bandName ?? "?", bandCfg.PaGainDb, cfg.Global.PaMaxPowerWatts, driveByte, paEnabled);
+            "pa.recompute tunActive={Tun} pct={Pct} band={Band} gainDb={Gain:F2} maxW={Max} profile={Profile} -> byte={Byte} paEn={PaEn}",
+            tunActive, activePct, bandName ?? "?", bandCfg.PaGainDb, cfg.Global.PaMaxPowerWatts, driveProfile.BoardLabel, driveByte, paEnabled);
 
         ActiveClient?.SetDriveByte(driveByte);
         ActiveClient?.SetOcMasks(bandCfg.OcTx, bandCfg.OcRx);
@@ -628,27 +634,13 @@ public sealed class RadioService : IDisposable
             PaEnabled: paEnabled));
     }
 
-    // Shared math: target watts → dBm → subtract per-band PA gain → back to
-    // volts across 50Ω → normalize against 0.8V full-scale → 0..255 drive byte.
-    // When maxWatts == 0, fall back to the legacy UI-percent-to-byte mapping so
-    // existing installs behave identically until calibration is entered.
-    // Reference: Thetis console.cs:46801-46841, piHPSDR radio.c:2809-2828.
+    // Back-compat shim for callers/tests that predate IRadioDriveProfile.
+    // Runtime RecomputePaAndPush no longer goes through here — it uses the
+    // per-board RadioDriveProfiles.For(board) dispatch so HL2's 4-bit drive
+    // is quantised correctly. Keep this method as the 8-bit/full-byte math
+    // for tests and anything else that wants the raw value.
     internal static byte ComputeDriveByte(int drivePct, double paGainDb, int maxWatts)
-    {
-        drivePct = Math.Clamp(drivePct, 0, 100);
-        if (maxWatts <= 0)
-        {
-            return (byte)(drivePct * 255 / 100);
-        }
-
-        double targetWatts = maxWatts * drivePct / 100.0;
-        if (targetWatts <= 0) return 0;
-
-        double sourceWatts = targetWatts / Math.Pow(10.0, paGainDb / 10.0);
-        double sourceVolts = Math.Sqrt(sourceWatts * 50.0);
-        double norm = Math.Clamp(sourceVolts / 0.8, 0.0, 1.0);
-        return (byte)Math.Round(norm * 255.0);
-    }
+        => DriveByteMath.ComputeFullByte(drivePct, paGainDb, maxWatts);
 
     // Thetis "AGC Top" slider — max post-AGC gain in dB. Clamped to the
     // Thetis UI range (−20..120). DspPipelineService picks this up through the

@@ -37,6 +37,7 @@
 
 import { useCallback, useRef } from 'react';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
+import { useTxStore } from '../state/tx-store';
 
 // Tick stride in dB. Thetis defaults to 5 dB; our smaller canvas reads
 // cleaner at 10 dB. Tick label rendered at every stride, minor line between.
@@ -47,9 +48,23 @@ const TICK_STRIDE_DB = 10;
 // PanDisplay.cs:3684-3700. No independent min/max scaling; just an offset.
 // Sits inside the Panadapter container as an absolutely-positioned column.
 export function DbScale() {
-  const dbMin = useDisplaySettingsStore((s) => s.dbMin);
-  const dbMax = useDisplaySettingsStore((s) => s.dbMax);
+  const rxDbMin = useDisplaySettingsStore((s) => s.dbMin);
+  const rxDbMax = useDisplaySettingsStore((s) => s.dbMax);
+  const txDbMin = useDisplaySettingsStore((s) => s.txDbMin);
+  const txDbMax = useDisplaySettingsStore((s) => s.txDbMax);
   const shiftDbRange = useDisplaySettingsStore((s) => s.shiftDbRange);
+  const shiftTxDbRange = useDisplaySettingsStore((s) => s.shiftTxDbRange);
+  const moxOn = useTxStore((s) => s.moxOn);
+  const tunOn = useTxStore((s) => s.tunOn);
+  const keyed = moxOn || tunOn;
+
+  // Pick the active range + shifter based on whether we're looking at TX or
+  // RX pixels. Thetis-parity: each side has its own Grid Min/Max so the
+  // operator can hide the silence-time TX floor without moving the RX
+  // noise-floor view.
+  const dbMin = keyed ? txDbMin : rxDbMin;
+  const dbMax = keyed ? txDbMax : rxDbMax;
+  const shift = keyed ? shiftTxDbRange : shiftDbRange;
 
   const dragState = useRef<{
     startY: number;
@@ -86,9 +101,9 @@ export function DbScale() {
       const deltaDb = dySig * dbPerPixel;
       const nextMin = d.startDbMin + deltaDb;
       const targetShift = nextMin - dbMin;
-      if (Math.abs(targetShift) > 0.5) shiftDbRange(targetShift);
+      if (Math.abs(targetShift) > 0.5) shift(targetShift);
     },
-    [dbMin, shiftDbRange],
+    [dbMin, shift],
   );
 
   const onPointerUp = useCallback(

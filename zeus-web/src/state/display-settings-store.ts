@@ -46,7 +46,16 @@ import type { ColormapId } from '../gl/colormap';
 export const FIXED_DB_MIN = -140;
 export const FIXED_DB_MAX = -50;
 
+// TX panadapter defaults — kept separate from RX so the user can drag the
+// scale while keyed without disturbing their RX noise-floor view. Matches
+// Thetis's `TXSpectrumGridMin = -80` / `TXSpectrumGridMax = 20` (Display.cs:
+// 1881-1897). Speech peaks land inside this window; a user who wants to
+// hide silence-time floor pumping raises TX_DB_MIN via the drag gesture.
+export const TX_FIXED_DB_MIN = -80;
+export const TX_FIXED_DB_MAX = 20;
+
 const STORAGE_KEY = 'zeus.display.dbRange';
+const TX_STORAGE_KEY = 'zeus.display.txDbRange';
 const CONTRAST_STORAGE_KEY = 'zeus.display.contrast';
 
 // Allowed range for the waterfall gamma. Outside this band the display
@@ -105,6 +114,32 @@ function writeSavedRange(dbMin: number, dbMax: number): void {
   }
 }
 
+function readSavedTxRange(): { txDbMin: number; txDbMax: number } {
+  try {
+    if (typeof localStorage === 'undefined') return { txDbMin: TX_FIXED_DB_MIN, txDbMax: TX_FIXED_DB_MAX };
+    const raw = localStorage.getItem(TX_STORAGE_KEY);
+    if (!raw) return { txDbMin: TX_FIXED_DB_MIN, txDbMax: TX_FIXED_DB_MAX };
+    const parsed = JSON.parse(raw);
+    const txDbMin = typeof parsed?.txDbMin === 'number' ? parsed.txDbMin : TX_FIXED_DB_MIN;
+    const txDbMax = typeof parsed?.txDbMax === 'number' ? parsed.txDbMax : TX_FIXED_DB_MAX;
+    if (!(txDbMin < txDbMax) || !Number.isFinite(txDbMin) || !Number.isFinite(txDbMax)) {
+      return { txDbMin: TX_FIXED_DB_MIN, txDbMax: TX_FIXED_DB_MAX };
+    }
+    return { txDbMin, txDbMax };
+  } catch {
+    return { txDbMin: TX_FIXED_DB_MIN, txDbMax: TX_FIXED_DB_MAX };
+  }
+}
+
+function writeSavedTxRange(txDbMin: number, txDbMax: number): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(TX_STORAGE_KEY, JSON.stringify({ txDbMin, txDbMax }));
+  } catch {
+    // quota exceeded / private mode — accept silently.
+  }
+}
+
 // Exponential smoothing constant for the auto-range tracker. 0.1 trades
 // flicker resistance for responsiveness — band-change artifacts fade over
 // ~30 frames at 30 Hz (~1 s).
@@ -132,6 +167,10 @@ export type DisplaySettingsState = {
   // operator's only direct knob on the waterfall is the contrast (γ) slider.
   wfDbMin: number;
   wfDbMax: number;
+  // Separate dB range for TX panadapter (rendered during MOX/TUN). Thetis
+  // parity — see TX_FIXED_DB_MIN/MAX constants.
+  txDbMin: number;
+  txDbMax: number;
   colormap: ColormapId;
   contrast: number;
   setAutoRange: (v: boolean) => void;
@@ -145,11 +184,14 @@ export type DisplaySettingsState = {
   // drag DOWN raises both limits so the trace slides DOWN on the canvas.
   // Clamps absolute values to Thetis's ±200 dB window.
   shiftDbRange: (deltaDb: number) => void;
+  // Same as shiftDbRange but for the TX-specific range.
+  shiftTxDbRange: (deltaDb: number) => void;
 };
 
 const DB_ABS_LIMIT = 200;
 
 const initialRange = readSavedRange();
+const initialTxRange = readSavedTxRange();
 
 export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) => ({
   autoRange: false,
@@ -157,6 +199,8 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   dbMax: initialRange.dbMax,
   wfDbMin: FIXED_DB_MIN,
   wfDbMax: FIXED_DB_MAX,
+  txDbMin: initialTxRange.txDbMin,
+  txDbMax: initialTxRange.txDbMax,
   colormap: 'blue',
   contrast: readSavedContrast(),
   setAutoRange: (autoRange) => {
@@ -189,6 +233,13 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
     const nextMax = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, baseMax + deltaDb));
     set({ autoRange: false, dbMin: nextMin, dbMax: nextMax });
     writeSavedRange(nextMin, nextMax);
+  },
+  shiftTxDbRange: (deltaDb) => {
+    const { txDbMin, txDbMax } = get();
+    const nextMin = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, txDbMin + deltaDb));
+    const nextMax = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, txDbMax + deltaDb));
+    set({ txDbMin: nextMin, txDbMax: nextMax });
+    writeSavedTxRange(nextMin, nextMax);
   },
   updateAutoRange: (wfDb) => {
     if (!get().autoRange || wfDb.length === 0) return;

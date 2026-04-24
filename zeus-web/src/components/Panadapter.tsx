@@ -40,6 +40,7 @@ import { createPanRenderer } from '../gl/panadapter';
 import { planWaterfallUpdate } from '../gl/wf-shift';
 import { useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
+import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
 import { FreqAxis } from './FreqAxis';
 import { PassbandOverlay } from './PassbandOverlay';
@@ -77,7 +78,15 @@ export function Panadapter() {
     const redraw = () => {
       rafHandle = 0;
       if (!drawPan) return;
-      const { dbMin, dbMax } = useDisplaySettingsStore.getState();
+      const s = useDisplaySettingsStore.getState();
+      // While keyed (MOX or TUN — server already feeds TX pixels via
+      // DspPipelineService.Tick) use the TX-specific dB range so the
+      // operator's RX noise-floor view is untouched. Thetis parity, see
+      // TX_FIXED_DB_MIN/MAX in display-settings-store.
+      const { moxOn, tunOn } = useTxStore.getState();
+      const keyed = moxOn || tunOn;
+      const dbMin = keyed ? s.txDbMin : s.dbMin;
+      const dbMax = keyed ? s.txDbMax : s.dbMax;
       renderer.draw(drawPan, dbMin, dbMax, drawOffsetPx);
     };
     const requestRedraw = () => {
@@ -150,9 +159,16 @@ export function Panadapter() {
       requestRedraw();
     });
 
+    // Repaint when MOX / TUN flips so the RX-vs-TX dB range swap is
+    // reflected immediately, even if no fresh pan frame arrived yet.
+    const unsubTx = useTxStore.subscribe(() => {
+      requestRedraw();
+    });
+
     return () => {
       unsub();
       unsubSettings();
+      unsubTx();
       ro.disconnect();
       if (rafHandle !== 0) cancelAnimationFrame(rafHandle);
       renderer.dispose();

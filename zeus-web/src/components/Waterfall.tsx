@@ -41,6 +41,7 @@ import { createWfRenderer } from '../gl/waterfall';
 import { useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
+import { ContrastSlider } from './ContrastSlider';
 
 // Throttle row uploads so the waterfall scrolls at ~(server tick / N).
 // With a 30 Hz server tick N=2 gives ~15 Hz, which is a comfortable scroll
@@ -79,16 +80,18 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     // Seed with the current store value so the palette survives remount
     // (e.g. after a resize that cycles the canvas).
     renderer.setColormap(useDisplaySettingsStore.getState().colormap);
+    renderer.setContrast(useDisplaySettingsStore.getState().contrast);
     renderer.setTransparent(transparent);
     let rafHandle = 0;
     let lastSeqDrawn = -1;
     let tickCounter = 0;
     let lastColormap: ColormapId = useDisplaySettingsStore.getState().colormap;
+    let lastContrast = useDisplaySettingsStore.getState().contrast;
 
     const redraw = () => {
       rafHandle = 0;
-      const { dbMin, dbMax } = useDisplaySettingsStore.getState();
-      renderer.draw(dbMin, dbMax);
+      const { wfDbMin, wfDbMax } = useDisplaySettingsStore.getState();
+      renderer.draw(wfDbMin, wfDbMax);
     };
     const requestRedraw = () => {
       if (rafHandle === 0) rafHandle = requestAnimationFrame(redraw);
@@ -118,6 +121,9 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
         renderer.pushFrame(state.wfDb, state.centerHz, state.hzPerPixel, {
           skipRowUpload,
         });
+        // Panadapter still tracks dbMin/dbMax via AUTO toggle (existing
+        // behaviour). Waterfall keeps its own static wfDbMin/wfDbMax so the
+        // mapping doesn't pulse — the γ slider is the operator's only knob.
         useDisplaySettingsStore.getState().updateAutoRange(state.wfDb);
       }
       requestRedraw();
@@ -131,6 +137,10 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       if (state.colormap !== lastColormap) {
         lastColormap = state.colormap;
         renderer.setColormap(state.colormap);
+      }
+      if (state.contrast !== lastContrast) {
+        lastContrast = state.contrast;
+        renderer.setContrast(state.contrast);
       }
       requestRedraw();
     });
@@ -167,6 +177,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       }}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
+      <ContrastSlider />
       <div
         className="tuning-cursor"
         style={{ left: '50%', pointerEvents: 'none' }}

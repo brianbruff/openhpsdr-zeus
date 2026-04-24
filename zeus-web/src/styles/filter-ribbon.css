@@ -26,7 +26,7 @@
   font-family: inherit;
   min-height: 0;
   border-radius: 10px;
-  padding: 14px 14px 10px 14px;
+  padding: 10px 12px 8px 12px;
   border: 1px solid rgba(255, 255, 255, 0.05);
   background: linear-gradient(180deg, #26292f 0%, #1e2025 100%);
   box-shadow:
@@ -76,7 +76,7 @@
   grid-template-columns: 1fr 1fr 1fr 1fr;
   align-items: start;
   column-gap: 8px;
-  padding: 4px 8px 10px;
+  padding: 2px 6px 6px;
 }
 .filter-ribbon__topCol {
   display: flex;
@@ -111,7 +111,7 @@
 
 /* LOW CUT / HIGH CUT value */
 .filter-ribbon__freq {
-  font-size: 20px;
+  font-size: 17px;
   font-weight: 600;
   color: #edeef1;
   letter-spacing: 0.02em;
@@ -128,15 +128,15 @@
   align-items: baseline;
   gap: 4px;
 }
-.filter-ribbon__passband-value { font-size: 26px; font-weight: 600; letter-spacing: 0.02em; }
-.filter-ribbon__passband-unit  { font-size: 13px; color: #b4b7bd; font-weight: 500; }
+.filter-ribbon__passband-value { font-size: 22px; font-weight: 600; letter-spacing: 0.02em; }
+.filter-ribbon__passband-unit  { font-size: 12px; color: #b4b7bd; font-weight: 500; }
 
 /* Mini-pan — fills the remaining vertical space in the main column */
 .filter-ribbon__minipan {
   position: relative;
   flex: 1 1 auto;
-  min-height: 100px;
-  height: 130px;
+  min-height: 80px;
+  height: 100px;
   border-radius: 4px;
   overflow: hidden;
 }
@@ -144,11 +144,11 @@
 /* Footer hint — centered, tiny, muted, letter-spaced, uppercase */
 .filter-ribbon__hint {
   text-align: center;
-  font-size: 10.5px;
+  font-size: 10px;
   letter-spacing: 0.22em;
   color: #7c8088;
   text-transform: uppercase;
-  padding-top: 4px;
+  padding-top: 2px;
 }
 
 /* ===== Preset panel (right column) — its own framed card ===== */
@@ -156,23 +156,23 @@
   background: #2a2d33;
   border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: 8px;
-  padding: 14px 14px 12px;
+  padding: 10px 10px 8px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 .filter-ribbon__preset-grid {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
-  gap: 8px;
+  gap: 6px;
 }
 
-/* Beveled neutral-gray chip: two stacked gradients for the top-lit gloss. */
+/* Beveled neutral-gray chip — sized to match the app's .btn.sm. */
 .filter-ribbon__chip {
   appearance: none;
   font-family: inherit;
-  padding: 10px 0;
-  font-size: 12.5px;
+  padding: 5px 6px;
+  font-size: clamp(10px, 0.1vw + 9.5px, 12px);
   font-weight: 500;
   letter-spacing: 0.02em;
   color: #e0e2e6;
@@ -182,7 +182,7 @@
   border: 1px solid #4a4e55;
   border-top-color: #585c63;
   border-bottom-color: #32353b;
-  border-radius: 6px;
+  border-radius: 4px;
   cursor: pointer;
   font-variant-numeric: tabular-nums;
   transition: border-color 120ms ease, filter 120ms ease, color 120ms ease;
@@ -212,11 +212,11 @@
 .filter-ribbon__custom {
   appearance: none;
   font-family: inherit;
-  padding: 11px 12px;
-  font-size: 12.5px;
+  padding: 6px 10px;
+  font-size: clamp(10px, 0.1vw + 9.5px, 12px);
   font-weight: 600;
   letter-spacing: 0.18em;
-  border-radius: 6px;
+  border-radius: 4px;
   color: #e0e2e6;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0) 45%, rgba(0, 0, 0, 0.12) 100%),

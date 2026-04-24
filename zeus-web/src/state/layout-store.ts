@@ -40,11 +40,13 @@ import { create } from 'zustand';
 // Opaque flexlayout-react JSON blob — we don't strongly-type the tree.
 type FlexLayoutJson = Record<string, unknown>;
 
-// Bump whenever DEFAULT_LAYOUT gains/loses a panel that existing users
-// should pick up on next load. Stored in localStorage; on mismatch we
-// discard the server-side layout and fall through to DEFAULT_LAYOUT.
+// Bump whenever DEFAULT_LAYOUT gains/loses a panel, or when weights
+// change in a way existing users should pick up on next load. Stored in
+// localStorage; on mismatch we discard the server-side layout and fall
+// through to DEFAULT_LAYOUT.
 //   v2 (2026-04-24): added 'filter' bandwidth-filter panel above hero.
-const LAYOUT_SCHEMA_VERSION = 2;
+//   v3 (2026-04-24): shrunk filter tabset weight for tighter default.
+const LAYOUT_SCHEMA_VERSION = 3;
 const VERSION_KEY = 'zeus.layout.schemaVersion';
 
 function getStoredVersion(): number {

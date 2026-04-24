@@ -59,14 +59,14 @@ export const DEFAULT_LAYOUT = {
         children: [
           {
             type: 'tabset',
-            weight: 18,
+            weight: 14,
             children: [
               { type: 'tab', name: 'Bandwidth Filter', component: 'filter' },
             ],
           },
           {
             type: 'tabset',
-            weight: 54,
+            weight: 58,
             children: [
               { type: 'tab', name: 'Panadapter · World Map', component: 'hero' },
             ],

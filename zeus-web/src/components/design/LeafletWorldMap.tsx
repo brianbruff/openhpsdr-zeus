@@ -38,7 +38,13 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { bearingDeg, destinationPoint, distanceKm, greatCircleSegments } from './geo';
+import {
+  bearingDeg,
+  destinationPoint,
+  distanceKm,
+  greatCirclePath,
+  greatCircleSegments,
+} from './geo';
 
 type MapStation = {
   call: string;
@@ -58,8 +64,9 @@ type LeafletWorldMapProps = {
   /** Beam range in km — Log4YM uses 5000 km to reach across oceans. */
   beamRangeKm?: number;
   /** Half-angle of the beam span rendered as side-lobe lines either side of
-   *  the centre bearing, in degrees. Default 15° (≈ 30° total span) matches
-   *  a medium-gain yagi; set to 0 to draw just the single centre beam. */
+   *  the centre bearing, in degrees. Default 10.5° (≈ 21° total span) —
+   *  a narrower hint than a textbook 3 dB yagi lobe so the wedge doesn't
+   *  overpower the map; set to 0 to draw just the single centre beam. */
   beamHalfWidthDeg?: number;
   /** When true, arcs and markers are drawn; otherwise the map renders empty-ish. */
   active: boolean;
@@ -220,7 +227,7 @@ export function LeafletWorldMap({
   target,
   beamBearing,
   beamRangeKm = 10000,
-  beamHalfWidthDeg = 15,
+  beamHalfWidthDeg = 10.5,
   active,
   interactive = false,
   onRotateToBearing,
@@ -397,6 +404,30 @@ export function LeafletWorldMap({
       : null;
     const beam = beamBearing ?? implicitBeam;
     if (beam != null) {
+      // Shaded wedge between the two edge beams — unwrapped continuous paths
+      // keep the ring closed across the antimeridian. Rendered first so the
+      // centre/edge polylines draw on top.
+      if (beamHalfWidthDeg > 0) {
+        const edgeLeft = destinationPoint(home.lat, home.lon, beam - beamHalfWidthDeg, beamRangeKm);
+        const edgeRight = destinationPoint(home.lat, home.lon, beam + beamHalfWidthDeg, beamRangeKm);
+        const pathLeft = greatCirclePath(
+          { lat: home.lat, lon: home.lon },
+          { lat: edgeLeft[0], lon: edgeLeft[1] },
+        );
+        const pathRight = greatCirclePath(
+          { lat: home.lat, lon: home.lon },
+          { lat: edgeRight[0], lon: edgeRight[1] },
+        );
+        const ring: [number, number][] = [...pathLeft, ...pathRight.slice().reverse()];
+        L.polygon(ring, {
+          stroke: false,
+          fill: true,
+          fillColor: COLOR_RED,
+          fillOpacity: 0.22,
+          interactive: false,
+        }).addTo(layer);
+      }
+
       const offsets = beamHalfWidthDeg > 0
         ? [-beamHalfWidthDeg, 0, beamHalfWidthDeg]
         : [0];

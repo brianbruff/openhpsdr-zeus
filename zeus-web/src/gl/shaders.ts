@@ -114,6 +114,7 @@ uniform float uDbMax;
 uniform float uWriteRow;
 uniform float uH;
 uniform float uBgAlpha;
+uniform float uContrast;
 out vec4 fragColor;
 void main() {
   // vUv.y == 1.0 at top of canvas; newest row sits at the top.
@@ -122,6 +123,9 @@ void main() {
   float row = mod(uWriteRow - agePx + uH, uH);
   float v = texture(uHistory, vec2(vUv.x, (row + 0.5) / uH)).r;
   float n = clamp((v - uDbMin) / (uDbMax - uDbMin), 0.0, 1.0);
+  // Gamma curve before LUT lookup. uContrast > 1 pushes the noise floor
+  // toward black; < 1 lifts weak signal. Operator-controlled.
+  n = pow(n, uContrast);
   vec4 c = texture(uLut, vec2(n, 0.5));
   // uBgAlpha=1 → fully opaque (normal mode). uBgAlpha=0 → noise floor is
   // fully transparent and signal peaks fade in proportionally; map/background

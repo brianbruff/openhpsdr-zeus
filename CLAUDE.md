@@ -31,12 +31,27 @@ Before touching DSP, protocol, or layout code, skim these — they have bitten u
 
 - **`docs/lessons/wdsp-init-gotchas.md`** — WDSP RXA channels MUST open at `state=0` and flip via `SetChannelState(id, 1, 0)` *after* the worker is live. A `-400` meter reading means the xmeter thread didn't run. This ordering is load-bearing; do not reorder init without reading the lesson.
 - **`docs/lessons/dev-conventions.md`** — port allocation (backend **6060**, Vite dev **5173**), panadapter amber (`#FFA028`), getUserMedia on LAN IP quirks.
+- **`docs/lessons/hl2-drive-byte-quantization.md`** — HL2 honours only the top 4 bits of the TX drive byte. Touching `RadioService.RecomputePaAndPush`, `ControlFrame.WriteUsbFrame`, or any PA-calibration code without reading this will produce a radio that silently makes 20% of rated power.
+- **`docs/references/`** — vendor protocol PDFs + per-radio capability matrix. **If a board-specific doc exists (e.g. `docs/references/protocol-1/hermes-lite2-protocol.md`), read it before inferring behaviour from Thetis or piHPSDR.** The HL2 drive-byte quantisation bug cost two days because this folder wasn't consulted.
 - **`docs/rca/`** — per-incident post-mortems. Read the relevant one before "fixing" a symptom that matches.
+
+## Radio-Specific Behaviour — use the abstractions
+
+Zeus supports several HPSDR radios on one codebase (Hermes, HL2, ANAN-10/100/100D/200D, Orion, G2 MkII). The same protocol wire format does NOT mean identical behaviour — different boards honour different fields, use different drive-byte resolutions, and publish different PA gains. **Go through the existing per-board abstractions. Do not hard-code board-agnostic math in the drive / PA / TX path.**
+
+Extant seams:
+
+- **`Zeus.Server/RadioDriveProfile.cs`** — `IRadioDriveProfile.EncodeDriveByte(...)`. HL2 quantises to its 4-bit drive register here; every other board uses the 8-bit default. **Add new board quirks by implementing `IRadioDriveProfile` and extending `RadioDriveProfiles.For(...)` — do not special-case inside `RecomputePaAndPush`.**
+- **`Zeus.Server/PaDefaults.cs`** — per-board PA-gain and rated-watts seeds, dispatched on `HpsdrBoardKind`. New boards slot in at the `TableFor` switch.
+- **`RadioService.ConnectedBoardKind`** — the authoritative "what am I talking to?" for everything downstream.
+
+Anti-pattern to watch for (the one KB2UKA's PA-menu refactor fell into): adding a calibration or encoding step that's correct for the radio in front of you (e.g. ANAN G2) and untested on other boards. Drive / TX / PA changes must be sanity-checked against HL2 at minimum; if a change *can't* be tested on HL2 locally, flag it explicitly in the PR so the maintainer can bench-test before merge.
 
 ## Debugging Discipline
 
+- **Log what's on the wire, not what you think is on the wire.** `Protocol1Client.TxLoopAsync` already prints `p1.tx.rate pkts=... drv=... peak=...` at 1 Hz during MOX/TUN; when TX power looks wrong, read that log before theorising. Two days of bandpass / amplitude / rate phantoms on the HL2 bug ended with one line showing `drv=48`, which was the whole answer.
 - **Log boundary-call arguments before blaming library internals.** When something WDSP-shaped misbehaves, the first suspect is the values our C# P/Invoke passed in — not a WDSP bug. Log the inputs at the P/Invoke seam, then read the library source.
-- **Verify against Thetis source, not docs.** Protocol 1 documentation is incomplete and occasionally wrong; Thetis is the ground truth.
+- **Verify against Thetis source, not docs — but read the board-specific reference doc FIRST.** Protocol 1 documentation is incomplete and occasionally wrong; Thetis is the ground truth for ANAN-class radios. For HL2, the truth lives in `docs/references/protocol-1/hermes-lite2-protocol.md` and in `mi0bot/openhpsdr-thetis` (the HL2-specific Thetis fork), NOT in `ramdor/Thetis`.
 - **Don't flip axes unilaterally.** If a panadapter or waterfall "feels backwards," investigate the horizontal-shift path before inverting frequency direction.
 
 ## Build & Run

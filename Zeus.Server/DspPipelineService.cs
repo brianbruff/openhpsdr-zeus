@@ -78,6 +78,7 @@ public class DspPipelineService : BackgroundService
     private int _appliedTxLowHz;
     private int _appliedTxHighHz;
     private double _appliedAgcTopDb;
+    private double _appliedRxAfGainDb;
     private NrConfig _appliedNr = new();
     private int _appliedZoomLevel = 1;
 
@@ -265,6 +266,11 @@ public class DspPipelineService : BackgroundService
             engine.SetAgcTop(channel, s.AgcTopDb);
             _appliedAgcTopDb = s.AgcTopDb;
         }
+        if (s.RxAfGainDb != _appliedRxAfGainDb)
+        {
+            engine.SetRxAfGainDb(channel, s.RxAfGainDb);
+            _appliedRxAfGainDb = s.RxAfGainDb;
+        }
         var nr = s.Nr ?? new NrConfig();
         if (!nr.Equals(_appliedNr))
         {
@@ -291,6 +297,7 @@ public class DspPipelineService : BackgroundService
         engine.SetTxFilter(s.TxFilterLowHz, s.TxFilterHighHz);
         engine.SetVfoHz(channelId, s.VfoHz);
         engine.SetAgcTop(channelId, s.AgcTopDb);
+        engine.SetRxAfGainDb(channelId, s.RxAfGainDb);
         engine.SetNoiseReduction(channelId, nr);
         engine.SetZoom(channelId, s.ZoomLevel);
         _appliedMode = s.Mode;
@@ -299,6 +306,7 @@ public class DspPipelineService : BackgroundService
         _appliedTxLowHz = s.TxFilterLowHz;
         _appliedTxHighHz = s.TxFilterHighHz;
         _appliedAgcTopDb = s.AgcTopDb;
+        _appliedRxAfGainDb = s.RxAfGainDb;
         _appliedNr = nr;
         _appliedZoomLevel = s.ZoomLevel;
     }

@@ -383,6 +383,20 @@ public sealed class WdspDspEngine : IDspEngine
         _log.LogInformation("wdsp.setAgcTop channel={Id} topDb={TopDb:F1}", channelId, topDb);
     }
 
+    public void SetRxAfGainDb(int channelId, double db)
+    {
+        if (!_channels.TryGetValue(channelId, out _)) return;
+        // WDSP's SetRXAPanelGain1 takes a linear multiplier on the post-demod
+        // audio panel (panel.c:66). 0 dB ≡ 1.0 linear, which is the value
+        // OpenChannel installs at line 237 — so a fresh channel that never
+        // sees this call behaves exactly as before. Thetis wires its master
+        // AF slider the same way (audio.cs:218-224, `SetRXAPanelGain1(rxa,
+        // Math.Pow(10.0, db/20.0))`).
+        double linear = Math.Pow(10.0, db / 20.0);
+        NativeMethods.SetRXAPanelGain1(channelId, linear);
+        _log.LogInformation("wdsp.setRxAfGain channel={Id} db={Db:F1} linear={Linear:F4}", channelId, db, linear);
+    }
+
     public void SetZoom(int channelId, int level)
     {
         SyntheticDspEngine.ValidateZoomLevel(level);
@@ -912,15 +926,11 @@ public sealed class WdspDspEngine : IDspEngine
                 NativeMethods.SetTXAPostGenToneFreq(txa, toneFreq);
                 NativeMethods.SetTXAPostGenToneMag(txa, toneMag);
                 NativeMethods.SetTXAPostGenRun(txa, 1);
-                // Disable Leveler while TUN is keyed. The 0 Hz tone lives
-                // below the SSB bandpass (150-2850 Hz), so the bandpass
-                // attenuates it ~30-40 dB. With the default Leveler on at
-                // +5 dB max gain, WDSP's AGC loop pumps trying to boost the
-                // weak signal — showing up as slow AM envelope on the
-                // panadapter. pihpsdr sidesteps this by keeping Leveler off
-                // by default (transmitter.c:2612 — state = compressor||cfc,
-                // both off on tune). We restore Leveler on TUN-off so mic
-                // MOX keeps its current Thetis-matching behavior.
+                // Disable Leveler while TUN is keyed. pihpsdr sidesteps the
+                // AGC-pumping AM envelope by keeping Leveler off
+                // (transmitter.c:2612 — state = compressor||cfc, both off
+                // on tune). We restore Leveler on TUN-off so mic MOX keeps
+                // its current Thetis-matching behavior.
                 NativeMethods.SetTXALevelerSt(txa, 0);
                 _log.LogInformation("wdsp.setTxTune on=true mode=singletone freq={Freq:F0} mag={Mag:F5} leveler=off", toneFreq, toneMag);
             }

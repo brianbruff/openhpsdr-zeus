@@ -51,7 +51,16 @@ public sealed class Protocol1Client : IProtocol1Client
     private const int DefaultFrameChannelCapacity = 64;
     private const int RxSocketTimeoutMs = 100;
     private const int ConsecutiveTimeoutsBeforeGiveUp = 10;
-    private const int TxTickIntervalMs = 3;
+    // HL2's TX DAC runs at a fixed 48 kHz regardless of the RX sample rate;
+    // each EP2 packet carries 126 IQ pairs so the target TX packet rate is
+    // 381 pkt/s. Earlier attempts at using a PeriodicTimer fell to whatever
+    // the OS rounded the period to (observed 500 pkt/s at requested 2.625 ms
+    // on macOS, 333 pkt/s at the prior integer-ms tick of 3 ms) — both rates
+    // mismatch the HL2's clock and cost dB of TX power. TX now fires in
+    // response to each received RX packet, divided by the RX/TX rate ratio
+    // so the HL2's own clock paces the transmitter. pihpsdr old_protocol.c
+    // uses the same pattern.
+    private readonly SemaphoreSlim _txSignal = new(0, int.MaxValue);
 
     private readonly ILogger<Protocol1Client> _log;
     private readonly Channel<IqFrame> _channel;
@@ -265,6 +274,10 @@ public sealed class Protocol1Client : IProtocol1Client
         var buffer = new byte[PacketParser.PacketLength];
         EndPoint remote = new IPEndPoint(IPAddress.Any, 0);
         int consecutiveTimeouts = 0;
+        // TX-pacing counter — every Nth successfully-parsed RX packet signals
+        // TxLoopAsync to emit one EP2 packet. N = rxRate / 48 kHz because the
+        // HL2's TX DAC clock runs at a fixed 48 kHz regardless of the RX rate.
+        int rxPktCounter = 0;
 
         try
         {
@@ -345,6 +358,17 @@ public sealed class Protocol1Client : IProtocol1Client
                     _ => 48_000,
                 };
 
+                // Pace the TX loop off the HL2's own clock. HL2 emits RX
+                // packets at (rateHz / 126) pkt/s; we want TX at (48_000/126)
+                // = 381 pkt/s, so signal every Nth RX packet where
+                // N = rateHz / 48_000. At 48k RX that's 1:1 (piHPSDR-style),
+                // at 192k it's 1 TX per 4 RX.
+                int txDivider = Math.Max(1, rateHz / 48_000);
+                if ((++rxPktCounter % txDivider) == 0)
+                {
+                    try { _txSignal.Release(); } catch (SemaphoreFullException) { /* over-backpressured; TxLoopAsync will catch up */ }
+                }
+
                 var memory = new ReadOnlyMemory<double>(rented, 0, 2 * samples);
                 var frame = new IqFrame(memory, samples, rateHz, seq, NowNs());
                 // DropOldest: full-channel writes never block; oldest frame is discarded.
@@ -414,17 +438,35 @@ public sealed class Protocol1Client : IProtocol1Client
         var remote = _remote!;
         var buf = new byte[ControlFrame.PacketLength];
         uint sendSeq = 0;
-        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(TxTickIntervalMs));
         int phase = 0;
+        // Diagnostic: count packets per wall-second so we can verify the TX
+        // rate actually lands near 381 pkt/s (HL2 48 kHz DAC / 126 pairs per
+        // packet). RxLoop releases _txSignal once per HL2-paced tick.
+        var rateWindowStart = DateTime.UtcNow;
+        int rateWindowPkts = 0;
 
         try
         {
-            while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
+            while (!ct.IsCancellationRequested)
             {
+                await _txSignal.WaitAsync(ct).ConfigureAwait(false);
                 var state = SnapshotState();
                 var (first, second) = PhaseRegisters(phase, state.Mox);
                 phase = (phase + 1) & 0x3;
                 ControlFrame.BuildDataPacket(buf, sendSeq++, first, second, in state, _txIqSource);
+                rateWindowPkts++;
+                var nowUtc = DateTime.UtcNow;
+                var elapsed = nowUtc - rateWindowStart;
+                if (elapsed >= TimeSpan.FromSeconds(1))
+                {
+                    _log.LogInformation(
+                        "p1.tx.rate pkts={Pkts} in {Ms:F0}ms = {Rate:F0} pkt/s (target 381) | wire: peak={Peak}/32767 mean={Mean} firstI={I} firstQ={Q} drv={Drv}",
+                        rateWindowPkts, elapsed.TotalMilliseconds, rateWindowPkts / elapsed.TotalSeconds,
+                        ControlFrame.LastPeakAbs, ControlFrame.LastMeanAbs,
+                        ControlFrame.LastFirstI, ControlFrame.LastFirstQ, ControlFrame.LastDriveByte);
+                    rateWindowStart = nowUtc;
+                    rateWindowPkts = 0;
+                }
                 try
                 {
                     await sock.SendToAsync(buf, SocketFlags.None, remote, ct).ConfigureAwait(false);

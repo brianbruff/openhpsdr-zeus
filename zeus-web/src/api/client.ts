@@ -105,6 +105,8 @@ export type RadioStateDto = {
   adcOverloadWarning: boolean;
   nr: NrConfigDto;
   zoomLevel: ZoomLevel;
+  // Master RX AF gain in dB — 0 = unity (WDSP SetRXAPanelGain1(1.0) default).
+  rxAfGainDb: number;
 };
 
 export type FilterPresetDto = {
@@ -253,6 +255,9 @@ export function normalizeState(raw: unknown): RadioStateDto {
     // the engine's declared defaults so the UI has something to render.
     nr: normalizeNr(r.nr),
     zoomLevel: normalizeZoomLevel(r.zoomLevel),
+    // 0 dB matches the pre-#77 unity-gain default — older servers without
+    // the field behave identically to a fresh-install slider at centre.
+    rxAfGainDb: typeof r.rxAfGainDb === 'number' ? r.rxAfGainDb : 0,
   };
 }
 
@@ -584,6 +589,22 @@ export function setAgcTop(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ topDb }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+export function setRxAfGain(
+  db: number,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/rx/afGain',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ db }),
       signal,
     },
     normalizeState,

@@ -66,32 +66,39 @@ export const COLORMAPS: readonly ColormapSpec[] = [
 
 type Anchor = [number, [number, number, number]];
 
+// Low-end anchors are stretched: roughly the bottom ~35% of each LUT sits at
+// or near black so a noisy band doesn't flood the display with mid-band
+// colour. The signal range is compressed into the upper ~65% — peaks still
+// reach the same top colour, but the noise floor reads dark.
 const BLUE_ANCHORS: Anchor[] = [
   [0.0, [0, 0, 0]],
-  [0.15, [0, 0, 128]],
-  [0.3, [0, 0, 255]],
-  [0.45, [0, 255, 255]],
-  [0.6, [0, 255, 0]],
-  [0.75, [255, 255, 0]],
-  [0.88, [255, 0, 0]],
+  [0.35, [0, 0, 0]],
+  [0.45, [0, 0, 128]],
+  [0.55, [0, 0, 255]],
+  [0.65, [0, 255, 255]],
+  [0.75, [0, 255, 0]],
+  [0.85, [255, 255, 0]],
+  [0.93, [255, 0, 0]],
   [1.0, [255, 255, 255]],
 ];
 
 const INFERNO_ANCHORS: Anchor[] = [
   [0.0, [0, 0, 4]],
-  [0.2, [40, 11, 84]],
-  [0.4, [101, 21, 110]],
-  [0.6, [190, 55, 82]],
-  [0.8, [236, 121, 35]],
+  [0.35, [0, 0, 4]],
+  [0.5, [40, 11, 84]],
+  [0.6, [101, 21, 110]],
+  [0.72, [190, 55, 82]],
+  [0.85, [236, 121, 35]],
   [0.95, [252, 200, 45]],
   [1.0, [252, 255, 164]],
 ];
 
 const VIRIDIS_ANCHORS: Anchor[] = [
-  [0.0, [68, 1, 84]],
-  [0.25, [59, 82, 139]],
-  [0.5, [33, 144, 141]],
-  [0.75, [94, 201, 98]],
+  [0.0, [22, 0, 27]],
+  [0.35, [22, 0, 27]],
+  [0.5, [59, 82, 139]],
+  [0.65, [33, 144, 141]],
+  [0.85, [94, 201, 98]],
   [1.0, [253, 231, 37]],
 ];
 

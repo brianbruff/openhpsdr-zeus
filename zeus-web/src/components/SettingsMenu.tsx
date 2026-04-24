@@ -15,6 +15,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { PaSettingsPanel } from './PaSettingsPanel';
+import { usePaStore } from '../state/pa-store';
 
 type TabId = 'pa';
 
@@ -33,6 +34,19 @@ type Props = {
 // (panadapter, top-bar buttons) stays clickable.
 export function SettingsMenu({ open, onClose }: Props) {
   const [active, setActive] = useState<TabId>('pa');
+  const savePa = usePaStore((s) => s.save);
+  const loadPa = usePaStore((s) => s.load);
+  const paInflight = usePaStore((s) => s.inflight);
+
+  const handleApply = async () => {
+    await savePa();
+    onClose();
+  };
+  const handleCancel = async () => {
+    // Discard any in-memory edits by re-fetching the server's canonical state.
+    await loadPa();
+    onClose();
+  };
   // null = use the initial-centering flex layout on first render; after the
   // first drag (or the post-mount centering effect), a concrete {x,y} takes
   // over and the panel positions absolutely. Off-screen values are allowed —
@@ -272,11 +286,16 @@ export function SettingsMenu({ open, onClose }: Props) {
           borderTop: '1px solid var(--panel-border)',
         }}
       >
-        <button type="button" className="btn sm" onClick={onClose}>
+        <button type="button" className="btn sm" onClick={handleCancel} disabled={paInflight}>
           CANCEL
         </button>
-        <button type="button" className="btn sm active" onClick={onClose}>
-          APPLY
+        <button
+          type="button"
+          className="btn sm active"
+          onClick={handleApply}
+          disabled={paInflight}
+        >
+          {paInflight ? 'SAVING…' : 'APPLY'}
         </button>
       </div>
     </div>

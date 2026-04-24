@@ -191,13 +191,15 @@ public class TestToneGeneratorTests
             ControlFrame.CcRegister.TxFreq, ControlFrame.CcRegister.RxFreq,
             state, tone);
 
-        // Reference: advance by 126 samples directly. IQ stays near full-scale
+        // Reference: advance by 126 samples directly. IQ stays at full-scale
         // regardless of drive (drive% is applied by the HL2 TXG stage, not by
-        // scaling IQ — double-scaling would give drive⁴ power response). The
-        // 0.85 constant keeps peak output under the HL2's 5 W rated spec while
-        // preserving a clean linear drive-to-power mapping through TXG.
+        // scaling IQ — double-scaling would give drive⁴ power response).
+        // Zeus now sends at amplitude=1.0: WDSP's ALC clamps the TXA output
+        // to ≤ 0 dBFS and the TUN post-gen tone is a fixed-amplitude carrier,
+        // so neither source can overshoot. The prior 0.85 factor cost ~1.4 dB
+        // of achievable HL2 output on TUNE for no protection benefit.
         var reference = new TestToneGenerator();
-        const double amplitude = 0.85;
+        const double amplitude = 1.0;
         for (int n = 0; n < 126; n++) reference.Next(amplitude);
         var (expectedI, expectedQ) = reference.Next(amplitude);
 

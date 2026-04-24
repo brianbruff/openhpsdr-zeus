@@ -47,6 +47,36 @@ export const FIXED_DB_MIN = -140;
 export const FIXED_DB_MAX = -50;
 
 const STORAGE_KEY = 'zeus.display.dbRange';
+const CONTRAST_STORAGE_KEY = 'zeus.display.contrast';
+
+// Allowed range for the waterfall gamma. Outside this band the display
+// either flattens to a single colour (very low) or clips weak signal to
+// black (very high). Default 1.0 = identity.
+export const CONTRAST_MIN = 0.5;
+export const CONTRAST_MAX = 4.0;
+export const CONTRAST_DEFAULT = 1.0;
+
+function readSavedContrast(): number {
+  try {
+    if (typeof localStorage === 'undefined') return CONTRAST_DEFAULT;
+    const raw = localStorage.getItem(CONTRAST_STORAGE_KEY);
+    if (!raw) return CONTRAST_DEFAULT;
+    const v = Number(raw);
+    if (!Number.isFinite(v) || v < CONTRAST_MIN || v > CONTRAST_MAX) return CONTRAST_DEFAULT;
+    return v;
+  } catch {
+    return CONTRAST_DEFAULT;
+  }
+}
+
+function writeSavedContrast(v: number): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(CONTRAST_STORAGE_KEY, String(v));
+  } catch {
+    // quota / private mode — silently accept
+  }
+}
 
 function readSavedRange(): { dbMin: number; dbMax: number } {
   try {
@@ -91,12 +121,25 @@ const MIN_SPAN_DB = 20;
 
 export type DisplaySettingsState = {
   autoRange: boolean;
+  // Panadapter dB window. Driven by the DbScale gesture (manual) and/or the
+  // AUTO toggle (EMA-tracked). The waterfall has its own window — see
+  // wfDbMin/wfDbMax below — so dragging the panadapter scale no longer
+  // affects waterfall brightness.
   dbMin: number;
   dbMax: number;
+  // Waterfall dB window. Always EMA-tracks the wfDb percentiles so the
+  // colour mapping stays sensible across band-condition changes; the
+  // operator's only direct knob on the waterfall is the contrast (γ) slider.
+  wfDbMin: number;
+  wfDbMax: number;
   colormap: ColormapId;
+  contrast: number;
   setAutoRange: (v: boolean) => void;
   setColormap: (id: ColormapId) => void;
+  setContrast: (gamma: number) => void;
   updateAutoRange: (wfDb: Float32Array) => void;
+  // Always-on EMA tracker for the waterfall window.
+  updateWfRange: (wfDb: Float32Array) => void;
   // Shift dbMin and dbMax together by `deltaDb`. Used by the draggable dB
   // scale overlay on the panadapter with content-follows-finger semantics:
   // drag DOWN raises both limits so the trace slides DOWN on the canvas.
@@ -112,7 +155,10 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   autoRange: false,
   dbMin: initialRange.dbMin,
   dbMax: initialRange.dbMax,
+  wfDbMin: FIXED_DB_MIN,
+  wfDbMax: FIXED_DB_MAX,
   colormap: 'blue',
+  contrast: readSavedContrast(),
   setAutoRange: (autoRange) => {
     if (autoRange) {
       set({ autoRange: true });
@@ -125,10 +171,22 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
     }
   },
   setColormap: (colormap) => set({ colormap }),
+  setContrast: (gamma) => {
+    const clamped = Math.max(CONTRAST_MIN, Math.min(CONTRAST_MAX, gamma));
+    set({ contrast: clamped });
+    writeSavedContrast(clamped);
+  },
   shiftDbRange: (deltaDb) => {
-    const { dbMin, dbMax } = get();
-    const nextMin = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, dbMin + deltaDb));
-    const nextMax = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, dbMax + deltaDb));
+    // While AUTO is on, the live dbMin/dbMax are EMA-smoothed band-tracking
+    // outputs (often messy floats and a tighter span than the user's saved
+    // FIXED range). Promoting those into localStorage would lock the user
+    // into a transient AUTO snapshot. Instead, mirror setAutoRange(false):
+    // start from the last persisted FIXED range, apply the shift to that.
+    const { autoRange, dbMin, dbMax } = get();
+    const baseMin = autoRange ? readSavedRange().dbMin : dbMin;
+    const baseMax = autoRange ? readSavedRange().dbMax : dbMax;
+    const nextMin = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, baseMin + deltaDb));
+    const nextMax = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, baseMax + deltaDb));
     set({ autoRange: false, dbMin: nextMin, dbMax: nextMax });
     writeSavedRange(nextMin, nextMax);
   },
@@ -146,6 +204,22 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
     set({
       dbMin: dbMin * (1 - SMOOTHING) + targetMin * SMOOTHING,
       dbMax: dbMax * (1 - SMOOTHING) + targetMax * SMOOTHING,
+    });
+  },
+  updateWfRange: (wfDb) => {
+    if (wfDb.length === 0) return;
+    const [p5, p95] = percentiles(wfDb);
+    let targetMin = p5 - AUTO_FLOOR_MARGIN_DB;
+    let targetMax = p95 + AUTO_CEIL_MARGIN_DB;
+    if (targetMax - targetMin < MIN_SPAN_DB) {
+      const mid = 0.5 * (targetMin + targetMax);
+      targetMin = mid - MIN_SPAN_DB / 2;
+      targetMax = mid + MIN_SPAN_DB / 2;
+    }
+    const { wfDbMin, wfDbMax } = get();
+    set({
+      wfDbMin: wfDbMin * (1 - SMOOTHING) + targetMin * SMOOTHING,
+      wfDbMax: wfDbMax * (1 - SMOOTHING) + targetMax * SMOOTHING,
     });
   },
 }));

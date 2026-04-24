@@ -51,7 +51,13 @@ public sealed class Protocol1Client : IProtocol1Client
     private const int DefaultFrameChannelCapacity = 64;
     private const int RxSocketTimeoutMs = 100;
     private const int ConsecutiveTimeoutsBeforeGiveUp = 10;
-    private const int TxTickIntervalMs = 3;
+    // HL2 DAC runs at 48 kHz. Each EP2 UDP packet carries 2 USB frames × 63
+    // IQ pairs = 126 pairs, so the correct period is 126/48_000 s = 2.625 ms.
+    // The previous 3 ms integer tick emitted only 42 kpairs/s which under-ran
+    // the HL2 buffer by ~12.5 %, silencing the carrier during refills and
+    // costing dB of TX power. Expressed in 100-ns ticks because PeriodicTimer
+    // takes a TimeSpan, not an int ms.
+    private static readonly TimeSpan TxTickInterval = TimeSpan.FromTicks(26250);
 
     private readonly ILogger<Protocol1Client> _log;
     private readonly Channel<IqFrame> _channel;
@@ -414,7 +420,7 @@ public sealed class Protocol1Client : IProtocol1Client
         var remote = _remote!;
         var buf = new byte[ControlFrame.PacketLength];
         uint sendSeq = 0;
-        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(TxTickIntervalMs));
+        using var timer = new PeriodicTimer(TxTickInterval);
         int phase = 0;
 
         try

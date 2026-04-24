@@ -268,16 +268,17 @@ internal static class ControlFrame
         }
 
         // The HL2's TXG stage (DriveFilter C1 = DriveLevel byte) scales the
-        // transmit path by drive%. Scaling IQ here on top would double-multiply (drive⁴
-        // power response). Amplitude = 0.85 is a fixed headroom factor
-        // applied by BOTH sources: for the test-tone it keeps peak RF under
-        // the HL2's 5 W rated spec (√(5/7.1) ≈ 0.84) on a flat-envelope
-        // carrier, and for the WDSP-TXA ring it leaves 15 % envelope headroom
-        // so the occasional TXA peak above unity can't clip on the wire.
+        // transmit path by drive%. Scaling IQ here on top would double-multiply
+        // (drive⁴ power response). Send at unity — WDSP's ALC already clamps
+        // the TXA output to ≤ 0 dBFS and the TUN post-gen tone is a
+        // fixed-amplitude single-tone carrier, so neither source can overshoot
+        // +1.0 here. The prior 0.85 factor cost ~1.4 dB of achievable output
+        // and was observed to leave HL2 at 1.2 W when deskHPSDR hit 6.6 W on
+        // the same antenna/band; it was belt-and-suspenders on top of ALC.
         // At DriveLevel=0 the HL2 TXG is already 0 (silent), but zero the IQ
         // too so the wire bytes are silent regardless of board.
         if (state.DriveLevel == 0) return;
-        const double amplitude = 0.85;
+        const double amplitude = 1.0;
 
         var payload = frame[8..];
         for (int s = 0; s < IqSamplesPerUsbFrame; s++)

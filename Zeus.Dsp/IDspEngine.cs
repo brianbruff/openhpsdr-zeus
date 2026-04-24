@@ -56,6 +56,13 @@ public interface IDspEngine : IDisposable
     void SetFilter(int channelId, int lowHz, int highHz);
     void SetVfoHz(int channelId, long vfoHz);
     void SetAgcTop(int channelId, double topDb);
+
+    /// <summary>Set the RX master AF gain in dB. Drives WDSP's
+    /// <c>SetRXAPanelGain1</c> (linear) after a dB→linear conversion. 0 dB
+    /// equals the engine's open-time default (linear 1.0). No-op on
+    /// Synthetic.</summary>
+    void SetRxAfGainDb(int channelId, double db);
+
     void SetNoiseReduction(int channelId, NrConfig cfg);
     void SetZoom(int channelId, int level);
     int ReadAudio(int channelId, Span<float> output);

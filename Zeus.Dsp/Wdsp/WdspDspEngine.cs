@@ -383,6 +383,20 @@ public sealed class WdspDspEngine : IDspEngine
         _log.LogInformation("wdsp.setAgcTop channel={Id} topDb={TopDb:F1}", channelId, topDb);
     }
 
+    public void SetRxAfGainDb(int channelId, double db)
+    {
+        if (!_channels.TryGetValue(channelId, out _)) return;
+        // WDSP's SetRXAPanelGain1 takes a linear multiplier on the post-demod
+        // audio panel (panel.c:66). 0 dB ≡ 1.0 linear, which is the value
+        // OpenChannel installs at line 237 — so a fresh channel that never
+        // sees this call behaves exactly as before. Thetis wires its master
+        // AF slider the same way (audio.cs:218-224, `SetRXAPanelGain1(rxa,
+        // Math.Pow(10.0, db/20.0))`).
+        double linear = Math.Pow(10.0, db / 20.0);
+        NativeMethods.SetRXAPanelGain1(channelId, linear);
+        _log.LogInformation("wdsp.setRxAfGain channel={Id} db={Db:F1} linear={Linear:F4}", channelId, db, linear);
+    }
+
     public void SetZoom(int channelId, int level)
     {
         SyntheticDspEngine.ValidateZoomLevel(level);

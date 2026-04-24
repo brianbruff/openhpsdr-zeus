@@ -652,6 +652,17 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
+    // Master RX AF gain in dB. −50 dB is effectively silent (0.003 linear),
+    // 0 dB matches the fresh-open default, +20 dB is a 10× linear boost for
+    // quiet signals. Range mirrors Thetis's ptbAF (console.cs:4312-4313:
+    // tbAF.Minimum = -50, Maximum = 20).
+    public StateDto SetRxAfGain(double db)
+    {
+        double clamped = Math.Clamp(db, -50.0, 20.0);
+        Mutate(s => s with { RxAfGainDb = clamped });
+        return Snapshot();
+    }
+
     public StateDto SetNr(NrConfig cfg)
     {
         ArgumentNullException.ThrowIfNull(cfg);

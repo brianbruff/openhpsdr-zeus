@@ -37,6 +37,7 @@
 
 import { useDisplayStore } from '../state/display-store';
 import { AgcSlider } from './AgcSlider';
+import { AfGainSlider } from './AfGainSlider';
 import { AttenuatorSlider } from './AttenuatorSlider';
 import { AudioToggle } from './AudioToggle';
 import { DriveSlider } from './DriveSlider';
@@ -74,6 +75,7 @@ export function TopBar() {
         <PreampButton />
         <AttenuatorSlider />
         <AgcSlider />
+        <AfGainSlider />
         <NrControls />
         <AudioToggle />
         <MoxButton />

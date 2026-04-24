@@ -39,6 +39,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { WorkspaceContext } from './layout/WorkspaceContext';
 import { FlexWorkspace } from './layout/FlexWorkspace';
 import { AgcSlider } from './components/AgcSlider';
+import { AfGainSlider } from './components/AfGainSlider';
 import { AlertBanner } from './components/AlertBanner';
 import { AttenuatorSlider } from './components/AttenuatorSlider';
 import { AudioToggle } from './components/AudioToggle';
@@ -648,6 +649,10 @@ export default function App() {
         <div className="ctrl-group hide-mobile" style={{ minWidth: 180 }}>
           <div className="label-xs ctrl-lbl">AGC</div>
           <AgcSlider />
+        </div>
+        <div className="ctrl-group hide-mobile" style={{ minWidth: 180 }}>
+          <div className="label-xs ctrl-lbl">AF</div>
+          <AfGainSlider />
         </div>
         <div className="spacer hide-mobile" style={{ flex: 1 }} />
         <div className="ctrl-group" style={{ minWidth: 360 }}>

@@ -441,6 +441,12 @@ app.MapPost("/api/agcGain", (AgcGainSetRequest req, RadioService r) =>
     return r.SetAgcTop(req.TopDb);
 });
 
+app.MapPost("/api/rx/afGain", (RxAfGainSetRequest req, RadioService r) =>
+{
+    log.LogInformation("api.rx.afGain db={Db:F1}", req.Db);
+    return r.SetRxAfGain(req.Db);
+});
+
 app.MapPost("/api/attenuator", (AttenuatorSetRequest req, RadioService r) =>
 {
     log.LogInformation("api.attenuator db={Db}", req.Db);

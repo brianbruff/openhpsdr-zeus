@@ -80,6 +80,7 @@ public class TxAudioIngestTests
         public void SetFilter(int channelId, int lowHz, int highHz) { }
         public void SetVfoHz(int channelId, long vfoHz) { }
         public void SetAgcTop(int channelId, double topDb) { }
+        public void SetRxAfGainDb(int channelId, double db) { }
         public void SetNoiseReduction(int channelId, NrConfig cfg) { }
         public void SetZoom(int channelId, int level) { }
         public int ReadAudio(int channelId, Span<float> output) => 0;

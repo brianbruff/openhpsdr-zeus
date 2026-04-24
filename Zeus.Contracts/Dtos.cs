@@ -101,7 +101,14 @@ public sealed record StateDto(
     // LSB flips the sign and USB → AM swaps to AM's remembered width.
     // Default 150/2850 matches Thetis's stock SSB TX bandpass.
     int TxFilterLowHz = 150,
-    int TxFilterHighHz = 2850);
+    int TxFilterHighHz = 2850,
+    // Master RX AF gain in dB. 0 dB ≡ WDSP SetRXAPanelGain1(1.0), the
+    // engine's open-time default — a fresh session that never touches this
+    // field is audibly identical to pre-#77 builds. Operator slider range
+    // is −50..+20 dB (see RadioService.SetRxAfGain). Per-RX not supported
+    // yet; when multi-RX lands this becomes the master and the per-RX
+    // values layer on top.
+    double RxAfGainDb = 0.0);
 
 public sealed record RadioInfo(
     string MacAddress,
@@ -133,6 +140,8 @@ public sealed record SampleRateSetRequest(int Rate);
 public sealed record PreampSetRequest(bool On);
 
 public sealed record AgcGainSetRequest(double TopDb);
+
+public sealed record RxAfGainSetRequest(double Db);
 
 public sealed record AttenuatorSetRequest(int Db);
 

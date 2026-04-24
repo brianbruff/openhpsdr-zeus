@@ -131,12 +131,14 @@
 .filter-ribbon__passband-value { font-size: 22px; font-weight: 600; letter-spacing: 0.02em; }
 .filter-ribbon__passband-unit  { font-size: 12px; color: #b4b7bd; font-weight: 500; }
 
-/* Mini-pan — fills the remaining vertical space in the main column */
+/* Mini-pan — fills the remaining vertical space in the main column.
+   Height accommodates the top LOW/HIGH CUT callout band (~22px) on top
+   of the spectrum/passband/axis stack. */
 .filter-ribbon__minipan {
   position: relative;
   flex: 1 1 auto;
-  min-height: 80px;
-  height: 100px;
+  min-height: 102px;
+  height: 122px;
   border-radius: 4px;
   overflow: hidden;
 }
@@ -252,3 +254,73 @@
     0 1px 0 rgba(0, 0, 0, 0.40);
 }
 .filter-ribbon__custom-icon { opacity: 0.75; margin-left: 8px; font-size: 12px; }
+
+/* ===========================================================
+   Compact filter bar — triplet readout above the preset chips.
+   Mirrors the ribbon's top-row hierarchy (LOW CUT / PASSBAND /
+   HIGH CUT) at miniature scale so the edges are legible without
+   opening the ribbon.
+   =========================================================== */
+.filter-bar__readout {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: baseline;
+  column-gap: 10px;
+  margin: 2px 0 5px;
+  padding: 3px 4px 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.filter-bar__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  position: relative;
+}
+.filter-bar__cell--lo     { align-items: flex-start; text-align: left; }
+.filter-bar__cell--width  { align-items: center;    text-align: center; }
+.filter-bar__cell--hi     { align-items: flex-end;  text-align: right; }
+
+/* Hairline vertical dividers between cells — pure atmosphere, no strong line. */
+.filter-bar__cell--width::before,
+.filter-bar__cell--width::after {
+  content: '';
+  position: absolute;
+  top: 8%;
+  bottom: 8%;
+  width: 1px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  pointer-events: none;
+}
+.filter-bar__cell--width::before { left: -5px; }
+.filter-bar__cell--width::after  { right: -5px; }
+
+.filter-bar__key {
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  line-height: 1;
+  white-space: nowrap;
+}
+.filter-bar__val {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-0);
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.filter-bar__val--accent {
+  font-size: 13.5px;
+  color: var(--accent);
+  letter-spacing: 0.02em;
+}

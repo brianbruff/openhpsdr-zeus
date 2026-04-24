@@ -17,6 +17,7 @@ import { useEffect, useRef } from 'react';
 import { useDisplayStore } from '../../state/display-store';
 import { useConnectionStore } from '../../state/connection-store';
 import { setFilter } from '../../api/client';
+import { formatCutOffset } from './filterPresets';
 
 const RIBBON_SPAN_HZ = 12_000;        // 12 kHz span centered on VFO (matches mockup: 14.249..14.261)
 const TICK_STEP_HZ = 2_000;           // label a tick every 2 kHz
@@ -34,6 +35,9 @@ const COL_VFO_CENTER = 'rgba(200, 205, 215, 0.08)'; // very subtle neutral VFO l
 const COL_PB_WASH = 'rgba(220, 232, 245, 0.035)';   // almost-invisible interior wash
 const COL_WALL_HALO = 'rgba(220, 225, 232, 0.45)';  // soft neutral halo behind walls
 const COL_DOT = 'rgba(245, 247, 250, 0.95)';        // bright white corner dots
+const COL_CUT_KEY = '#7c8088';                       // "LOW CUT" / "HIGH CUT" key text
+const COL_CUT_VAL = '#edeef1';                       // value text
+const COL_CUT_TICK = 'rgba(220, 225, 232, 0.35)';    // hairline callout connecting label to wall
 
 type DragMode = 'lo' | 'hi' | 'inside';
 
@@ -90,10 +94,12 @@ export function FilterMiniPan() {
 
       ctx.clearRect(0, 0, w, h);
 
-      // Reserve the bottom ~16 px (dpr-adjusted) for the x-axis labels so the
-      // trace never overlaps them.
+      // Reserve the top ~22 px for LOW CUT / HIGH CUT wall callouts and the
+      // bottom ~14 px for the x-axis labels so neither overlap the trace.
+      const labelH = Math.round(22 * dpr);
       const axisH = Math.round(14 * dpr);
-      const plotH = h - axisH;
+      const plotTop = labelH;
+      const plotH = h - axisH - labelH;
 
       const vfo = Number(c.vfoHz);
       const panDb = d.panDb;
@@ -123,7 +129,7 @@ export function FilterMiniPan() {
             }
             if (peak === -Infinity) peak = DB_FLOOR;
             const norm = (peak - DB_FLOOR) / (DB_CEIL - DB_FLOOR);
-            const y = plotH - Math.max(0, Math.min(1, norm)) * plotH;
+            const y = plotTop + plotH - Math.max(0, Math.min(1, norm)) * plotH;
             if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
           }
           ctx.stroke();
@@ -134,8 +140,8 @@ export function FilterMiniPan() {
       ctx.strokeStyle = COL_VFO_CENTER;
       ctx.lineWidth = 1 * dpr;
       ctx.beginPath();
-      ctx.moveTo(w / 2, 0);
-      ctx.lineTo(w / 2, plotH);
+      ctx.moveTo(w / 2, plotTop);
+      ctx.lineTo(w / 2, plotTop + plotH);
       ctx.stroke();
 
       // Passband — bright silver walls + soft neutral halo + corner dots.
@@ -148,8 +154,8 @@ export function FilterMiniPan() {
       if (onScreen) {
         const clampedL = Math.max(0, passLeftPx);
         const clampedR = Math.min(w, passRightPx);
-        const pbTop = Math.round(4 * dpr);
-        const pbBottom = plotH - Math.round(4 * dpr);
+        const pbTop = plotTop + Math.round(4 * dpr);
+        const pbBottom = plotTop + plotH - Math.round(4 * dpr);
         const wallW = Math.max(2, Math.round(2 * dpr));
         const dotSize = Math.round(6 * dpr);
         const halo = Math.round(6 * dpr);
@@ -191,6 +197,59 @@ export function FilterMiniPan() {
         ctx.fillRect(dotL, pbBottom - Math.ceil(dotSize / 2), dotSize, dotSize);
         ctx.fillRect(dotR, pbBottom - Math.ceil(dotSize / 2), dotSize, dotSize);
         ctx.restore();
+
+        // LOW CUT / HIGH CUT callouts. Key (letter-spaced, muted) stacked
+        // above value (bold, brighter) in the reserved top band. A hairline
+        // connector ties each label to its wall top. Labels center on the
+        // wall X and clamp to canvas edges so they never clip.
+        const keyFontPx = Math.round(8 * dpr);
+        const valFontPx = Math.round(10.5 * dpr);
+        const keyFont = `600 ${keyFontPx}px "SFMono-Regular", ui-monospace, monospace`;
+        const valFont = `600 ${valFontPx}px "SFMono-Regular", ui-monospace, monospace`;
+        const padX = Math.round(4 * dpr);
+        const keyY = Math.round(1 * dpr);
+        const valY = keyY + keyFontPx + Math.round(1 * dpr);
+
+        const drawCallout = (wallX: number, side: 'lo' | 'hi', value: string) => {
+          if (wallX < 0 || wallX > w) return;
+          const key = side === 'lo' ? 'LOW CUT' : 'HIGH CUT';
+
+          // Hairline from label bottom down to wall top (lands on the dot).
+          ctx.strokeStyle = COL_CUT_TICK;
+          ctx.lineWidth = 1 * dpr;
+          ctx.beginPath();
+          ctx.moveTo(Math.round(wallX) + 0.5, valY + valFontPx + Math.round(1 * dpr));
+          ctx.lineTo(Math.round(wallX) + 0.5, pbTop - Math.floor(dotSize / 2));
+          ctx.stroke();
+
+          // Measure both lines to find clamp bounds.
+          ctx.font = valFont;
+          const valW = ctx.measureText(value).width;
+          ctx.letterSpacing = '0.15em';
+          ctx.font = keyFont;
+          const keyW = ctx.measureText(key).width;
+          const halfMax = Math.max(valW, keyW) / 2;
+          const cx = Math.max(halfMax + padX, Math.min(w - halfMax - padX, wallX));
+
+          // Key (top, muted, letter-spaced).
+          ctx.textBaseline = 'top';
+          ctx.textAlign = 'center';
+          ctx.fillStyle = COL_CUT_KEY;
+          ctx.fillText(key, cx, keyY);
+
+          // Value (bold, brighter, no letter-spacing).
+          ctx.letterSpacing = '0px';
+          ctx.font = valFont;
+          ctx.fillStyle = COL_CUT_VAL;
+          ctx.fillText(value, cx, valY);
+        };
+
+        drawCallout(passLeftPx, 'lo', formatCutOffset(c.filterLowHz));
+        drawCallout(passRightPx, 'hi', formatCutOffset(c.filterHighHz));
+
+        // Reset text state for subsequent draws (x-axis labels assume start).
+        ctx.textAlign = 'start';
+        ctx.letterSpacing = '0px';
       }
 
       // X-axis tick labels. One label every TICK_STEP_HZ (2 kHz), centered
@@ -198,7 +257,7 @@ export function FilterMiniPan() {
       ctx.fillStyle = COL_TICK_LABEL;
       ctx.font = `${Math.round(9.5 * dpr)}px "SFMono-Regular", ui-monospace, monospace`;
       ctx.textBaseline = 'middle';
-      const labelY = plotH + Math.round(axisH / 2);
+      const labelY = plotTop + plotH + Math.round(axisH / 2);
       const nTicks = Math.floor(RIBBON_SPAN_HZ / TICK_STEP_HZ) + 1; // inclusive both ends
       const tickOffsets: number[] = [];
       // Center-out so VFO tick is guaranteed; symmetric ticks either side.

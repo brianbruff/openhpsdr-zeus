@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useConnectionStore } from '../../state/connection-store';
 import { setFilter, getFilterPresets, setFilterAdvancedPaneOpen, type FilterPresetDto } from '../../api/client';
-import { getPresetsForMode, formatFilterWidth, type FilterPresetSlot } from './filterPresets';
+import { getPresetsForMode, formatFilterWidth, formatCutOffset, type FilterPresetSlot } from './filterPresets';
 
 const LOCAL_STORAGE_KEY = 'zeus.filter.advancedPaneOpen';
 
@@ -78,18 +78,21 @@ export function FilterPanel() {
   if (presets.length === 0) return null;
 
   return (
-    <div className="ctrl-group" style={{ minWidth: 320 }}>
-      <div
-        className="label-xs ctrl-lbl"
-        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-      >
-        <span>FILTER</span>
-        <span
-          className="mono"
-          style={{ color: 'var(--accent)', fontWeight: 600, fontSize: 11, letterSpacing: 0.5 }}
-        >
-          {widthLabel}
-        </span>
+    <div className="ctrl-group filter-bar" style={{ minWidth: 320 }}>
+      <div className="label-xs ctrl-lbl">FILTER</div>
+      <div className="filter-bar__readout" role="group" aria-label="Filter edges and width">
+        <div className="filter-bar__cell filter-bar__cell--lo">
+          <div className="filter-bar__key">LOW CUT</div>
+          <div className="filter-bar__val mono">{formatCutOffset(filterLow)}</div>
+        </div>
+        <div className="filter-bar__cell filter-bar__cell--width">
+          <div className="filter-bar__key">WIDTH</div>
+          <div className="filter-bar__val filter-bar__val--accent mono">{widthLabel}</div>
+        </div>
+        <div className="filter-bar__cell filter-bar__cell--hi">
+          <div className="filter-bar__key">HIGH CUT</div>
+          <div className="filter-bar__val mono">{formatCutOffset(filterHigh)}</div>
+        </div>
       </div>
       <div className="btn-row wrap" style={{ gap: 3 }}>
         {presets.map((slot) => (

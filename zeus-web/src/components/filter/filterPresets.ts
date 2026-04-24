@@ -159,6 +159,20 @@ export function formatRibbonWidth(lowHz: number, highHz: number): string {
   return `${(width / 1000).toFixed(2)} kHz`;
 }
 
+// Format a VFO-relative filter edge as a signed offset. Uses a typographic
+// minus sign, collapses ≥1 kHz to two-decimal kHz ("+2.70 kHz"), and keeps
+// sub-kHz values in whole Hz ("−200 Hz"). Used by both the compact filter
+// bar readout and the mini-pan wall callouts.
+export function formatCutOffset(hz: number): string {
+  const rounded = Math.round(hz);
+  const sign = rounded < 0 ? '−' : '+';
+  const abs = Math.abs(rounded);
+  if (abs >= 1000) {
+    return `${sign}${(abs / 1000).toFixed(2)} kHz`;
+  }
+  return `${sign}${abs} Hz`;
+}
+
 // Format an absolute Hz frequency as "MM.kkk.hhh" (MHz.kHz-3.Hz-3). Matches
 // the mockup's LOW CUT / HIGH CUT columns (e.g. "14.254.650").
 export function formatAbsFreq(hz: number): string {

@@ -613,6 +613,10 @@ public sealed class RadioService : IDisposable
         byte driveByte = ComputeDriveByte(activePct, bandCfg.PaGainDb, cfg.Global.PaMaxPowerWatts);
         bool paEnabled = cfg.Global.PaEnabled && !bandCfg.DisablePa;
 
+        _log.LogInformation(
+            "pa.recompute tunActive={Tun} pct={Pct} band={Band} gainDb={Gain:F2} maxW={Max} -> byte={Byte} paEn={PaEn}",
+            tunActive, activePct, bandName ?? "?", bandCfg.PaGainDb, cfg.Global.PaMaxPowerWatts, driveByte, paEnabled);
+
         ActiveClient?.SetDriveByte(driveByte);
         ActiveClient?.SetOcMasks(bandCfg.OcTx, bandCfg.OcRx);
 

@@ -18,6 +18,15 @@ import { HF_BANDS, usePaStore } from '../state/pa-store';
 
 const OC_PINS = [1, 2, 3, 4, 5, 6, 7] as const;
 
+// Physical sanity bounds — guards against typos like "100" (intended as a
+// percentage) landing in the dB field, which collapses the drive byte to 0.
+const PA_GAIN_MIN_DB = 0;
+const PA_GAIN_MAX_DB = 70;   // G2-class radios top out ~51 dB; 70 leaves headroom
+const PA_MAX_W_MIN   = 0;
+const PA_MAX_W_MAX   = 1500; // Covers Shared Apex / 1 kW + amps
+
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
 function OcBitCheckbox({
   label,
   bit,
@@ -55,7 +64,6 @@ export function PaSettingsPanel() {
   const inflight = usePaStore((s) => s.inflight);
   const error = usePaStore((s) => s.error);
   const load = usePaStore((s) => s.load);
-  const save = usePaStore((s) => s.save);
   const setGlobal = usePaStore((s) => s.setGlobal);
   const setBand = usePaStore((s) => s.setBand);
 
@@ -87,11 +95,15 @@ export function PaSettingsPanel() {
             Rated PA Output (W)
             <input
               type="number"
-              min={0}
-              max={2000}
+              min={PA_MAX_W_MIN}
+              max={PA_MAX_W_MAX}
               step={1}
               value={settings.global.paMaxPowerWatts}
-              onChange={(e) => setGlobal({ paMaxPowerWatts: Number(e.target.value) || 0 })}
+              onChange={(e) =>
+                setGlobal({
+                  paMaxPowerWatts: clamp(Number(e.target.value) || 0, PA_MAX_W_MIN, PA_MAX_W_MAX),
+                })
+              }
               className="w-20 rounded border border-neutral-700 bg-neutral-900 px-2 py-0.5 text-right text-xs text-neutral-100"
             />
             {settings.global.paMaxPowerWatts === 0 && (
@@ -149,11 +161,13 @@ export function PaSettingsPanel() {
                       <input
                         type="number"
                         step={0.1}
-                        min={-10}
-                        max={80}
+                        min={PA_GAIN_MIN_DB}
+                        max={PA_GAIN_MAX_DB}
                         value={b.paGainDb}
                         onChange={(e) =>
-                          setBand(b.band, { paGainDb: Number(e.target.value) || 0 })
+                          setBand(b.band, {
+                            paGainDb: clamp(Number(e.target.value) || 0, PA_GAIN_MIN_DB, PA_GAIN_MAX_DB),
+                          })
                         }
                         className="w-20 rounded border border-neutral-700 bg-neutral-900 px-2 py-0.5 text-right text-neutral-100"
                       />
@@ -200,24 +214,10 @@ export function PaSettingsPanel() {
         </div>
       </section>
 
-      <div
-        className="sticky bottom-0 -mx-[22px] -mb-[18px] flex items-center justify-between border-t border-neutral-800 px-[22px] py-2"
-        style={{ background: 'var(--bg-1)' }}
-      >
-        <span className="text-[11px] text-neutral-500">
-          {inflight ? 'Saving…' : loaded ? 'Loaded from server' : 'Loading…'}
-          {error ? ` · error: ${error}` : ''}
-        </span>
-        <button
-          type="button"
-          className="btn sm"
-          onClick={save}
-          disabled={inflight}
-          title="Persist PA settings and push to the active radio"
-        >
-          Apply
-        </button>
-      </div>
+      <p className="text-[11px] text-neutral-500">
+        {inflight ? 'Saving…' : loaded ? 'Loaded from server — use APPLY below to persist edits' : 'Loading…'}
+        {error ? ` · error: ${error}` : ''}
+      </p>
     </div>
   );
 }

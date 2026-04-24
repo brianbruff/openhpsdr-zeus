@@ -170,6 +170,12 @@ public sealed class WdspDspEngine : IDspEngine
     // Tracked so SetTxMode can re-sign bandpass bounds (LSB family wants negative,
     // USB family positive) the same way RXA does through ApplyBandpassForMode.
     private RxaMode _txCurrentMode = RxaMode.USB;
+    // Latest operator-configured TX bandpass — defaults match OpenTxChannel's
+    // initial SetTXABandpassFreqs(150, 2850). SetTxTune widens the bandpass to
+    // include 0 Hz during TUNE and restores these values on tune-off so the
+    // 0 Hz tone isn't attenuated 30-40 dB by the SSB passband.
+    private int _txBandpassLowHz = 150;
+    private int _txBandpassHighHz = 2850;
     // Latest per-stage TX peak meters, published atomically at the end of each
     // ProcessTxBlock. The reader (TxMetersService, 10 Hz during MOX) sees a
     // consistent snapshot without blocking the DSP thread. null until first TX
@@ -912,23 +918,28 @@ public sealed class WdspDspEngine : IDspEngine
                 NativeMethods.SetTXAPostGenToneFreq(txa, toneFreq);
                 NativeMethods.SetTXAPostGenToneMag(txa, toneMag);
                 NativeMethods.SetTXAPostGenRun(txa, 1);
-                // Disable Leveler while TUN is keyed. The 0 Hz tone lives
-                // below the SSB bandpass (150-2850 Hz), so the bandpass
-                // attenuates it ~30-40 dB. With the default Leveler on at
-                // +5 dB max gain, WDSP's AGC loop pumps trying to boost the
-                // weak signal — showing up as slow AM envelope on the
-                // panadapter. pihpsdr sidesteps this by keeping Leveler off
-                // by default (transmitter.c:2612 — state = compressor||cfc,
-                // both off on tune). We restore Leveler on TUN-off so mic
-                // MOX keeps its current Thetis-matching behavior.
+                // Widen the TX bandpass to include 0 Hz during TUN. Without
+                // this, the operator's SSB bandpass (e.g. 150-2850 Hz)
+                // attenuates the zero-beat carrier by ~30-40 dB, producing
+                // ~1-2 W on an HL2 when the drive-byte math predicts 5 W.
+                // Restored to _txBandpassLow/HighHz below on tune-off.
+                NativeMethods.SetTXABandpassFreqs(txa, -4000.0, 4000.0);
+                // Disable Leveler while TUN is keyed. pihpsdr sidesteps the
+                // AGC-pumping AM envelope by keeping Leveler off
+                // (transmitter.c:2612 — state = compressor||cfc, both off
+                // on tune). We restore Leveler on TUN-off so mic MOX keeps
+                // its current Thetis-matching behavior.
                 NativeMethods.SetTXALevelerSt(txa, 0);
-                _log.LogInformation("wdsp.setTxTune on=true mode=singletone freq={Freq:F0} mag={Mag:F5} leveler=off", toneFreq, toneMag);
+                _log.LogInformation("wdsp.setTxTune on=true mode=singletone freq={Freq:F0} mag={Mag:F5} leveler=off bandpass=wide", toneFreq, toneMag);
             }
             else
             {
                 NativeMethods.SetTXAPostGenRun(txa, 0);
+                // Restore operator-configured SSB bandpass so mic MOX hears
+                // the same filter SetTxFilter last asserted.
+                NativeMethods.SetTXABandpassFreqs(txa, _txBandpassLowHz, _txBandpassHighHz);
                 NativeMethods.SetTXALevelerSt(txa, 1);
-                _log.LogInformation("wdsp.setTxTune on=false leveler=on");
+                _log.LogInformation("wdsp.setTxTune on=false leveler=on bandpass=restored low={Low} high={High}", _txBandpassLowHz, _txBandpassHighHz);
             }
         }
     }
@@ -955,6 +966,8 @@ public sealed class WdspDspEngine : IDspEngine
         lock (_txaLock)
         {
             if (_txaChannelId is not int txa) return;
+            _txBandpassLowHz = lowHz;
+            _txBandpassHighHz = highHz;
             NativeMethods.SetTXABandpassFreqs(txa, lowHz, highHz);
         }
         _log.LogInformation("wdsp.setTxFilter low={Low} high={High}", lowHz, highHz);

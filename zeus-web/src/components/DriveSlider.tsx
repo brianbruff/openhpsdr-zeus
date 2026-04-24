@@ -94,6 +94,19 @@ export function DriveSlider() {
     if (debounceTimer.current != null) clearTimeout(debounceTimer.current);
   }, []);
 
+  // Push the zustand-persisted drivePercent to the server once per connect.
+  // Server defaults _drivePct=10 on startup; without this the slider shows
+  // the persisted value (e.g. 100%) while the radio stays at 10%.
+  const syncedRef = useRef(false);
+  useEffect(() => {
+    if (!connected) { syncedRef.current = false; return; }
+    if (syncedRef.current) return;
+    syncedRef.current = true;
+    lastSent.current = drivePercent;
+    setDrive(drivePercent).catch(() => { /* next drag will retry */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected]);
+
   const onChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = Number(e.currentTarget.value);
     setDrivePercent(v);

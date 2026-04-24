@@ -64,7 +64,7 @@ export function TunButton() {
       type="button"
       disabled={!connected}
       onClick={click}
-      className={`btn lg ${tunOn ? 'active' : ''}`}
+      className={`btn ${tunOn ? 'active' : ''}`}
       title={tunOn ? 'TUN on — single-tone carrier' : 'TUN off (single-tone carrier for tuning)'}
     >
       TUNE

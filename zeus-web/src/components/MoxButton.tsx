@@ -63,7 +63,7 @@ export function MoxButton() {
       type="button"
       disabled={!connected}
       onClick={click}
-      className={`btn lg tx-btn ${moxOn ? 'tx' : ''}`}
+      className={`btn tx-btn ${moxOn ? 'tx' : ''}`}
       title={moxOn ? 'MOX on — transmitting' : 'MOX off (hold Space to key)'}
     >
       <span className={`led ${moxOn ? 'tx' : ''}`} style={{ marginRight: 8 }} />

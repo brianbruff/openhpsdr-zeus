@@ -101,7 +101,12 @@ public sealed record StateDto(
     // LSB flips the sign and USB → AM swaps to AM's remembered width.
     // Default 150/2850 matches Thetis's stock SSB TX bandpass.
     int TxFilterLowHz = 150,
-    int TxFilterHighHz = 2850);
+    int TxFilterHighHz = 2850,
+    // Master RX AF gain in dB. Applied to WDSP RXA panel (SetRXAPanelGain1).
+    // Persisted to LiteDB via DspSettingsStore so the slider position survives
+    // server restarts. 0 dB = unity gain (default). Thetis stores this in
+    // setup.cs AF_GAIN_SLIDER_DB.
+    double RxAfGainDb = 0.0);
 
 public sealed record RadioInfo(
     string MacAddress,
@@ -147,6 +152,8 @@ public sealed record DriveSetRequest(int Percent);
 public sealed record TuneDriveSetRequest(int Percent);
 
 public sealed record NrSetRequest(NrConfig Nr);
+
+public sealed record RxAfGainSetRequest(double GainDb);
 
 // Panadapter/waterfall zoom levels. Level=1 means the analyzer covers the full
 // sample-rate span; level=2 means VFO-centered half-span (×2 bins/Hz), and so

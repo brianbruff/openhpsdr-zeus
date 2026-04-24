@@ -80,6 +80,7 @@ public class DspPipelineService : BackgroundService
     private double _appliedAgcTopDb;
     private NrConfig _appliedNr = new();
     private int _appliedZoomLevel = 1;
+    private double _appliedRxAfGainDb;
 
     private uint _seq;
     private uint _audioSeq;
@@ -276,6 +277,11 @@ public class DspPipelineService : BackgroundService
             engine.SetZoom(channel, s.ZoomLevel);
             _appliedZoomLevel = s.ZoomLevel;
         }
+        if (s.RxAfGainDb != _appliedRxAfGainDb)
+        {
+            engine.SetRxAfGain(channel, s.RxAfGainDb);
+            _appliedRxAfGainDb = s.RxAfGainDb;
+        }
     }
 
     private void ApplyStateToNewChannel(IDspEngine engine, int channelId)
@@ -293,6 +299,7 @@ public class DspPipelineService : BackgroundService
         engine.SetAgcTop(channelId, s.AgcTopDb);
         engine.SetNoiseReduction(channelId, nr);
         engine.SetZoom(channelId, s.ZoomLevel);
+        engine.SetRxAfGain(channelId, s.RxAfGainDb);
         _appliedMode = s.Mode;
         _appliedLowHz = s.FilterLowHz;
         _appliedHighHz = s.FilterHighHz;
@@ -301,6 +308,7 @@ public class DspPipelineService : BackgroundService
         _appliedAgcTopDb = s.AgcTopDb;
         _appliedNr = nr;
         _appliedZoomLevel = s.ZoomLevel;
+        _appliedRxAfGainDb = s.RxAfGainDb;
     }
 
     private void StartIqPump(IProtocol1Client client)

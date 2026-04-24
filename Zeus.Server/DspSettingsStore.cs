@@ -74,6 +74,32 @@ public sealed class DspSettingsStore : IDisposable
         }
     }
 
+    public double? GetRxAfGainDb(string profileId = "default")
+    {
+        var e = _entries.FindOne(x => x.ProfileId == profileId);
+        return e?.RxAfGainDb;
+    }
+
+    public void UpsertRxAfGainDb(double gainDb, string profileId = "default")
+    {
+        var existing = _entries.FindOne(x => x.ProfileId == profileId);
+        if (existing is null)
+        {
+            _entries.Insert(new DspSettingsEntry
+            {
+                ProfileId = profileId,
+                RxAfGainDb = gainDb,
+                UpdatedUtc = DateTime.UtcNow,
+            });
+        }
+        else
+        {
+            existing.RxAfGainDb = gainDb;
+            existing.UpdatedUtc = DateTime.UtcNow;
+            _entries.Update(existing);
+        }
+    }
+
     public void Dispose() => _db.Dispose();
 
     private static string GetDatabasePath()
@@ -95,5 +121,6 @@ public sealed class DspSettingsEntry
     public bool NbpNotchesEnabled { get; set; }
     public NbMode NbMode { get; set; }
     public double NbThreshold { get; set; }
+    public double RxAfGainDb { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

@@ -109,6 +109,12 @@ public interface IDspEngine : IDisposable
     /// 48k → 192k so this is 4 × <see cref="TxBlockSamples"/>.</summary>
     int TxOutputSamples { get; }
 
+    /// <summary>Set the RXA master AF output gain in dB. Calls
+    /// <c>SetRXAPanelGain1(channel, 10^(gainDb/20))</c>. No-op on Synthetic.
+    /// 0 dB = unity. Range matches Thetis AF_GAIN_SLIDER_DB (typically −40..+20)
+    /// but this method passes the value through without clamping.</summary>
+    void SetRxAfGain(int channelId, double gainDb);
+
     /// <summary>Set TXA mic-side linear gain (Thetis audio.cs:218-224 wires the
     /// mic-gain dB slider via <c>SetTXAPanelGain1(TXA, 10^(db/20))</c>).
     /// <paramref name="linearGain"/> is already linear. No-op on Synthetic

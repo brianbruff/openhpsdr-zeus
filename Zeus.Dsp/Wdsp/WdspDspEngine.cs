@@ -860,6 +860,15 @@ public sealed class WdspDspEngine : IDspEngine
     public int TxBlockSamples => _txaInSize;
     public int TxOutputSamples => _txaOutSize;
 
+    public void SetRxAfGain(int channelId, double gainDb)
+    {
+        if (_disposed != 0) return;
+        if (!_channels.TryGetValue(channelId, out _)) return;
+        double linear = Math.Pow(10.0, gainDb / 20.0);
+        NativeMethods.SetRXAPanelGain1(channelId, linear);
+        _log.LogInformation("wdsp.setRxAfGain channel={Ch} gainDb={GainDb:F1} linear={Linear:F3}", channelId, gainDb, linear);
+    }
+
     public void SetTxPanelGain(double linearGain)
     {
         if (_disposed != 0) return;

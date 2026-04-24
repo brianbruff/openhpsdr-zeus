@@ -533,6 +533,12 @@ app.MapPost("/api/rx/nr", (NrSetRequest req, RadioService r) =>
     return Results.Ok(r.SetNr(req.Nr));
 });
 
+app.MapPost("/api/rx/af-gain", (RxAfGainSetRequest req, RadioService r) =>
+{
+    log.LogInformation("api.rx.af-gain gainDb={GainDb:F1}", req.GainDb);
+    return Results.Ok(r.SetRxAfGain(req.GainDb));
+});
+
 app.MapPost("/api/rx/zoom", (ZoomSetRequest req, RadioService r) =>
 {
     log.LogInformation("api.rx.zoom level={Level}", req.Level);

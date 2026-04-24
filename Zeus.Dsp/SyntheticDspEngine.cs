@@ -148,6 +148,7 @@ public sealed class SyntheticDspEngine : IDspEngine
     public int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved) => 0;
     public int TxBlockSamples => 1024;
     public int TxOutputSamples => 1024;
+    public void SetRxAfGain(int channelId, double gainDb) { }
     public void SetTxPanelGain(double linearGain) { }
     public void SetTxLevelerMaxGain(double maxGainDb) { }
     public void SetTxTune(bool on) { }

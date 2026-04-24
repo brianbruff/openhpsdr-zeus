@@ -81,6 +81,7 @@ public class TxAudioIngestTests
         public void SetVfoHz(int channelId, long vfoHz) { }
         public void SetAgcTop(int channelId, double topDb) { }
         public void SetNoiseReduction(int channelId, NrConfig cfg) { }
+        public void SetRxAfGain(int channelId, double gainDb) { }
         public void SetZoom(int channelId, int level) { }
         public int ReadAudio(int channelId, Span<float> output) => 0;
         public bool TryGetDisplayPixels(int channelId, DisplayPixout which, Span<float> dbOut) => false;

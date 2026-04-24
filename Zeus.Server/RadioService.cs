@@ -139,6 +139,7 @@ public sealed class RadioService : IDisposable
 
         // Load persisted DSP settings from the store, or use defaults if not found
         var persistedNr = _dspSettingsStore.Get() ?? new NrConfig();
+        var persistedAfGainDb = _dspSettingsStore.GetRxAfGainDb() ?? 0.0;
 
         // Seed the last-preset cache from persisted store for all modes so
         // the first mode-switch in a session recalls the correct slot.
@@ -165,7 +166,8 @@ public sealed class RadioService : IDisposable
             AdcOverloadWarning: false,
             // Zeus default filter (150/2850) maps to the seeded USB VAR1 slot.
             FilterPresetName: "VAR1",
-            FilterAdvancedPaneOpen: filterPresetStore?.GetAdvancedPaneOpen() ?? false);
+            FilterAdvancedPaneOpen: filterPresetStore?.GetAdvancedPaneOpen() ?? false,
+            RxAfGainDb: persistedAfGainDb);
     }
 
     // Ribbon-visibility setter — frontend toggles via REST, server broadcasts
@@ -664,6 +666,13 @@ public sealed class RadioService : IDisposable
         // Persist the new DSP settings to the store
         _dspSettingsStore.Upsert(cfg);
 
+        return Snapshot();
+    }
+
+    public StateDto SetRxAfGain(double gainDb)
+    {
+        Mutate(s => s with { RxAfGainDb = gainDb });
+        _dspSettingsStore.UpsertRxAfGainDb(gainDb);
         return Snapshot();
     }
 

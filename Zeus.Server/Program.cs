@@ -128,6 +128,10 @@ builder.Services.AddSingleton<LayoutStore>();
 builder.Services.AddSingleton<DspSettingsStore>();
 builder.Services.AddSingleton<PaSettingsStore>();
 builder.Services.AddSingleton<FilterPresetStore>();
+builder.Services.AddSingleton<BandPlanStore>();
+builder.Services.AddSingleton<BandPrefsStore>();
+builder.Services.AddSingleton<BandPlanService>();
+builder.Services.AddSingleton<IBandPlanService>(sp => sp.GetRequiredService<BandPlanService>());
 builder.Services.AddSingleton<QrzService>();
 builder.Services.AddSingleton<LogService>();
 
@@ -756,6 +760,72 @@ app.MapPost("/api/rotator/test", async (RotctldTestRequest req, RotctldService r
         return Results.BadRequest(new { error = "host and port required" });
     var result = await rot.TestAsync(req.Host.Trim(), req.Port, ctx.RequestAborted);
     return Results.Ok(result);
+});
+
+// ── Band plan (Phase 1 + 2) ──────────────────────────────────────────────────
+// GET /api/bands/regions — catalog of all known regions.
+app.MapGet("/api/bands/regions", (BandPlanStore store) =>
+    Results.Ok(store.Regions));
+
+// GET /api/bands/plan?region=EI — resolved (parent-merged) plan.
+app.MapGet("/api/bands/plan", (string? region, BandPlanStore store) =>
+{
+    if (string.IsNullOrWhiteSpace(region))
+        return Results.BadRequest(new { error = "region query param required" });
+    if (!store.RegionExists(region))
+        return Results.NotFound(new { error = $"unknown region '{region}'" });
+    var segments = store.Resolve(region);
+    return Results.Ok(new BandPlanDto(region, segments));
+});
+
+// GET /api/bands/current — current region + resolved plan.
+app.MapGet("/api/bands/current", (IBandPlanService svc) =>
+    Results.Ok(new BandPlanCurrentDto(
+        svc.CurrentRegion.Id,
+        svc.CurrentRegion.DisplayName,
+        svc.CurrentPlan)));
+
+// POST /api/bands/current — set active region.
+app.MapPost("/api/bands/current", (BandPlanCurrentSetRequest req, BandPlanService svc, StreamingHub hub) =>
+{
+    if (string.IsNullOrWhiteSpace(req.RegionId))
+        return Results.BadRequest(new { error = "regionId required" });
+    if (!svc.TrySetRegion(req.RegionId))
+        return Results.NotFound(new { error = $"unknown region '{req.RegionId}'" });
+    hub.BroadcastBandPlanChanged();
+    return Results.Ok(new BandPlanCurrentDto(
+        svc.CurrentRegion.Id,
+        svc.CurrentRegion.DisplayName,
+        svc.CurrentPlan));
+});
+
+// PUT /api/bands/plan — replace operator override for a region.
+app.MapPut("/api/bands/plan", (BandPlanPutRequest req, BandPlanStore store, BandPlanService svc, StreamingHub hub) =>
+{
+    if (string.IsNullOrWhiteSpace(req.RegionId))
+        return Results.BadRequest(new { error = "regionId required" });
+    if (req.Segments is null)
+        return Results.BadRequest(new { error = "segments required" });
+
+    var (ok, error) = store.SaveOverride(req.RegionId, req.Segments);
+    if (!ok)
+        return Results.BadRequest(new { error });
+
+    svc.NotifyPlanChanged();
+    hub.BroadcastBandPlanChanged();
+
+    return Results.Ok(new BandPlanDto(req.RegionId, store.Resolve(req.RegionId)));
+});
+
+// DELETE /api/bands/plan/:regionId — reset to shipped defaults.
+app.MapDelete("/api/bands/plan/{regionId}", (string regionId, BandPlanStore store, BandPlanService svc, StreamingHub hub) =>
+{
+    if (!store.RegionExists(regionId))
+        return Results.NotFound(new { error = $"unknown region '{regionId}'" });
+    store.DeleteOverride(regionId);
+    svc.NotifyPlanChanged();
+    hub.BroadcastBandPlanChanged();
+    return Results.NoContent();
 });
 
 app.Map("/ws", async (HttpContext ctx, StreamingHub hub) =>

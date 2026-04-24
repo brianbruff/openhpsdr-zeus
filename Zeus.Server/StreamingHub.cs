@@ -277,6 +277,15 @@ public sealed class StreamingHub
         }
     }
 
+    // Single-byte notification: type = BandPlanChanged (0x18), no payload.
+    // Frontend refetches /api/bands/plan on receipt.
+    public void BroadcastBandPlanChanged()
+    {
+        if (_clients.IsEmpty) return;
+        var payload = new byte[] { (byte)Zeus.Contracts.MsgType.BandPlanChanged };
+        foreach (var client in _clients.Values) client.TryEnqueue(payload);
+    }
+
     private sealed class ClientSession
     {
         public Guid Id { get; }

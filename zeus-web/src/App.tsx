@@ -84,6 +84,7 @@ import { getAudioClient } from './audio/audio-client';
 import { useMicUplink } from './audio/use-mic-uplink';
 import { fetchState } from './api/client';
 import { useConnectionStore } from './state/connection-store';
+import { BandPlanProvider } from './context/BandPlanContext';
 import { useQrzStore } from './state/qrz-store';
 import { useRotatorStore } from './state/rotator-store';
 import { useLoggerStore } from './state/logger-store';
@@ -522,6 +523,7 @@ export default function App() {
   ]);
 
   return (
+    <BandPlanProvider>
     <WorkspaceContext.Provider value={workspaceCtx}>
     <SpectrumWheelActionsContext.Provider value={spectrumWheelActions}>
     <div className="app" data-screen-label="01 Main Console" style={{ position: 'relative' }}>
@@ -946,6 +948,7 @@ export default function App() {
     </div>
     </SpectrumWheelActionsContext.Provider>
     </WorkspaceContext.Provider>
+    </BandPlanProvider>
   );
 }
 

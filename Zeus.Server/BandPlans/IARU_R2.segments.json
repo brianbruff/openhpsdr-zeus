@@ -1,0 +1,36 @@
+{
+  "$source": "IARU Region 2 Band Plan. Last verified: 2026-04-01. Source: iaru-r2.org/region-2-band-plan/",
+  "regionId": "IARU_R2",
+  "segments": [
+    { "lowHz": 1800000,  "highHz": 1809999,  "label": "160M CW/Phone",       "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": null },
+    { "lowHz": 1810000,  "highHz": 1829999,  "label": "160M CW",             "allocation": "Amateur", "modeRestriction": "CwOnly",    "maxPowerW": null, "notes": null },
+    { "lowHz": 1830000,  "highHz": 1999999,  "label": "160M Phone/CW",       "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": null },
+
+    { "lowHz": 3500000,  "highHz": 3524999,  "label": "80M CW",             "allocation": "Amateur", "modeRestriction": "CwOnly",    "maxPowerW": null, "notes": null },
+    { "lowHz": 3525000,  "highHz": 3599999,  "label": "80M CW/Phone",        "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": null },
+    { "lowHz": 3600000,  "highHz": 4000000,  "label": "80M Phone",           "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": null },
+
+    { "lowHz": 5351500,  "highHz": 5366500,  "label": "60M (secondary)",     "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": 15,   "notes": "Secondary allocation, 15 W EIRP" },
+
+    { "lowHz": 7000000,  "highHz": 7024999,  "label": "40M CW",             "allocation": "Amateur", "modeRestriction": "CwOnly",    "maxPowerW": null, "notes": null },
+    { "lowHz": 7025000,  "highHz": 7299999,  "label": "40M Phone/CW",        "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": null },
+
+    { "lowHz": 10100000, "highHz": 10129999, "label": "30M CW",             "allocation": "Amateur", "modeRestriction": "CwOnly",    "maxPowerW": null, "notes": "Secondary allocation" },
+    { "lowHz": 10130000, "highHz": 10150000, "label": "30M Digital",         "allocation": "Amateur", "modeRestriction": "DigitalOnly","maxPowerW": null, "notes": "Secondary allocation — digimodes" },
+
+    { "lowHz": 14000000, "highHz": 14024999, "label": "20M CW",             "allocation": "Amateur", "modeRestriction": "CwOnly",    "maxPowerW": null, "notes": null },
+    { "lowHz": 14025000, "highHz": 14099999, "label": "20M CW/Phone",        "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": null },
+    { "lowHz": 14100000, "highHz": 14349999, "label": "20M Phone",           "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": null },
+
+    { "lowHz": 18068000, "highHz": 18167999, "label": "17M All",             "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": null },
+
+    { "lowHz": 21000000, "highHz": 21024999, "label": "15M CW",             "allocation": "Amateur", "modeRestriction": "CwOnly",    "maxPowerW": null, "notes": null },
+    { "lowHz": 21025000, "highHz": 21449999, "label": "15M Phone/CW",        "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": null },
+
+    { "lowHz": 24890000, "highHz": 24989999, "label": "12M All",             "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": null },
+
+    { "lowHz": 28000000, "highHz": 29700000, "label": "10M All",             "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": null },
+
+    { "lowHz": 50000000, "highHz": 54000000, "label": "6M All",              "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": null }
+  ]
+}

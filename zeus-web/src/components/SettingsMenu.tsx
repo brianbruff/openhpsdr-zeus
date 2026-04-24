@@ -15,12 +15,15 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { PaSettingsPanel } from './PaSettingsPanel';
+import { BandPlanEditor } from './bandplan/BandPlanEditor';
 import { usePaStore } from '../state/pa-store';
+import { useBandPlanStore } from '../state/bandPlan';
 
-type TabId = 'pa';
+type TabId = 'pa' | 'bandplan';
 
 const TABS: ReadonlyArray<{ id: TabId; label: string }> = [
   { id: 'pa', label: 'PA SETTINGS' },
+  { id: 'bandplan', label: 'BAND PLAN' },
 ];
 
 type Props = {
@@ -37,16 +40,19 @@ export function SettingsMenu({ open, onClose }: Props) {
   const savePa = usePaStore((s) => s.save);
   const loadPa = usePaStore((s) => s.load);
   const paInflight = usePaStore((s) => s.inflight);
+  const bandPlanInflight = useBandPlanStore((s) => s.inflight);
+  const loadBandPlan = useBandPlanStore((s) => s.refresh);
 
   const handleApply = async () => {
-    await savePa();
+    if (active === 'pa') await savePa();
     onClose();
   };
   const handleCancel = async () => {
-    // Discard any in-memory edits by re-fetching the server's canonical state.
-    await loadPa();
+    if (active === 'pa') await loadPa();
+    if (active === 'bandplan') await loadBandPlan();
     onClose();
   };
+  const inflight = active === 'pa' ? paInflight : bandPlanInflight;
   // null = use the initial-centering flex layout on first render; after the
   // first drag (or the post-mount centering effect), a concrete {x,y} takes
   // over and the panel positions absolutely. Off-screen values are allowed —
@@ -269,9 +275,12 @@ export function SettingsMenu({ open, onClose }: Props) {
             background: 'var(--bg-1)',
             color: 'var(--fg-1)',
             fontSize: 12,
+            display: 'flex',
+            flexDirection: 'column',
           }}
         >
-          <PaSettingsPanel />
+          {active === 'pa' && <PaSettingsPanel />}
+          {active === 'bandplan' && <BandPlanEditor />}
         </div>
       </div>
 
@@ -286,16 +295,16 @@ export function SettingsMenu({ open, onClose }: Props) {
           borderTop: '1px solid var(--panel-border)',
         }}
       >
-        <button type="button" className="btn sm" onClick={handleCancel} disabled={paInflight}>
+        <button type="button" className="btn sm" onClick={handleCancel} disabled={inflight}>
           CANCEL
         </button>
         <button
           type="button"
           className="btn sm active"
           onClick={handleApply}
-          disabled={paInflight}
+          disabled={inflight}
         >
-          {paInflight ? 'SAVING…' : 'APPLY'}
+          {inflight ? 'SAVING…' : 'APPLY'}
         </button>
       </div>
     </div>

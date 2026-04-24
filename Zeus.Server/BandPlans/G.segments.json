@@ -1,0 +1,13 @@
+{
+  "$source": "United Kingdom (G) — Ofcom amateur radio licence conditions. Last verified: 2026-04-01. Source: ofcom.org.uk/manage-your-licence/radiocommunication-licences/amateur-radio. Overrides parent IARU_R1 where UK allocations differ.",
+  "regionId": "G",
+  "segments": [
+    { "lowHz": 5258500,  "highHz": 5264000,  "label": "60M Ch 1",           "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": 100,  "notes": "UK Ofcom 60m channelised access — channel centre 5.26 MHz. Secondary, 100 W max." },
+    { "lowHz": 5276000,  "highHz": 5284000,  "label": "60M Ch 2",           "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": 100,  "notes": "UK Ofcom 60m channelised access — channel centre 5.28 MHz. Secondary, 100 W max." },
+    { "lowHz": 5288500,  "highHz": 5292000,  "label": "60M Ch 3",           "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": 100,  "notes": "UK Ofcom 60m channelised access — channel centre 5.29 MHz. Secondary, 100 W max." },
+    { "lowHz": 5298000,  "highHz": 5307000,  "label": "60M Ch 4",           "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": 100,  "notes": "UK Ofcom 60m channelised access — channel centre 5.3025 MHz. Secondary, 100 W max." },
+    { "lowHz": 5313000,  "highHz": 5323000,  "label": "60M Ch 5",           "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": 100,  "notes": "UK Ofcom 60m channelised access — channel centre 5.318 MHz. Secondary, 100 W max." },
+    { "lowHz": 5333000,  "highHz": 5338000,  "label": "60M Ch 6",           "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": 100,  "notes": "UK Ofcom 60m channelised access — channel centre 5.335 MHz. Secondary, 100 W max." },
+    { "lowHz": 5351500,  "highHz": 5366500,  "label": "60M (IARU secondary)", "allocation": "Amateur", "modeRestriction": "Any",     "maxPowerW": 15,   "notes": "IARU secondary 60m allocation, 15 W EIRP cap." }
+  ]
+}

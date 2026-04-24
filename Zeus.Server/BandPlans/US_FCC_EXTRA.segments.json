@@ -1,0 +1,38 @@
+{
+  "$source": "US FCC Part 97 — Extra class privileges. Last verified: 2026-04-01. Source: arrl.org/frequency-allocation-chart and 47 CFR Part 97.301/97.305. Extra class has full amateur phone/CW/data privileges on all bands.",
+  "regionId": "US_FCC_EXTRA",
+  "segments": [
+    { "lowHz": 1800000,  "highHz": 1999999,  "label": "160M All",            "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": "FCC Extra: full privileges 1.8–2.0 MHz" },
+
+    { "lowHz": 3500000,  "highHz": 3599999,  "label": "80M CW/Data",         "allocation": "Amateur", "modeRestriction": "CwOnly",    "maxPowerW": null, "notes": "FCC Extra: CW/RTTY/data 3.5–3.6 MHz" },
+    { "lowHz": 3600000,  "highHz": 3699999,  "label": "80M CW/Phone",        "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": "FCC Extra: phone/image 3.6–3.7 MHz (Extra-only 3.6–3.7)" },
+    { "lowHz": 3700000,  "highHz": 3999999,  "label": "80M Phone",           "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": "FCC Extra/General/Advanced: phone 3.7–4.0 MHz" },
+
+    { "lowHz": 5351500,  "highHz": 5366500,  "label": "60M (secondary)",     "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": 100,  "notes": "FCC 60m secondary, 100 W max ERP" },
+
+    { "lowHz": 7000000,  "highHz": 7024999,  "label": "40M CW (Extra)",      "allocation": "Amateur", "modeRestriction": "CwOnly",    "maxPowerW": null, "notes": "FCC Extra-only CW/data 7.0–7.025 MHz" },
+    { "lowHz": 7025000,  "highHz": 7124999,  "label": "40M CW/Data",         "allocation": "Amateur", "modeRestriction": "CwOnly",    "maxPowerW": null, "notes": "FCC General+Extra: CW/data 7.025–7.125 MHz" },
+    { "lowHz": 7125000,  "highHz": 7174999,  "label": "40M Phone (Extra)",   "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": "FCC Extra-only phone 7.125–7.175 MHz" },
+    { "lowHz": 7175000,  "highHz": 7299999,  "label": "40M Phone",           "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": "FCC General+Extra: phone 7.175–7.3 MHz" },
+
+    { "lowHz": 10100000, "highHz": 10149999, "label": "30M CW/Data",         "allocation": "Amateur", "modeRestriction": "CwOnly",    "maxPowerW": null, "notes": "Secondary allocation; CW/RTTY/data only (all classes)" },
+
+    { "lowHz": 14000000, "highHz": 14024999, "label": "20M CW (Extra)",      "allocation": "Amateur", "modeRestriction": "CwOnly",    "maxPowerW": null, "notes": "FCC Extra-only CW/data 14.0–14.025 MHz" },
+    { "lowHz": 14025000, "highHz": 14149999, "label": "20M CW/Data",         "allocation": "Amateur", "modeRestriction": "CwOnly",    "maxPowerW": null, "notes": "FCC General+Extra: CW/data 14.025–14.150 MHz" },
+    { "lowHz": 14150000, "highHz": 14224999, "label": "20M Phone (Extra)",   "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": "FCC Extra-only phone 14.150–14.225 MHz" },
+    { "lowHz": 14225000, "highHz": 14349999, "label": "20M Phone",           "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": "FCC General+Extra: phone 14.225–14.350 MHz" },
+
+    { "lowHz": 18068000, "highHz": 18167999, "label": "17M All",             "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": "All FCC classes — no class restriction" },
+
+    { "lowHz": 21000000, "highHz": 21024999, "label": "15M CW (Extra)",      "allocation": "Amateur", "modeRestriction": "CwOnly",    "maxPowerW": null, "notes": "FCC Extra-only CW/data 21.0–21.025 MHz" },
+    { "lowHz": 21025000, "highHz": 21199999, "label": "15M CW/Data",         "allocation": "Amateur", "modeRestriction": "CwOnly",    "maxPowerW": null, "notes": "FCC General+Extra: CW/data 21.025–21.200 MHz" },
+    { "lowHz": 21200000, "highHz": 21274999, "label": "15M Phone (Extra)",   "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": "FCC Extra-only phone 21.200–21.275 MHz" },
+    { "lowHz": 21275000, "highHz": 21449999, "label": "15M Phone",           "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": "FCC General+Extra: phone 21.275–21.450 MHz" },
+
+    { "lowHz": 24890000, "highHz": 24989999, "label": "12M All",             "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": "All FCC classes — no class restriction" },
+
+    { "lowHz": 28000000, "highHz": 29699999, "label": "10M All",             "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": "All FCC classes — no class restriction" },
+
+    { "lowHz": 50000000, "highHz": 54000000, "label": "6M All",              "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": "All FCC classes" }
+  ]
+}

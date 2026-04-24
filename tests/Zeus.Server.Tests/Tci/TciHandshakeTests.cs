@@ -239,7 +239,7 @@ public class TciHandshakeTests
                        "audio_samplerate:48000;" +
                        "volume:0;" +
                        "mute:false;" +
-                       "mon_volume:-20;" +
+                       "mon_volume:0;" +
                        "mon_enable:false;" +
                        "dds:0,14074000;" +
                        "if:0,0,0;" +
@@ -260,6 +260,30 @@ public class TciHandshakeTests
                        "ready;";
 
         Assert.Equal(expected, handshake);
+    }
+
+    [Theory]
+    [InlineData(0.0, "volume:0;", "mon_volume:0;")]
+    [InlineData(-10.0, "volume:-10;", "mon_volume:-10;")]
+    [InlineData(20.0, "volume:20;", "mon_volume:20;")]
+    [InlineData(-50.0, "volume:-50;", "mon_volume:-50;")]
+    public void BuildHandshake_ReflectsRxAfGainDb(double gainDb, string expectedVolume, string expectedMonVolume)
+    {
+        var state = CreateTestState() with { RxAfGainDb = gainDb };
+        var handshake = TciHandshake.BuildHandshake(state, 192000, false, false, 50);
+
+        Assert.Contains(expectedVolume, handshake);
+        Assert.Contains(expectedMonVolume, handshake);
+    }
+
+    [Fact]
+    public void BuildHandshake_DefaultGainIsZeroDb()
+    {
+        var state = CreateTestState();
+        var handshake = TciHandshake.BuildHandshake(state, 192000, false, false, 50);
+
+        Assert.Contains("volume:0;", handshake);
+        Assert.Contains("mon_volume:0;", handshake);
     }
 
     private static StateDto CreateTestState(

@@ -882,6 +882,14 @@ public sealed class WdspDspEngine : IDspEngine
         _log.LogInformation("wdsp.setTxLevelerMaxGain dB={Db:F1}", maxGainDb);
     }
 
+    public void SetAfGain(int channelId, double gainDb)
+    {
+        if (!_channels.ContainsKey(channelId)) return;
+        double linear = Math.Pow(10.0, gainDb / 20.0);
+        NativeMethods.SetRXAPanelGain1(channelId, linear);
+        _log.LogInformation("wdsp.setAfGain channel={Id} gainDb={Db:F1} linear={Lin:F4}", channelId, gainDb, linear);
+    }
+
     public void SetTxTune(bool on)
     {
         if (_disposed != 0) return;

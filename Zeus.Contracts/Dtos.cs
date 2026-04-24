@@ -101,7 +101,12 @@ public sealed record StateDto(
     // LSB flips the sign and USB → AM swaps to AM's remembered width.
     // Default 150/2850 matches Thetis's stock SSB TX bandpass.
     int TxFilterLowHz = 150,
-    int TxFilterHighHz = 2850);
+    int TxFilterHighHz = 2850,
+    // RXA audio output gain in dB, applied to WDSP SetRXAPanelGain1.
+    // 0 dB = unity gain. Clamped to [−50, 20] by RadioService.SetRxAfGain.
+    // Shared source of truth for TCI volume and mon_volume until a separate
+    // monitor bus exists.
+    double RxAfGainDb = 0.0);
 
 public sealed record RadioInfo(
     string MacAddress,

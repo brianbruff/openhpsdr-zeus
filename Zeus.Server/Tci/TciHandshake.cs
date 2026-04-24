@@ -78,12 +78,12 @@ public static class TciHandshake
         sb.Append(TciProtocol.Command("iq_samplerate", sampleRate));
         sb.Append(TciProtocol.Command("audio_samplerate", 48000)); // WDSP audio is 48 kHz
 
-        // Audio state (master volume/mute)
-        sb.Append(TciProtocol.Command("volume", 0));       // 0 dB (we don't have master vol yet)
+        // Audio state (master volume/mute). Volume in integer dB; mon_volume
+        // proxies RxAfGainDb until a dedicated monitor bus exists.
+        sb.Append(TciProtocol.Command("volume", (int)Math.Round(state.RxAfGainDb)));
         sb.Append(TciProtocol.Command("mute", false));
 
-        // Monitor (sidetone) — not implemented yet, report as off
-        sb.Append(TciProtocol.Command("mon_volume", -20));
+        sb.Append(TciProtocol.Command("mon_volume", (int)Math.Round(state.RxAfGainDb)));
         sb.Append(TciProtocol.Command("mon_enable", false));
 
         // DDS centre frequency (rx=0)

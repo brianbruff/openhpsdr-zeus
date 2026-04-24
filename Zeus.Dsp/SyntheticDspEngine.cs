@@ -93,6 +93,8 @@ public sealed class SyntheticDspEngine : IDspEngine
 
     public void SetAgcTop(int channelId, double topDb) { /* synthetic has no AGC */ }
 
+    public void SetAfGain(int channelId, double gainDb) { /* synthetic has no audio output */ }
+
     public void SetNoiseReduction(int channelId, NrConfig cfg)
     {
         ArgumentNullException.ThrowIfNull(cfg);

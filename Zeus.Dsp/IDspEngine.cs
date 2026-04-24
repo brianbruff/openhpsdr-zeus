@@ -134,4 +134,9 @@ public interface IDspEngine : IDisposable
     /// concurrently with ProcessTxBlock — the engine publishes via an
     /// atomic snapshot so the reader sees a consistent set.</summary>
     TxStageMeters GetTxStageMeters();
+
+    /// <summary>Set RXA audio output (panel) gain in dB. Converted to linear
+    /// via pow(10, db/20) and forwarded to SetRXAPanelGain1. No-op on Synthetic
+    /// and when no RXA channel is open for <paramref name="channelId"/>.</summary>
+    void SetAfGain(int channelId, double gainDb);
 }

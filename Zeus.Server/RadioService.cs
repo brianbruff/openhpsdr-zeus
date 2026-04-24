@@ -656,6 +656,19 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
+    // RXA audio output gain in dB. Forwarded to WDSP SetRXAPanelGain1 via
+    // DspPipelineService. Shared source of truth for TCI volume/mon_volume
+    // and any future web UI volume slider.
+    public const double AfGainMinDb = -50.0;
+    public const double AfGainMaxDb = 20.0;
+
+    public StateDto SetRxAfGain(double db)
+    {
+        double clamped = Math.Clamp(db, AfGainMinDb, AfGainMaxDb);
+        Mutate(s => s with { RxAfGainDb = clamped });
+        return Snapshot();
+    }
+
     public StateDto SetNr(NrConfig cfg)
     {
         ArgumentNullException.ThrowIfNull(cfg);

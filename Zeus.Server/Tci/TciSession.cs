@@ -572,9 +572,13 @@ public sealed class TciSession : IDisposable
         // volume:<db> or volume (query)
         if (args.Length == 0)
         {
-            Send(TciProtocol.Command("volume", 0)); // no master volume yet
+            var state = _radio.Snapshot();
+            Send(TciProtocol.Command("volume", (int)Math.Round(state.RxAfGainDb)));
         }
-        // Ignore set — not implemented
+        else if (args.Length >= 1 && TciProtocol.TryParseDouble(args[0], out double db))
+        {
+            _radio.SetRxAfGain(db);
+        }
     }
 
     private void HandleMonEnable(string[] args)
@@ -589,12 +593,18 @@ public sealed class TciSession : IDisposable
 
     private void HandleMonVolume(string[] args)
     {
-        // mon_volume:<db> or mon_volume (query)
+        // mon_volume:<db> or mon_volume (query). Proxies RxAfGainDb until a
+        // dedicated monitor bus exists — keeps TCI clients in sync with the
+        // main RX AF gain.
         if (args.Length == 0)
         {
-            Send(TciProtocol.Command("mon_volume", -20));
+            var state = _radio.Snapshot();
+            Send(TciProtocol.Command("mon_volume", (int)Math.Round(state.RxAfGainDb)));
         }
-        // Ignore set — sidetone not implemented
+        else if (args.Length >= 1 && TciProtocol.TryParseDouble(args[0], out double db))
+        {
+            _radio.SetRxAfGain(db);
+        }
     }
 
     private void HandleSplitEnable(string[] args)

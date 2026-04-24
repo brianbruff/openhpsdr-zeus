@@ -78,7 +78,7 @@ export function FilterPanel() {
   if (presets.length === 0) return null;
 
   return (
-    <div className="ctrl-group filter-bar" style={{ minWidth: 320 }}>
+    <div className="ctrl-group filter-bar" style={{ minWidth: 400 }}>
       <div className="label-xs ctrl-lbl">FILTER</div>
       <div className="filter-bar__readout" role="group" aria-label="Filter edges and width">
         <div className="filter-bar__cell filter-bar__cell--lo">
@@ -94,7 +94,7 @@ export function FilterPanel() {
           <div className="filter-bar__val mono">{formatCutOffset(filterHigh)}</div>
         </div>
       </div>
-      <div className="btn-row wrap" style={{ gap: 3 }}>
+      <div className="btn-row wrap" style={{ gap: 3, width: 400 }}>
         {presets.map((slot) => (
           <button
             key={slot.slotName}

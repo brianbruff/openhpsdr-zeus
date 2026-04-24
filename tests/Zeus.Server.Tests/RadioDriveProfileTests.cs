@@ -9,10 +9,18 @@ using Zeus.Server;
 
 namespace Zeus.Server.Tests;
 
-// Per-board drive-byte encoding. Pins the HL2's 4-bit drive quirk and the
-// 8-bit default for everything else. A silent regression here re-opens the
-// "HL2 makes 1.2 W at rated drive" bug — see
-// docs/lessons/hl2-drive-byte-quantization.md.
+// Per-board drive-byte encoding.
+//
+// HL2 uses a PERCENTAGE-based drive model from mi0bot openhpsdr-thetis
+// (the HL2-specific Thetis fork) — the PaGainDb field is an output
+// percentage 0..100, NOT dB. See HermesLite2DriveProfile's class comment
+// for the full derivation from console.cs:49290-49299 and audio.cs:249-258
+// in that fork. Full-byte (Hermes / ANAN / Orion) keeps the piHPSDR /
+// Thetis dB model — that's dB forward PA gain, and the math is a
+// targetW → sourceV → byte chain.
+//
+// Tests pin both conventions so a future refactor that reunifies them
+// (or accidentally applies one board's model to another) fails loudly.
 public class RadioDriveProfileTests
 {
     [Fact]
@@ -34,79 +42,79 @@ public class RadioDriveProfileTests
         Assert.IsType<FullByteDriveProfile>(RadioDriveProfiles.For(board));
     }
 
+    // Full-byte (dB) model: unchanged. PaGainDb here is real decibels.
     [Theory]
     [InlineData(0,   0.0,  0, 0)]
     [InlineData(100, 0.0,  0, 255)]
-    [InlineData(100, 40.5, 5, 48)]     // piHPSDR default on 5 W rated — the exact value that caught us
-    [InlineData(100, 26.0, 5, 253)]    // calibrated HL2 — same math, different gain
-    public void FullByteProfile_Matches_Legacy_ComputeDriveByte(int pct, double gainDb, int maxW, int expected)
+    [InlineData(100, 40.5, 5, 48)]     // piHPSDR default on 5 W rated
+    [InlineData(100, 26.0, 5, 253)]    // calibrated ANAN/Hermes at 5 W
+    public void FullByteProfile_Uses_DbModel(int pct, double gainDb, int maxW, int expected)
     {
         Assert.Equal((byte)expected, FullByteDriveProfile.Instance.EncodeDriveByte(pct, gainDb, maxW));
     }
 
-    // HL2 honours only bits [31:28] of the drive byte. The profile must round
-    // the full-byte math to the nearest 16-count step so slider motion lines
-    // up with the 16 power levels the radio actually has. Without this, a
-    // byte like 48 (piHPSDR's default for a 5 W HL2) lands in nibble 0x3
-    // and silently caps output at 20 % of rated.
+    // HL2 percentage model: slider × band-pct → raw byte → nibble-quantise.
+    //   byte_raw = (drivePct/100) * (paPct/100) * 255
+    //   byte     = round(byte_raw / 16) * 16   (saturate at 240)
+    //
+    // The mi0bot invariant: slider=100 with band-pct=100 must reach nibble
+    // 0xF (rated output). slider=100 with band-pct=38.8 (6m) must cap at
+    // nibble 0x6 (matches mi0bot's 6 m PA soft-cap — see
+    // clsHardwareSpecific.cs:778 in that fork).
     [Theory]
-    [InlineData(0,   0)]        // silence stays silence
-    [InlineData(7,   0)]        // below half-step rounds down
-    [InlineData(8,   16)]       // half-step rounds up to 0x10
-    [InlineData(23,  16)]       // 23 is nearer 16 than 32
-    [InlineData(24,  32)]       // 24 is half-way; rounds to 32 (AwayFromZero)
-    [InlineData(48,  48)]       // already on-nibble — identity
-    [InlineData(56,  64)]       // half-way between 0x30 and 0x40 rounds up to 0x40
-    [InlineData(200, 208)]      // 200 rounds to nibble 0xD = 208
-    [InlineData(248, 240)]      // saturate at nibble 0xF = 240
-    [InlineData(255, 240)]      // 255 also clamps to nibble 0xF, not 16
-    public void Hl2Profile_Rounds_Raw_Byte_To_Nearest_Nibble(int rawFullByte, int expected)
+    [InlineData(0,   100.0, 0)]     // slider off → no output
+    [InlineData(100, 0.0,   0)]     // band-pct 0 → no output
+    [InlineData(100, 100.0, 240)]   // full slider, no band-cap → nibble 0xF (rated)
+    [InlineData(100, 38.8,   96)]   // full slider at 6m soft-cap → nibble 0x6
+    [InlineData(50,  100.0, 128)]   // half slider → nibble 0x8 (~53 %)
+    [InlineData(25,  100.0,  64)]   // quarter slider → nibble 0x4
+    [InlineData(12,  100.0,  32)]   // ~12 % → nibble 0x2
+    public void Hl2Profile_PercentModel_Maps_To_Correct_Nibble(int pct, double bandPct, int expected)
     {
-        // Drive the HL2 profile via paGainDb=0 + maxW=0 (legacy-linear) so the
-        // raw byte equals drivePct × 255/100. This lets us feed arbitrary
-        // "pre-quantise" values in through the public interface.
-        int pct = rawFullByte * 100 / 255;
-        byte produced = HermesLite2DriveProfile.Instance.EncodeDriveByte(pct, 0.0, 0);
-        // The linear map pct×255/100 rounds down, so reconstruct what the
-        // full-byte profile would have computed first, then compare the
-        // HL2 profile output to the expected nibble-step of THAT.
-        byte baseline = FullByteDriveProfile.Instance.EncodeDriveByte(pct, 0.0, 0);
-        int baselineExpected = (int)(Math.Round(baseline / 16.0) * 16);
-        if (baselineExpected > 240) baselineExpected = 240;
-        Assert.Equal((byte)baselineExpected, produced);
-        // Sanity: on the on-nibble rawFullByte inputs the expected column
-        // should also match produced directly, modulo the pct-round-trip
-        // loss for values not divisible by 255/100.
-        _ = expected; // keep the intent of the InlineData column readable
+        byte b = HermesLite2DriveProfile.Instance.EncodeDriveByte(pct, bandPct, maxWatts: 5);
+        Assert.Equal((byte)expected, b);
     }
 
     [Fact]
-    public void Hl2Profile_Calibrated_At_100_Pct_Hits_Nibble_0xF()
+    public void Hl2Profile_Ignores_MaxWatts()
     {
-        // This is the whole point of the calibration lesson: with paGainDb
-        // set so the full-byte math produces ~253, HL2 profile rounds to 240
-        // (nibble 0xF = 15/15). Anything below 26 dB of gain puts us in a
-        // lower nibble and the operator sees less than rated power.
-        byte b = HermesLite2DriveProfile.Instance.EncodeDriveByte(100, 26.0, 5);
-        Assert.Equal(240, b >> 4 << 4);   // nibble boundary
-        Assert.True((b >> 4) == 15, $"expected top nibble 0xF, got {b >> 4:X} (byte={b})");
+        // HL2 percentage model doesn't consult rated watts (there's no
+        // target-watts formula). Varying maxWatts must not shift the byte.
+        var p = HermesLite2DriveProfile.Instance;
+        byte b5   = p.EncodeDriveByte(100, 100.0, 5);
+        byte b100 = p.EncodeDriveByte(100, 100.0, 100);
+        byte b0   = p.EncodeDriveByte(100, 100.0, 0);
+        Assert.Equal(b5, b100);
+        Assert.Equal(b5, b0);
     }
 
     [Fact]
-    public void Hl2Profile_Generic_PiHpsdr_Default_Caps_At_Nibble_0x3()
+    public void Hl2Profile_FullSlider_FullBand_Hits_Nibble_0xF()
     {
-        // Anti-regression: piHPSDR's 40.5 dB published default produces byte
-        // 48 through the full-byte math — that's nibble 0x3 on HL2, capping
-        // output at 20 % of rated. If someone "fixes" this by raising the
-        // default, this test should fail so the conversation happens.
-        byte b = HermesLite2DriveProfile.Instance.EncodeDriveByte(100, 40.5, 5);
-        Assert.Equal(3, b >> 4);
+        // Mi0bot invariant: slider=100 + band-pct=100 lands the upper nibble
+        // at 0xF so the radio produces rated output. This is the axis the
+        // old Zeus dB-math got wrong (byte=48 → nibble 0x3 → 1 W).
+        byte b = HermesLite2DriveProfile.Instance.EncodeDriveByte(100, 100.0, 5);
+        Assert.Equal(15, b >> 4);
+        Assert.Equal(240, b);
+    }
+
+    [Fact]
+    public void Hl2Profile_Clamps_Slider_And_BandPct_To_Domain()
+    {
+        // Out-of-range inputs must not overflow or produce junk. Slider
+        // clamp = 0..100; band-pct clamp = 0..100.
+        var p = HermesLite2DriveProfile.Instance;
+        Assert.Equal((byte)0,   p.EncodeDriveByte(-5, 100.0, 5));
+        Assert.Equal((byte)240, p.EncodeDriveByte(200, 100.0, 5));
+        Assert.Equal((byte)0,   p.EncodeDriveByte(100, -10.0, 5));
+        Assert.Equal((byte)240, p.EncodeDriveByte(100, 250.0, 5));
     }
 
     [Fact]
     public void Zero_Drive_Percent_Is_Always_Zero_Byte_Everywhere()
     {
         Assert.Equal((byte)0, FullByteDriveProfile.Instance.EncodeDriveByte(0, 40.5, 5));
-        Assert.Equal((byte)0, HermesLite2DriveProfile.Instance.EncodeDriveByte(0, 26.0, 5));
+        Assert.Equal((byte)0, HermesLite2DriveProfile.Instance.EncodeDriveByte(0, 100.0, 5));
     }
 }

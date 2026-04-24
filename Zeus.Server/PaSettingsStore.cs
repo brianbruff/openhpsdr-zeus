@@ -34,10 +34,10 @@ public sealed class PaSettingsStore : IDisposable
 
     public event Action? Changed;
 
-    public PaSettingsStore(ILogger<PaSettingsStore> log)
+    public PaSettingsStore(ILogger<PaSettingsStore> log, string? dbPathOverride = null)
     {
         _log = log;
-        var dbPath = GetDatabasePath();
+        var dbPath = dbPathOverride ?? GetDatabasePath();
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
         {

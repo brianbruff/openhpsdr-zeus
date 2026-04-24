@@ -15,15 +15,25 @@
 
 import { useEffect } from 'react';
 import { HF_BANDS, usePaStore } from '../state/pa-store';
+import { useConnectionStore } from '../state/connection-store';
 
 const OC_PINS = [1, 2, 3, 4, 5, 6, 7] as const;
 
+// HL2 uses a percentage-based PA model (mi0bot openhpsdr-thetis) — the
+// PaGainDb DTO field is interpreted as output % 0..100 rather than dB
+// forward gain. Backend HermesLite2DriveProfile enforces this; frontend
+// relabels the input and widens the clamp so the operator can actually
+// type 100. See docs/lessons/hl2-drive-model.md.
+const HL2_BOARD_ID = 'HermesLite2';
+
 // Physical sanity bounds — guards against typos like "100" (intended as a
-// percentage) landing in the dB field, which collapses the drive byte to 0.
-const PA_GAIN_MIN_DB = 0;
-const PA_GAIN_MAX_DB = 70;   // G2-class radios top out ~51 dB; 70 leaves headroom
-const PA_MAX_W_MIN   = 0;
-const PA_MAX_W_MAX   = 1500; // Covers Shared Apex / 1 kW + amps
+// percentage) landing in the dB field on non-HL2 radios, which collapses
+// the drive byte to 0.
+const PA_GAIN_MIN_DB  = 0;
+const PA_GAIN_MAX_DB  = 70;    // G2-class radios top out ~51 dB; 70 leaves headroom
+const PA_GAIN_MAX_PCT = 100;   // HL2: value is an output percentage
+const PA_MAX_W_MIN    = 0;
+const PA_MAX_W_MAX    = 1500;  // Covers Shared Apex / 1 kW + amps
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
@@ -66,6 +76,18 @@ export function PaSettingsPanel() {
   const load = usePaStore((s) => s.load);
   const setGlobal = usePaStore((s) => s.setGlobal);
   const setBand = usePaStore((s) => s.setBand);
+  const boardId = useConnectionStore((s) => s.boardId);
+
+  // HL2 overloads the "PA Gain" field into an output percentage. Switch
+  // label + clamp range + step accordingly. Non-HL2 radios keep the dB
+  // convention (Hermes / ANAN / Orion).
+  const isHl2 = boardId === HL2_BOARD_ID;
+  const paFieldLabel = isHl2 ? 'PA Output (%)' : 'PA Gain (dB)';
+  const paFieldMax   = isHl2 ? PA_GAIN_MAX_PCT : PA_GAIN_MAX_DB;
+  const paFieldStep  = isHl2 ? 1 : 0.1;
+  const paFieldTitle = isHl2
+    ? 'HL2 output percentage per band (0..100). HL2 uses a different PA model than other HPSDR radios: 100 = no attenuation (rated power); lower values soft-cap output for weaker bands (6 m stock is ~38.8). NOT decibels.'
+    : 'PA forward gain in dB per band — the amplifier\'s own gain from DUC output to antenna. NOT a trim. Seeded from the board kind (e.g. G2 MkII ≈ 48-51 dB on HF). Used together with Rated PA Output (W) to compute the drive byte: lower gain here → more drive byte → more output at a given slider %.';
 
   useEffect(() => {
     load();
@@ -139,11 +161,8 @@ export function PaSettingsPanel() {
             <thead className="text-[10px] uppercase tracking-wider text-neutral-500">
               <tr>
                 <th className="px-2 py-2 text-left">Band</th>
-                <th
-                  className="px-2 py-2 text-right"
-                  title="PA forward gain in dB per band — the amplifier's own gain from DUC output to antenna. NOT a trim. Seeded from the board kind (e.g. G2 MkII ≈ 48-51 dB on HF). Used together with Rated PA Output (W) to compute the drive byte: lower gain here → more drive byte → more output at a given slider %."
-                >
-                  PA Gain (dB)
+                <th className="px-2 py-2 text-right" title={paFieldTitle}>
+                  {paFieldLabel}
                 </th>
                 <th className="px-2 py-2 text-center">Disable PA</th>
                 <th className="px-2 py-2 text-left">OC TX (1..7)</th>
@@ -160,13 +179,13 @@ export function PaSettingsPanel() {
                     <td className="px-2 py-1 text-right">
                       <input
                         type="number"
-                        step={0.1}
+                        step={paFieldStep}
                         min={PA_GAIN_MIN_DB}
-                        max={PA_GAIN_MAX_DB}
+                        max={paFieldMax}
                         value={b.paGainDb}
                         onChange={(e) =>
                           setBand(b.band, {
-                            paGainDb: clamp(Number(e.target.value) || 0, PA_GAIN_MIN_DB, PA_GAIN_MAX_DB),
+                            paGainDb: clamp(Number(e.target.value) || 0, PA_GAIN_MIN_DB, paFieldMax),
                           })
                         }
                         className="w-20 rounded border border-neutral-700 bg-neutral-900 px-2 py-0.5 text-right text-neutral-100"

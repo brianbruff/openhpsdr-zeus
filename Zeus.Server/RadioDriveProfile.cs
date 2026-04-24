@@ -62,9 +62,18 @@ public interface IRadioDriveProfile
     /// Produce the byte to send in the DriveFilter C1 slot.
     /// </summary>
     /// <param name="drivePct">Operator slider position, 0..100.</param>
-    /// <param name="paGainDb">Per-band PA forward gain from PaSettingsStore.</param>
+    /// <param name="paGainDb">Per-band PA calibration value from PaSettingsStore.
+    /// <b>Interpretation depends on the profile:</b>
+    /// <see cref="FullByteDriveProfile"/> reads it as dB forward gain
+    /// (Hermes / ANAN / Orion convention). <see cref="HermesLite2DriveProfile"/>
+    /// reads it as a per-band output percentage (0..100), matching mi0bot
+    /// Thetis — see that class's comment for the full derivation.
+    /// The DTO field name is retained for storage compatibility across
+    /// boards, not because the semantics are uniform.</param>
     /// <param name="maxWatts">Rated PA output watts. 0 triggers the legacy
-    /// straight-percent-to-byte mapping that pre-dates the PA math.</param>
+    /// straight-percent-to-byte mapping that pre-dates the PA math on
+    /// FullByte profiles. Ignored on HL2 — percentage-based math doesn't
+    /// consult rated watts.</param>
     byte EncodeDriveByte(int drivePct, double paGainDb, int maxWatts);
 }
 
@@ -113,30 +122,62 @@ public sealed class FullByteDriveProfile : IRadioDriveProfile
 }
 
 /// <summary>
-/// Hermes-Lite 2 profile. Quantises the full-byte math down to the 16-step
-/// scale the HL2 gateware actually honours.
+/// Hermes-Lite 2 profile. HL2 is NOT driven by the piHPSDR/Thetis dB model
+/// that every other HPSDR radio uses — it has a completely separate wire-
+/// level power model that the mi0bot openhpsdr-thetis fork (the HL2-specific
+/// Thetis upstream) implements in clsHardwareSpecific.cs:767-795 and
+/// console.cs:49290-49299.
 ///
-/// HL2 uses only bits [31:28] of the Hermes TX drive-level register — the
-/// bottom 4 bits are silently discarded. Without this rounding, an
-/// operator who calibrates to hit the nibble boundary "works"; one who
-/// lands between boundaries sees no power change until their gain slider
-/// crosses the next 16-count step. Rounding to the nearest nibble-step
-/// here makes the slider honest.
+/// Semantics on HL2:
+///   • <paramref name="paGainDb"/> is a <b>PER-BAND OUTPUT PERCENTAGE</b>
+///     (0.0–100.0), not a dB forward gain. 100 = no attenuation;
+///     for a weaker band (6 m on the stock HL2 PA) it's around 38.8.
+///     The DTO field is still called <c>PaGainDb</c> for storage
+///     compatibility with other boards — it's overloaded per board.
+///   • <paramref name="maxWatts"/> is ignored. HL2 power is governed by
+///     slider × band-percentage directly, not by a target-watts formula.
 ///
-/// Reference: docs/references/protocol-1/hermes-lite2-protocol.md:51
+/// Math:
+///     byte_raw = round( (drivePct / 100) × (paGainDb / 100) × 255 )
+///     byte     = nearest-nibble( byte_raw )            // HL2 gateware quirk
+///
+/// Derivation from mi0bot Thetis (console.cs:49296, audio.cs:249-258):
+///     RadioVolume        = slider × pctBand / 100 / 93.75     // 0..0.96
+///     SetOutputPower arg = RadioVolume × 1.02
+///     wire_byte          = SetOutputPower_arg × 255
+/// The 1/((16/6)/(255/1.02)) = 93.75 constant is calibration for the
+/// mi0bot 0–90 slider span. Zeus slides 0–100, so at drivePct=100 and
+/// paGainDb=100 the raw byte reaches 255 and cleanly lands in nibble 0xF.
+///
+/// Reference:
+///   • docs/references/protocol-1/hermes-lite2-protocol.md:51
+///   • docs/lessons/hl2-drive-model.md
+///   • ../OpenHPSDR-Thetis/Project Files/Source/Console/clsHardwareSpecific.cs:767-795
+///   • ../OpenHPSDR-Thetis/Project Files/Source/Console/console.cs:49290-49299
 /// </summary>
 public sealed class HermesLite2DriveProfile : IRadioDriveProfile
 {
     public static readonly HermesLite2DriveProfile Instance = new();
     private HermesLite2DriveProfile() { }
 
-    public string BoardLabel => "HermesLite2 (4-bit)";
+    public string BoardLabel => "HermesLite2 (%-scale, 4-bit)";
 
     public byte EncodeDriveByte(int drivePct, double paGainDb, int maxWatts)
     {
-        byte raw = DriveByteMath.ComputeFullByte(drivePct, paGainDb, maxWatts);
-        // Round to the nearest nibble-step. 0→0x00, 8→0x10, 24→0x20, …, 248→0xF0.
-        // Saturate at 15 so we never overflow the register.
+        // On HL2 "paGainDb" is a percentage, not decibels (see class-level
+        // comment). Clamp to the percentage domain; maxWatts is ignored
+        // because the HL2 drive pipeline is slider × band-percentage, no
+        // target-watts conversion.
+        _ = maxWatts;
+        int pct = Math.Clamp(drivePct, 0, 100);
+        double bandPct = Math.Clamp(paGainDb, 0.0, 100.0);
+        double driveNorm = (pct / 100.0) * (bandPct / 100.0);
+        byte raw = (byte)Math.Round(driveNorm * 255.0);
+
+        // HL2 gateware reads only bits [31:28] of the drive register — the
+        // bottom nibble is silently discarded. Round to the nearest 16-count
+        // step so slider motion is honest (each step crosses one real power
+        // level). Saturate at 15 so we never overflow.
         int nibble = (int)Math.Round(raw / 16.0);
         if (nibble > 15) nibble = 15;
         return (byte)(nibble * 16);

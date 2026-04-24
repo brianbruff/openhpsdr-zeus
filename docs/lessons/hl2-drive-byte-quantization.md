@@ -1,142 +1,33 @@
-# HL2 drive-byte quantisation — only the top 4 bits are honoured
+# HL2 drive-byte quantisation — superseded
 
-Load-bearing invariant for anyone touching `RadioService.ComputeDriveByte`,
-`ControlFrame.WriteUsbFrame`, or PA calibration on a Hermes-Lite 2. Reading
-this before debugging "HL2 makes too little power" saves ~two days of
-chasing amplitude / packet-rate / bandpass phantoms.
+**This lesson has been superseded.** See
+[`hl2-drive-model.md`](./hl2-drive-model.md) for the current ground truth
+on how Zeus drives the HL2.
 
-## TL;DR
+The original lesson described the symptom (HL2 produces ~1 W at piHPSDR's
+published `PaGainDb = 40.5` default) as a quantisation problem and
+recommended a per-operator calibration around `PaGainDb ≈ 26 dB` to work
+around it. That advice is now obsolete — it was treating the symptom,
+not the cause.
 
-The HL2 uses **only bits [31:28] of the TX drive-level register** — a 4-bit
-scale, not the 8-bit scale every other HPSDR radio (Hermes, ANAN, Orion,
-G2) exposes. If the computed drive byte is 48, the HL2 sees `0x3 / 0xF`
-= 20% of max drive and produces ~20% of rated power, regardless of how
-correct the rest of the TX chain is. piHPSDR's generic
-`pa_calibration = 40.5` is tuned for 8-bit radios; on HL2 it lands the
-drive byte in the 48–80 range forever, capping output at 1–2 W.
+The cause is that HL2's PA drive model is fundamentally different from
+the piHPSDR / Thetis dB model every other HPSDR radio uses. HL2 is
+**percentage-based**, as the mi0bot openhpsdr-thetis fork implements.
+`PaGainDb` on HL2 is now an output percentage (0..100); HF defaults are
+100, 6 m is 38.8.
 
-For this HL2 / filter-board combination, `paGainDb ≈ 26` pushes the
-computed drive byte to 253 (upper nibble 0xF) and reaches rated output.
-Per-unit calibration is still expected — 26 is a starting point, not a
-law of physics.
+The `PaGainDb = 26` workaround no longer applies. If you see it in old
+LiteDB state on the reference HL2 it should be reset to 100 — press
+**Reset to Hermes Lite 2 defaults** in the PA Settings panel.
 
-## The symptom
+## Quick reference (old → new interpretation)
 
-- Zeus TX power topping out at 1–2 W on 20 m where the same HL2 +
-  antenna produces 5–7 W on deskHPSDR / piHPSDR.
-- Measured power scales as roughly `byte^0.86` against `driveByte` —
-  not the `byte^2` a class-AB amplifier should produce. Evidence it's
-  quantisation, not hardware compression.
-- `p1.tx.rate` log (added to `Protocol1Client.TxLoopAsync`) shows
-  `drv=48` even when `pa.recompute` reports `byte=48` as "correct" per
-  the `ComputeDriveByte` formula with `gainDb=40.5, maxWatts=5, pct=100`.
+| Stored `PaGainDb` | Old (dB model, pre-fix) | New (% model, current) |
+|---|---|---|
+| 40.5 | piHPSDR generic default → 1 W | 40.5 % output → nibble 0x6 → 40 % |
+| 26   | EI6LF calibration → 7 W       | 26 % output → nibble 0x4 → 27 %   |
+| 100  | (out of old clamp range)      | Full rated → nibble 0xF → 100 %   |
+| 38.8 | (unlikely before)             | 6 m soft-cap → nibble 0x6 → 40 %  |
 
-## The cause
-
-From `docs/references/protocol-1/hermes-lite2-protocol.md` line 51:
-
-    | 0x09 | [31:24] | Hermes TX Drive Level (only [31:28] used)
-
-`ComputeDriveByte` (`Zeus.Server/RadioService.cs`) does the piHPSDR /
-Thetis math: target watts → dBm → subtract per-band PA gain → back to
-volts across 50 Ω, normalised against 0.8 V full-scale, then
-`byte = round(norm * 255)`. This produces one of 256 distinct values,
-all of which Zeus faithfully writes to C1 of the DriveFilter C&C at
-`ControlFrame.cs`. The HL2 then **ignores the bottom nibble** of that
-byte before scaling the TXG stage.
-
-Worked example at `gainDb=40.5, maxWatts=5, pct=100`:
-
-    target  = 5 W
-    source  = 5 / 10^(40.5/10) = 4.46e-4 W
-    volts   = sqrt(4.46e-4 × 50) = 0.1493 V
-    norm    = 0.1493 / 0.8 = 0.187
-    byte    = round(0.187 × 255) = 48     = 0x30   = 0b00110000
-                                              ^^^^
-                            upper nibble = 0x3 = 3 of 15 (20 %)
-
-The byte *looks* sensible on a 0–255 scale. The HL2 only reads the 3.
-
-## How to recognise it
-
-Key TUN, then watch `p1.tx.rate` at 1 Hz. It prints the byte that was
-just sent:
-
-    p1.tx.rate pkts=381 ... drv=253    ← upper nibble 0xF = 100 %, good
-    p1.tx.rate pkts=381 ... drv=48     ← upper nibble 0x3 = 20 %, capped
-    p1.tx.rate pkts=381 ... drv=96     ← upper nibble 0x6 = 40 %, capped
-
-Rule of thumb: upper nibble = `drv >> 4`. Power ≈ `(nibble / 15) × rated`.
-
-## The workaround (today's fix)
-
-Per-operator PA calibration in the Settings → PA Settings panel. For
-HL2 on `maxWatts = 5`, target a `paGainDb` that makes the math produce
-a byte ≥ 240 at `pct=100`:
-
-    byte ≥ 240 → volts ≥ 0.753 → source ≥ 0.01133 W
-    gainDb ≤ 10·log10(5 / 0.01133) = 26.5 dB
-
-`gainDb = 26` flat worked on the reference HL2 (EI6LF, 24 Apr 2026 —
-produced 7.1 W on 20 m vs a deskHPSDR baseline of 6.6 W on the same
-hardware).
-
-`PaDefaults.Hl2FlatGainDb` is left at 40.5 (piHPSDR's published
-default). The 26 dB value is per-unit and lives in the operator's
-LiteDB, not in code.
-
-## The forever-fix (landed)
-
-`Zeus.Server/RadioDriveProfile.cs` introduces an `IRadioDriveProfile`
-abstraction. `RadioService.RecomputePaAndPush` looks up the profile by
-`ConnectedBoardKind` and delegates. HL2 gets `HermesLite2DriveProfile`
-which runs the same watts math as everyone else, then rounds the
-resulting byte to the nearest 16-count step (nibble-aligned) before
-it hits the wire:
-
-```csharp
-int nibble = (int)Math.Round(raw / 16.0);
-if (nibble > 15) nibble = 15;
-return (byte)(nibble * 16);
-```
-
-Every other board (Hermes, ANAN, Orion, G2, Metis, Griffin, Unknown)
-falls through to `FullByteDriveProfile` which doesn't quantise — the
-full 8-bit drive-byte math that Thetis / piHPSDR publish still wins
-for them.
-
-With the profile in place:
-- piHPSDR's published 40.5 dB on HL2 now rounds to nibble 0x3 (the
-  RadioDriveProfileTests pin this as an anti-regression — if someone
-  "fixes" the default upward, that test fails on purpose).
-- Operator-calibrated 26 dB on HL2 produces nibble 0xF, rated
-  output, no wasted slider travel.
-- Slider motion now maps to real HL2 power steps — no more invisible
-  fine-grained moves under the nibble boundary.
-
-**When adding a new HPSDR board to Zeus**, implement
-`IRadioDriveProfile` if the board has wire-level quirks, and extend
-`RadioDriveProfiles.For(...)` to dispatch on it. Do NOT reintroduce
-per-board branching inside `RadioService` — that's exactly the shape
-the HL2 regression took before this abstraction landed.
-
-## References
-
-- `docs/references/protocol-1/hermes-lite2-protocol.md:51` — the one
-  line that would have saved two days.
-- `Zeus.Server/RadioService.cs` — `ComputeDriveByte`.
-- `Zeus.Protocol1/ControlFrame.cs` — `LastPeakAbs` / `LastDriveByte`
-  instrumentation; `Protocol1Client.TxLoopAsync`'s `p1.tx.rate` log
-  surfaces them at 1 Hz.
-- `Zeus.Server/PaDefaults.cs` — `Hl2FlatGainDb = 40.5` (piHPSDR's
-  generic default, not right for Zeus's 256-step drive model on HL2).
-- Working-tune branch tag: `working_herpes_tune`, commit `857988e`.
-
-## Debugging heuristic
-
-When HL2 output doesn't match a reference client, **log what's on the
-wire before theorising about why it's wrong**. Zeus's
-`Protocol1Client.TxLoopAsync` already prints packet rate + IQ peak +
-drive byte at 1 Hz during MOX/TUN; that log answered "drv=48, that's
-the whole problem" in one keydown. Two days of bandpass / amplitude /
-packet-rate theorising preceded looking at it.
+See [`hl2-drive-model.md`](./hl2-drive-model.md) for the full derivation
+and the mi0bot Thetis references.

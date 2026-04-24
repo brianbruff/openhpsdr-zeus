@@ -65,11 +65,26 @@ internal static class PaDefaults
         ["12m"] = 47.9, ["10m"] = 46.5, ["6m"] = 44.6,
     };
 
-    // piHPSDR `band.c:498-500` — Hermes Lite 2's 5 W PA sits far below any
-    // ANAN, so piHPSDR overrides the generic 53 dB default to 40.5 dB flat
-    // across every band. Thetis has no HL2-specific default; the lazy 100 f
-    // "no output" seed made operators think the radio was dead.
-    private const double Hl2FlatGainDb = 40.5;
+    // HL2 is a percentage-based PA model (mi0bot openhpsdr-thetis fork,
+    // clsHardwareSpecific.cs:767-795). The value stored in PaGainDb for
+    // HL2 is an output-percentage (0..100), NOT dB — see the long comment
+    // on HermesLite2DriveProfile. HF bands sit at 100 (no attenuation);
+    // 6 m falls to 38.8 because the stock HL2 PA has materially less gain
+    // at 50 MHz and mi0bot soft-caps there.
+    //
+    // The previous 40.5 dB value came from piHPSDR's published generic PA
+    // calibration constant. That number is a dB forward-gain for 8-bit-
+    // drive radios (Hermes / ANAN / Orion). It does NOT apply to HL2,
+    // which has a 4-bit drive register and a different firmware-side scaling.
+    // Interpreting 40.5 as dB through the full-byte math produced nibble
+    // 0x3 → ~20 % of rated output — the whole "HL2 makes 1 W" complaint
+    // family. See docs/lessons/hl2-drive-model.md for the full trace.
+    private static readonly IReadOnlyDictionary<string, double> Hl2OutputPct = new Dictionary<string, double>
+    {
+        ["160m"] = 100.0, ["80m"] = 100.0, ["60m"] = 100.0, ["40m"] = 100.0,
+        ["30m"] = 100.0, ["20m"] = 100.0, ["17m"] = 100.0, ["15m"] = 100.0,
+        ["12m"] = 100.0, ["10m"] = 100.0, ["6m"] = 38.8,
+    };
 
     private static IReadOnlyDictionary<string, double> TableFor(HpsdrBoardKind board) => board switch
     {
@@ -82,9 +97,16 @@ internal static class PaDefaults
         _                          => new Dictionary<string, double>(),
     };
 
+    // Returns the per-band PA calibration seed. Units are *board-dependent*:
+    //   • HL2: output percentage (0..100) — HF bands default 100, 6 m 38.8.
+    //   • Everything else: dB forward gain (Thetis / piHPSDR convention).
+    // The method name is retained across the board split because the storage
+    // field on the DTO is also shared (`PaGainDb`). Semantics are resolved
+    // inside the per-board IRadioDriveProfile implementation.
     public static double GetPaGainDb(HpsdrBoardKind board, string band)
     {
-        if (board == HpsdrBoardKind.HermesLite2) return Hl2FlatGainDb;
+        if (board == HpsdrBoardKind.HermesLite2)
+            return Hl2OutputPct.TryGetValue(band, out var pct) ? pct : 100.0;
         return TableFor(board).TryGetValue(band, out var v) ? v : 0.0;
     }
 

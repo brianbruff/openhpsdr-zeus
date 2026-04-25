@@ -207,7 +207,7 @@ public sealed class WdspDspEngine : IDspEngine
     private double _psMoxDelaySec = 0.2;
     private double _psLoopDelaySec = 0.0;
     private double _psAmpDelayNs = 150.0;
-    private bool _psPtol;                // false = strict 0.4 ; true = relax 0.8
+    private bool _psPtol;                // false = strict 0.8 ; true = relax 0.4 (matches pihpsdr/Thetis: ptol ? 0.4 : 0.8)
     private const int PsFeedbackBlockSize = 1024;
     private readonly int[] _psInfoBuf = new int[16];
     private double _psMaxTxEnvelope;
@@ -889,9 +889,15 @@ public sealed class WdspDspEngine : IDspEngine
             // `SetChannelState`, so they're safe to run unconditionally at
             // TXA open time.
             NativeMethods.SetPSFeedbackRate(id, 192_000);
-            NativeMethods.SetPSPtol(id, _psPtol ? 0.8 : 0.4);
-            NativeMethods.SetPSPinMode(id, 0);
-            NativeMethods.SetPSMapMode(id, 0);
+            // pihpsdr semantic (transmitter.c:2517): ps_ptol=0 (default) → 0.8
+            // strict; ps_ptol=1 → 0.4 relaxed. Same convention in Thetis
+            // PSForm.designer.cs.
+            NativeMethods.SetPSPtol(id, _psPtol ? 0.4 : 0.8);
+            // pihpsdr/Thetis defaults: PinMode=1, MapMode=1 (transmitter.c:
+            // 1041-1042 ps_map=1 / ps_pin=1; PSForm.designer.cs chkPSPin /
+            // chkPSMap = Checked = true).
+            NativeMethods.SetPSPinMode(id, 1);
+            NativeMethods.SetPSMapMode(id, 1);
             NativeMethods.SetPSStabilize(id, 0);
             NativeMethods.SetPSIntsAndSpi(id, _psInts, _psSpi);
             NativeMethods.SetPSMoxDelay(id, _psMoxDelaySec);
@@ -1225,7 +1231,9 @@ public sealed class WdspDspEngine : IDspEngine
             if (ptol != _psPtol)
             {
                 _psPtol = ptol;
-                if (id >= 0) NativeMethods.SetPSPtol(id, ptol ? 0.8 : 0.4);
+                // ptol=true → relax 0.4; ptol=false → strict 0.8
+                // (pihpsdr transmitter.c:2517 / Thetis PSForm.cs).
+                if (id >= 0) NativeMethods.SetPSPtol(id, ptol ? 0.4 : 0.8);
             }
             if (moxDelaySec != _psMoxDelaySec)
             {
@@ -1280,7 +1288,10 @@ public sealed class WdspDspEngine : IDspEngine
                 NativeMethods.SetPSRunCal(id, 1);
                 int mancal = _psSingle ? 1 : 0;
                 int automode = (_psAuto && !_psSingle) ? 1 : 0;
-                NativeMethods.SetPSControl(id, 0, mancal, automode, 0);
+                // reset=1 forces a clean LRESET transit so a re-arm after a
+                // single-cal cycle (which can leave the SM in LSTAYON) starts
+                // a fresh fit (Thetis PSForm.cs:645,661).
+                NativeMethods.SetPSControl(id, 1, mancal, automode, 0);
             }
             else
             {

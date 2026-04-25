@@ -35,7 +35,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   setLevelerMaxGain,
   setNr,
@@ -46,6 +46,7 @@ import {
 import { useConnectionStore } from '../state/connection-store';
 import { useTxStore } from '../state/tx-store';
 import { Slider } from './design/Slider';
+import { NrSettingsPopover, type NrPopoverMode } from './nr/NrSettingsPopover';
 
 // Leveler max-gain slider bounds — matches backend clamp and the HL2
 // community-recommended range. 0.5 dB steps give a useful resolution
@@ -61,14 +62,32 @@ function quantizeLvlr(v: number): number {
   return Math.round(snapped * 10) / 10;
 }
 
-// Mirrors NrControls.tsx — cycle order matches Thetis WDSP semantics. ANR
-// and EMNR are mutually exclusive in WDSP so both ride the single nrMode.
-const NR_CYCLE: readonly NrMode[] = ['Off', 'Anr', 'Emnr'];
+// Mirrors NrControls.tsx — cycle order matches Thetis WDSP semantics. NR3
+// (RNNR) is intentionally skipped — see issue #79. The four modes are
+// mutually exclusive in WDSP so they all ride the single nrMode.
+const NR_CYCLE: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr'];
 const NR_LABEL: Record<NrMode, string> = {
   Off: 'NR',
   Anr: 'NR',
   Emnr: 'NR2',
+  Sbnr: 'NR4',
 };
+
+function nrButtonTitle(mode: NrMode): string {
+  switch (mode) {
+    case 'Off': return 'Noise reduction off (right-click for tunables)';
+    case 'Anr': return 'NR1 (ANR, time-domain LMS) — right-click for tunables';
+    case 'Emnr': return 'NR2 (EMNR, spectral) — right-click for tunables';
+    case 'Sbnr': return 'NR4 (SBNR, libspecbleach) — right-click for tunables';
+  }
+}
+
+// Right-click on Off opens the NR4 popover so the Phase-2 popover is
+// reachable without first cycling. Mirrors NrControls.tsx behaviour.
+function popoverModeFor(nrMode: NrMode): NrPopoverMode {
+  if (nrMode === 'Anr' || nrMode === 'Emnr' || nrMode === 'Sbnr') return nrMode;
+  return 'Sbnr';
+}
 
 const NB_CYCLE: readonly NbMode[] = ['Off', 'Nb1', 'Nb2'];
 const NB_LABEL: Record<NbMode, string> = {
@@ -91,6 +110,16 @@ export function DspPanel() {
   const lvlrDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lvlrLastSent = useRef<number>(levelerMaxGainDb);
   const lvlrPrevOnError = useRef<number>(levelerMaxGainDb);
+
+  const [popover, setPopover] = useState<{ mode: NrPopoverMode; anchor: HTMLElement } | null>(null);
+  const onNrContextMenu = useCallback(
+    (e: React.MouseEvent<HTMLButtonElement>) => {
+      e.preventDefault();
+      const anchor = e.currentTarget;
+      setPopover({ mode: popoverModeFor(nr.nrMode), anchor });
+    },
+    [nr.nrMode],
+  );
   useEffect(
     () => () => {
       inflightAbort.current?.abort();
@@ -188,6 +217,7 @@ export function DspPanel() {
   const nbActive = nr.nbMode !== 'Off';
 
   return (
+    <>
     <div className="dsp-grid">
       <div className="dsp-row">
         <button
@@ -217,14 +247,9 @@ export function DspPanel() {
           type="button"
           disabled={!connected}
           onClick={cycleNr}
+          onContextMenu={onNrContextMenu}
           className={`btn sm ${nrActive ? 'active' : ''}`}
-          title={
-            nr.nrMode === 'Off'
-              ? 'Noise reduction off'
-              : nr.nrMode === 'Anr'
-                ? 'NR1 (ANR, time-domain LMS)'
-                : 'NR2 (EMNR, spectral)'
-          }
+          title={nrButtonTitle(nr.nrMode)}
         >
           {NR_LABEL[nr.nrMode]}
         </button>
@@ -271,5 +296,13 @@ export function DspPanel() {
         />
       </div>
     </div>
+    {popover != null && (
+      <NrSettingsPopover
+        mode={popover.mode}
+        anchor={popover.anchor}
+        onClose={() => setPopover(null)}
+      />
+    )}
+    </>
   );
 }

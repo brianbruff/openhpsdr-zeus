@@ -35,7 +35,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   setNr,
   type NbMode,
@@ -43,15 +43,18 @@ import {
   type NrMode,
 } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { NrSettingsPopover, type NrPopoverMode } from './nr/NrSettingsPopover';
 
 // NR-button cycle mirrors Thetis: Off → NR1 (ANR, time-domain LMS) → NR2
-// (EMNR, Ephraim–Malah spectral). ANR and EMNR are mutually exclusive in
-// WDSP so both ride the one enum.
-const NR_CYCLE: readonly NrMode[] = ['Off', 'Anr', 'Emnr'];
+// (EMNR, Ephraim–Malah spectral) → NR4 (SBNR, libspecbleach). NR3 (RNNR)
+// is intentionally skipped — see issue #79. The four modes are mutually
+// exclusive in WDSP so they all ride the one enum.
+const NR_CYCLE: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr'];
 const NR_LABEL: Record<NrMode, string> = {
   Off: 'NR',
   Anr: 'NR',
   Emnr: 'NR2',
+  Sbnr: 'NR4',
 };
 
 const NB_CYCLE: readonly NbMode[] = ['Off', 'Nb1', 'Nb2'];
@@ -65,14 +68,42 @@ const ACTIVE_BTN = 'btn sm active';
 const IDLE_BTN = 'btn sm';
 const DISABLED = '';
 
+function nrButtonTitle(mode: NrMode): string {
+  switch (mode) {
+    case 'Off': return 'Noise reduction off (right-click for tunables)';
+    case 'Anr': return 'NR1 (ANR, time-domain LMS) — right-click for tunables';
+    case 'Emnr': return 'NR2 (EMNR, spectral) — right-click for tunables';
+    case 'Sbnr': return 'NR4 (SBNR, libspecbleach) — right-click for tunables';
+  }
+}
+
+// When the operator right-clicks the NR button while it's Off there's no
+// current mode to configure; default to NR4 so the Phase-2 popover is
+// reachable without first having to cycle the button through.
+function popoverModeFor(nrMode: NrMode): NrPopoverMode {
+  if (nrMode === 'Anr' || nrMode === 'Emnr' || nrMode === 'Sbnr') return nrMode;
+  return 'Sbnr';
+}
+
 export function NrControls() {
   const nr = useConnectionStore((s) => s.nr);
   const setLocalNr = useConnectionStore((s) => s.setNr);
   const applyState = useConnectionStore((s) => s.applyState);
   const connected = useConnectionStore((s) => s.status === 'Connected');
 
+  const [popover, setPopover] = useState<{ mode: NrPopoverMode; anchor: HTMLElement } | null>(null);
+
   const inflightAbort = useRef<AbortController | null>(null);
   useEffect(() => () => inflightAbort.current?.abort(), []);
+
+  const onNrContextMenu = useCallback(
+    (e: React.MouseEvent<HTMLButtonElement>) => {
+      e.preventDefault();
+      const anchor = e.currentTarget;
+      setPopover({ mode: popoverModeFor(nr.nrMode), anchor });
+    },
+    [nr.nrMode],
+  );
 
   const send = useCallback(
     (next: NrConfigDto) => {
@@ -120,6 +151,7 @@ export function NrControls() {
   const nbActive = nr.nbMode !== 'Off';
 
   return (
+    <>
     <div className="btn-row">
       <button
         type="button"
@@ -140,14 +172,9 @@ export function NrControls() {
         type="button"
         disabled={!connected}
         onClick={cycleNr}
+        onContextMenu={onNrContextMenu}
         className={`${nrActive ? ACTIVE_BTN : IDLE_BTN} ${DISABLED}`}
-        title={
-          nr.nrMode === 'Off'
-            ? 'Noise reduction off'
-            : nr.nrMode === 'Anr'
-              ? 'NR1 (ANR, time-domain LMS)'
-              : 'NR2 (EMNR, spectral)'
-        }
+        title={nrButtonTitle(nr.nrMode)}
       >
         {NR_LABEL[nr.nrMode]}
       </button>
@@ -179,5 +206,13 @@ export function NrControls() {
         NBP
       </button>
     </div>
+    {popover != null && (
+      <NrSettingsPopover
+        mode={popover.mode}
+        anchor={popover.anchor}
+        onClose={() => setPopover(null)}
+      />
+    )}
+    </>
   );
 }

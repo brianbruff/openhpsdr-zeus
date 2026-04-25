@@ -103,6 +103,11 @@ public class DspPipelineService : BackgroundService
     private double _appliedPsHwPeak = 0.4072;
     private string _appliedPsIntsSpiPreset = "16/256";
     private PsFeedbackSource _appliedPsFeedbackSource = PsFeedbackSource.Internal;
+    // Set by DisconnectP2Async so the next OnRadioStateChanged after a
+    // fresh ConnectP2Async re-pushes every PS field regardless of equality
+    // — necessary because the new WdspDspEngine instance starts with field
+    // defaults that don't match the cached `_appliedPs*` state.
+    private bool _psResyncRequired;
     // TwoTone latched fields (protocol-agnostic, drives PostGen mode=1).
     private bool _appliedTwoToneEnabled;
     private double _appliedTwoToneFreq1 = 700.0;
@@ -342,12 +347,18 @@ public class DspPipelineService : BackgroundService
         // Apply HW-peak first because SetPsAdvanced may also touch it; then
         // advanced timing/preset; then control mode; then master arm last so
         // the engine is fully configured before the cal state machine starts.
-        if (s.PsHwPeak != _appliedPsHwPeak)
+        // _psResyncRequired (set by DisconnectP2Async) forces every push on
+        // the first state-change after a P2 reconnect so the new engine
+        // instance picks up the canonical state instead of running on its
+        // field defaults.
+        bool resync = _psResyncRequired;
+        if (resync || s.PsHwPeak != _appliedPsHwPeak)
         {
             engine.SetPsHwPeak(s.PsHwPeak);
             _appliedPsHwPeak = s.PsHwPeak;
         }
-        if (s.PsPtol != _appliedPsPtol
+        if (resync
+            || s.PsPtol != _appliedPsPtol
             || s.PsMoxDelaySec != _appliedPsMoxDelaySec
             || s.PsLoopDelaySec != _appliedPsLoopDelaySec
             || s.PsAmpDelayNs != _appliedPsAmpDelayNs
@@ -368,13 +379,13 @@ public class DspPipelineService : BackgroundService
             _appliedPsAmpDelayNs = s.PsAmpDelayNs;
             _appliedPsIntsSpiPreset = s.PsIntsSpiPreset;
         }
-        if (s.PsAuto != _appliedPsAuto || s.PsSingle != _appliedPsSingle)
+        if (resync || s.PsAuto != _appliedPsAuto || s.PsSingle != _appliedPsSingle)
         {
             engine.SetPsControl(s.PsAuto, s.PsSingle);
             _appliedPsAuto = s.PsAuto;
             _appliedPsSingle = s.PsSingle;
         }
-        if (s.PsEnabled != _appliedPsEnabled)
+        if (resync || s.PsEnabled != _appliedPsEnabled)
         {
             // pihpsdr transmitter.c:2467-2473 inverts the order: write the
             // wire (RxSpec / HighPriority with PS bits set) FIRST, then sleep
@@ -408,13 +419,16 @@ public class DspPipelineService : BackgroundService
             }
             _appliedPsEnabled = s.PsEnabled;
         }
-        if (s.PsFeedbackSource != _appliedPsFeedbackSource)
+        if (resync || s.PsFeedbackSource != _appliedPsFeedbackSource)
         {
             // Wire-only change — flips ALEX_RX_ANTENNA_BYPASS in alex0 on
             // the next CmdHighPriority emission. WDSP is unaffected.
             _p2Client?.SetPsFeedbackSource(s.PsFeedbackSource == PsFeedbackSource.External);
             _appliedPsFeedbackSource = s.PsFeedbackSource;
         }
+        // Resync done — clear the flag so subsequent state changes use
+        // normal change-detect (no spurious wire writes on each tick).
+        _psResyncRequired = false;
     }
 
     // "16/256" → (16, 256). Falls back to (16, 256) on any parse failure
@@ -633,6 +647,15 @@ public class DspPipelineService : BackgroundService
         _p2Client = client;
         StartIqPumpP2(client);
         StartPsFeedbackPumpP2(client);
+        // Force the next OnRadioStateChanged to re-push every PS field into
+        // the freshly-opened WdspDspEngine instance, regardless of whether
+        // the canonical state in StateDto has changed since the prior
+        // session. The new engine starts with field defaults (hwPeak=0.4072,
+        // ptol=0.8, etc.) and the change-detect cache `_appliedPs*` doesn't
+        // know that — without this flag the engine never gets the operator's
+        // settings back, calcc runs on wrong hw_scale, and PS doesn't
+        // converge after a reconnect. See `project_ps_reconnect_state_loss.md`.
+        _psResyncRequired = true;
         _radio.MarkProtocol2Connected(radioEndpoint.ToString(), rateHz);
         // P2 G2/MkII default HW peak = 0.6121; ANAN-7000/8000 = 0.2899. The
         // RadioService switch covers both so we don't bake a value in here.
@@ -701,6 +724,16 @@ public class DspPipelineService : BackgroundService
             _sampleRateHz = SyntheticSampleRateHz;
         }
         TeardownEngine(old, oldChannel);
+        // Mark PS state for forced re-push on the next ConnectP2Async. The
+        // change-detect cache (`_appliedPs*`) is preserved across disconnect
+        // — by design, so a reconnect with unchanged operator state doesn't
+        // generate spurious wire writes — but a fresh WdspDspEngine starts
+        // with field defaults (hwPeak=0.4072, ptol=0.8, etc.) that don't
+        // match the canonical state. Without this flag, OnRadioStateChanged
+        // skips every PS push because s.PsX == _appliedPsX, and the new
+        // engine never gets the operator's settings. See
+        // `project_ps_reconnect_state_loss.md` for the rack reproduction.
+        _psResyncRequired = true;
         _radio.MarkProtocol2Disconnected();
         _log.LogInformation("dsp.pipeline p2 disconnected, engine=synthetic");
     }

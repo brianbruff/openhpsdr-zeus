@@ -16,27 +16,32 @@
 import { useEffect, useRef, useState } from 'react';
 import { PaSettingsPanel } from './PaSettingsPanel';
 import { AboutPanel } from './AboutPanel';
+import { QrzSettingsPanel } from './QrzSettingsPanel';
+import { RotatorSettingsPanel } from './RotatorSettingsPanel';
 import { RadioSelector } from './RadioSelector';
 import { usePaStore } from '../state/pa-store';
 
-type TabId = 'pa' | 'about';
+type TabId = 'pa' | 'qrz' | 'rotator' | 'about';
 
 const TABS: ReadonlyArray<{ id: TabId; label: string }> = [
   { id: 'pa', label: 'PA SETTINGS' },
+  { id: 'qrz', label: 'QRZ' },
+  { id: 'rotator', label: 'ROTATOR' },
   { id: 'about', label: 'ABOUT' },
 ];
 
 type Props = {
   open: boolean;
   onClose: () => void;
+  initialTab?: TabId;
 };
 
 // Floating, draggable settings panel. Deliberately has NO backdrop: the operator
 // must be able to MOX / TUN / tune the radio while the panel is open. The only
 // event-capture surface is the panel rectangle itself; everything outside
 // (panadapter, top-bar buttons) stays clickable.
-export function SettingsMenu({ open, onClose }: Props) {
-  const [active, setActive] = useState<TabId>('pa');
+export function SettingsMenu({ open, onClose, initialTab }: Props) {
+  const [active, setActive] = useState<TabId>(initialTab ?? 'pa');
   const savePa = usePaStore((s) => s.save);
   const loadPa = usePaStore((s) => s.load);
   const paInflight = usePaStore((s) => s.inflight);
@@ -57,6 +62,11 @@ export function SettingsMenu({ open, onClose }: Props) {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ dx: number; dy: number } | null>(null);
+
+  // Set the active tab when initialTab prop changes
+  useEffect(() => {
+    if (initialTab) setActive(initialTab);
+  }, [initialTab]);
 
   useEffect(() => {
     if (!open) return;
@@ -277,6 +287,8 @@ export function SettingsMenu({ open, onClose }: Props) {
           }}
         >
           {active === 'pa' && <PaSettingsPanel />}
+          {active === 'qrz' && <QrzSettingsPanel />}
+          {active === 'rotator' && <RotatorSettingsPanel />}
           {active === 'about' && <AboutPanel />}
         </div>
       </div>

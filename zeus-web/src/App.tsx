@@ -100,6 +100,7 @@ const STATE_POLL_MS = 333;
 
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'pa' | 'qrz' | 'rotator' | 'about' | undefined>();
   const status = useConnectionStore((s) => s.status);
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   const mode = useConnectionStore((s) => s.mode);
@@ -165,6 +166,27 @@ export default function App() {
     const fonts = localStorage.getItem('zeus.fonts') || 'geist';
     document.documentElement.setAttribute('data-variant', variant);
     document.documentElement.setAttribute('data-fonts', fonts);
+  }, []);
+
+  // Handle deeplink via URL hash (#qrz, #rotator, #pa, #about).
+  // Opens settings menu and navigates to the specified tab.
+  useEffect(() => {
+    const handleHash = () => {
+      const hash = window.location.hash.slice(1); // Remove '#'
+      if (hash === 'qrz' || hash === 'rotator' || hash === 'pa' || hash === 'about') {
+        setSettingsInitialTab(hash);
+        setSettingsOpen(true);
+        // Clear the hash after handling it
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
+    };
+
+    // Check on mount
+    handleHash();
+
+    // Listen for hash changes
+    window.addEventListener('hashchange', handleHash);
+    return () => window.removeEventListener('hashchange', handleHash);
   }, []);
 
   // --- Design-mock state (QRZ, DSP grid toggles, CW WPM, memories) ---
@@ -628,7 +650,7 @@ export default function App() {
           onClick={() => setSettingsOpen(true)}
           title="Open settings menu"
         >
-          MENU
+          ⚙
         </button>
       </div>
 
@@ -944,7 +966,7 @@ export default function App() {
       </div>
 
       {disconnectedOverlay}
-      <SettingsMenu open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsMenu open={settingsOpen} onClose={() => setSettingsOpen(false)} initialTab={settingsInitialTab} />
     </div>
     </SpectrumWheelActionsContext.Provider>
     </WorkspaceContext.Provider>

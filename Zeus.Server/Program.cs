@@ -437,6 +437,26 @@ app.MapPost("/api/filter/advanced-pane", (FilterAdvancedPaneRequest req, RadioSe
     return r.SetFilterAdvancedPaneOpen(req.Open);
 });
 
+// Get favorite filter slots for a mode.
+app.MapGet("/api/filter/favorites", (string? mode, RadioService r) =>
+{
+    if (mode is null || !Enum.TryParse<RxMode>(mode, ignoreCase: true, out var rxMode))
+        return Results.BadRequest(new { error = $"Unknown mode '{mode}'. Expected one of: {string.Join(", ", Enum.GetNames<RxMode>())}" });
+    var slotNames = r.GetFavoriteFilterSlots(rxMode);
+    return Results.Ok(new FilterFavoriteSlotsResponse(slotNames));
+});
+
+// Set favorite filter slots for a mode (up to 3).
+app.MapPost("/api/filter/favorites", (FilterFavoriteSlotsRequest req, RadioService r) =>
+{
+    log.LogInformation("api.filter.favorites mode={M} slots={S}", req.Mode, string.Join(",", req.SlotNames));
+    if (!Enum.IsDefined(req.Mode))
+        return Results.BadRequest(new { error = $"Unknown mode '{req.Mode}'." });
+    if (req.SlotNames.Length > 3)
+        return Results.BadRequest(new { error = "Maximum 3 favorite slots allowed." });
+    return Results.Ok(r.SetFavoriteFilterSlots(req.Mode, req.SlotNames));
+});
+
 app.MapPost("/api/sampleRate", (SampleRateSetRequest req, RadioService r) =>
 {
     log.LogInformation("api.sampleRate rate={Rate}", req.Rate);

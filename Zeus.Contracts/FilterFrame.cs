@@ -74,3 +74,9 @@ public sealed record FilterPresetDto(
 
 // Advanced-ribbon pane visibility toggle.
 public sealed record FilterAdvancedPaneRequest(bool Open);
+
+// Get favorite filter slots for a mode.
+public sealed record FilterFavoriteSlotsResponse(string[] SlotNames);
+
+// Set favorite filter slots for a mode (up to 3).
+public sealed record FilterFavoriteSlotsRequest(RxMode Mode, string[] SlotNames);

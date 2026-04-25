@@ -691,9 +691,7 @@ export default function App() {
         className={`workspace ${terminatorActive ? 'terminator' : ''} ${filterRibbonOpen ? 'has-filter-ribbon' : ''}`}
       >
         {/* Advanced filter ribbon — dedicated row above the hero, same column
-            width as the panadapter. Hidden on mobile by the enclosing .app
-            layout (mobile uses the fixed grid, which doesn't reach this
-            branch via ?layout=flex). When closed, FilterRibbon renders null
+            width as the panadapter. When closed, FilterRibbon renders null
             and the `has-filter-ribbon` class is absent, so the workspace
             collapses to its original two-row layout. */}
         <FilterRibbon />

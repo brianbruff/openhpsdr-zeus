@@ -158,23 +158,80 @@
   background: #2a2d33;
   border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: 8px;
-  padding: 10px 10px 8px;
+  padding: 8px 8px 7px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
+  min-height: 0;
 }
-.filter-ribbon__preset-grid {
+.filter-ribbon__section-label {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  color: #7c8088;
+  text-transform: uppercase;
+  line-height: 1;
+  margin-top: 1px;
+}
+.filter-ribbon__section-label:first-child { margin-top: 0; }
+
+.filter-ribbon__favorites {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
-  gap: 6px;
+  gap: 4px;
+}
+
+.filter-ribbon__preset-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  gap: 3px;
+}
+
+.filter-ribbon__custom-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.filter-ribbon__custom-input {
+  flex: 1 1 0;
+  min-width: 0;
+  width: 100%;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 3px 5px;
+  background: linear-gradient(180deg, #1f2126 0%, #1a1c20 100%);
+  color: #edeef1;
+  border: 1px solid #3a3e45;
+  border-radius: 3px;
+  font-variant-numeric: tabular-nums;
+  outline: none;
+}
+.filter-ribbon__custom-input:focus {
+  border-color: #626670;
+}
+.filter-ribbon__custom-input:disabled {
+  color: #7c8088;
+  cursor: not-allowed;
+}
+.filter-ribbon__custom-sep {
+  font-size: 11px;
+  color: #7c8088;
+  line-height: 1;
+}
+.filter-ribbon__custom-unit {
+  font-size: 9px;
+  color: #7c8088;
+  letter-spacing: 0.18em;
+  font-variant-numeric: tabular-nums;
+  text-transform: uppercase;
 }
 
 /* Beveled neutral-gray chip — sized to match the app's .btn.sm. */
 .filter-ribbon__chip {
   appearance: none;
   font-family: inherit;
-  padding: 5px 6px;
-  font-size: clamp(10px, 0.1vw + 9.5px, 12px);
+  padding: 3px 4px;
+  font-size: clamp(9.5px, 0.1vw + 9px, 11px);
   font-weight: 500;
   letter-spacing: 0.02em;
   color: #e0e2e6;
@@ -209,6 +266,31 @@
     inset 0 0 0 1px rgba(220, 225, 232, 0.15),
     0 0 10px rgba(200, 205, 212, 0.10),
     0 1px 0 rgba(0, 0, 0, 0.40);
+}
+
+/* Favorites row — slightly larger, weightier than the dense preset grid. */
+.filter-ribbon__chip--fav {
+  padding: 5px 5px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+/* Drag-source ghosting and drop-target highlight. */
+.filter-ribbon__chip[draggable='true'] { cursor: grab; }
+.filter-ribbon__chip[draggable='true']:active { cursor: grabbing; }
+.filter-ribbon__chip.is-dragging { opacity: 0.45; }
+.filter-ribbon__chip.is-drop-target {
+  border-color: #4a9eff;
+  border-top-color: #6cb0ff;
+  background:
+    linear-gradient(180deg, rgba(74, 158, 255, 0.22) 0%, rgba(74, 158, 255, 0.04) 50%, rgba(0, 0, 0, 0.10) 100%),
+    linear-gradient(180deg, #3a3e45 0%, #2a2d33 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(108, 176, 255, 0.40),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+    0 0 12px rgba(74, 158, 255, 0.20),
+    0 1px 0 rgba(0, 0, 0, 0.35);
 }
 
 .filter-ribbon__custom {

@@ -550,13 +550,13 @@ app.MapPost("/api/tx/twotone", (TwoToneSetRequest req, RadioService r, TxService
         return Results.BadRequest(new { error = "freq1 must be 50..5000 Hz" });
     if (req.Freq2 is double f2 && (f2 < 50.0 || f2 > 5000.0 || double.IsNaN(f2)))
         return Results.BadRequest(new { error = "freq2 must be 50..5000 Hz" });
-    var snap = r.SetTwoTone(req);
-    // Latch into TxService so TxTuneDriver pumps WDSP fexchange2 while
-    // TwoTone is armed even when the mic ingest pump is idle (no MOX/no
-    // mic uplink). Without this latch, PostGen mode=1 has nothing to
-    // shove its excitation into and the radio sees zero IQ.
-    tx.SetTwoToneOn(req.Enabled);
-    return Results.Ok(snap);
+    // TrySetTwoTone owns both the engine state (RadioService.SetTwoTone) and
+    // the MOX side-effect — Thetis parity, setup.cs:11162-11165. Returns the
+    // post-mutate snapshot via Snapshot(); on a connect-interlock failure
+    // the request is rejected with 400.
+    if (!tx.TrySetTwoTone(req, out var err))
+        return Results.BadRequest(new { error = err });
+    return Results.Ok(r.Snapshot());
 });
 
 // PureSignal master arm + cal-mode. P1 is gated off in the frontend in v1

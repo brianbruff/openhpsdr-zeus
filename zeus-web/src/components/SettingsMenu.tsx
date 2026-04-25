@@ -15,12 +15,14 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { PaSettingsPanel } from './PaSettingsPanel';
+import { AboutPanel } from './AboutPanel';
 import { usePaStore } from '../state/pa-store';
 
-type TabId = 'pa';
+type TabId = 'pa' | 'about';
 
 const TABS: ReadonlyArray<{ id: TabId; label: string }> = [
   { id: 'pa', label: 'PA SETTINGS' },
+  { id: 'about', label: 'ABOUT' },
 ];
 
 type Props = {
@@ -271,33 +273,36 @@ export function SettingsMenu({ open, onClose }: Props) {
             fontSize: 12,
           }}
         >
-          <PaSettingsPanel />
+          {active === 'pa' && <PaSettingsPanel />}
+          {active === 'about' && <AboutPanel />}
         </div>
       </div>
 
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'flex-end',
-          gap: 6,
-          padding: '10px 14px',
-          background: 'var(--bg-0)',
-          borderTop: '1px solid var(--panel-border)',
-        }}
-      >
-        <button type="button" className="btn sm" onClick={handleCancel} disabled={paInflight}>
-          CANCEL
-        </button>
-        <button
-          type="button"
-          className="btn sm active"
-          onClick={handleApply}
-          disabled={paInflight}
+      {active === 'pa' && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            gap: 6,
+            padding: '10px 14px',
+            background: 'var(--bg-0)',
+            borderTop: '1px solid var(--panel-border)',
+          }}
         >
-          {paInflight ? 'SAVING…' : 'APPLY'}
-        </button>
-      </div>
+          <button type="button" className="btn sm" onClick={handleCancel} disabled={paInflight}>
+            CANCEL
+          </button>
+          <button
+            type="button"
+            className="btn sm active"
+            onClick={handleApply}
+            disabled={paInflight}
+          >
+            {paInflight ? 'SAVING…' : 'APPLY'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -181,6 +181,15 @@ var log = app.Services.GetRequiredService<ILogger<Program>>();
     wisdom.PhaseChanged += phase => hub.Broadcast(new WisdomStatusFrame(phase));
 }
 
+app.MapGet("/api/version", () =>
+{
+    var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+    var attr = assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+        .FirstOrDefault() as System.Reflection.AssemblyInformationalVersionAttribute;
+    var version = attr?.InformationalVersion ?? "unknown";
+    return Results.Ok(new { version });
+});
+
 app.MapGet("/api/state", (RadioService r) => r.Snapshot());
 
 // TX diagnostic — exposes the producer/consumer counts for the mic-to-IQ ring

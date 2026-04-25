@@ -26,13 +26,26 @@ namespace Zeus.Server.Tests;
 /// when the mic ingest pump is idle. Without the latch, PostGen mode=1
 /// has nothing to shove its excitation into and the radio sees zero IQ.
 /// </summary>
-public class TwoToneLatchTests
+public class TwoToneLatchTests : IDisposable
 {
-    private static TxService BuildTxService()
+    // Per-fixture temp DBs so xUnit class-level parallelism can't collide on
+    // the shared zeus-prefs.db. Without this, parallel construction of LiteDB
+    // instances against the same file races the BsonMapper and intermittently
+    // fails with "Member Band not found on BsonMapper for type PaBandEntry".
+    private readonly string _dbPath =
+        Path.Combine(Path.GetTempPath(), $"zeus-prefs-twotone-{Guid.NewGuid():N}.db");
+
+    public void Dispose()
+    {
+        try { if (File.Exists(_dbPath)) File.Delete(_dbPath); } catch { }
+        try { if (File.Exists(_dbPath + ".pa")) File.Delete(_dbPath + ".pa"); } catch { }
+    }
+
+    private TxService BuildTxService()
     {
         var loggerFactory = NullLoggerFactory.Instance;
-        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance);
-        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance);
+        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _dbPath);
+        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance, _dbPath + ".pa");
         var radio = new RadioService(loggerFactory, dspStore, paStore);
         var hub = new StreamingHub(new NullLogger<StreamingHub>());
         var pipeline = new DspPipelineService(radio, hub, loggerFactory);
@@ -82,11 +95,11 @@ public class TwoToneLatchTests
     // MOX press. TrySetTwoTone owns the MOX state while armed and drops it
     // unconditionally on disarm (mirrors setup.cs:11162-11165, 11189-11216).
 
-    private static (RadioService radio, TxService tx) BuildConnectedRadioAndTx()
+    private (RadioService radio, TxService tx) BuildConnectedRadioAndTx()
     {
         var loggerFactory = NullLoggerFactory.Instance;
-        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance);
-        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance);
+        var dspStore = new DspSettingsStore(NullLogger<DspSettingsStore>.Instance, _dbPath);
+        var paStore = new PaSettingsStore(NullLogger<PaSettingsStore>.Instance, _dbPath + ".pa");
         var radio = new RadioService(loggerFactory, dspStore, paStore);
         // Mark the radio P2-connected so the connect-interlock in
         // TrySetTwoTone passes — production calls this from

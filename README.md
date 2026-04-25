@@ -35,47 +35,25 @@ long-running project a lot of the DSP heritage traces back to.
   The experience isn't ideal yet and will improve over time.
 - **Radio discovery** on the LAN (Protocol-1 + Protocol-2 broadcast, in parallel)
 
-## Feature tour
+## At a glance
 
-Live RX from a Hermes Lite 2 on 20 m, captured through Zeus today
-(2026-04-25):
+![Zeus on 20 m — advanced filter ribbon, QRZ-engaged great-circle map, operator pin (KB2UKA, FN30iv) and live panadapter / waterfall](docs/pics/screenshots/zeus-filter-panel-open.png)
 
-![Zeus on 20 m, panadapter and waterfall](docs/pics/screenshots/zeus-connected-panadapter.png)
+> **The full user guide lives in the [Zeus Wiki](https://github.com/brianbruff/openhpsdr-zeus/wiki).**
+> Every panel, control, and gesture is documented there with screenshots — this
+> README only covers what you need to install and run Zeus. If you have a
+> question that starts with "what does that button do…", the wiki is the
+> authoritative answer.
 
-What's visible above:
+Wiki jump-off points for the most-asked things:
 
-- **Panadapter** (top half, amber `#FFA028` trace) — live spectrum across
-  ~14.115–14.295 MHz with a half-dozen SSB carriers picked out as peaks.
-  Click anywhere on it to tune; scroll to step the VFO in 500 Hz increments.
-- **Waterfall** (lower half, blue palette) — scrolling history of the same
-  spectrum. The colour palette is selectable (`Blue / Inferno / Viridis`)
-  and the dB range is fixed in this shot.
-- **Top bar** — `RADIO 192.168.100.21:1024 · Disconnect`, rotator status,
-  QRZ engage button, MENU. The VFO A readout (`14.200`) and
-  `MODE / BAND / AGC-T / BW / TX RX` chips are always visible.
-- **Control strip** — modes (LSB/USB/CW/AM/SAM/DSB/FM/DIGL/DIGU),
-  bandwidth presets, custom filter Hz inputs, the FILTER bank, the BAND
-  buttons, FRONT-END (PRE / Auto-attenuator slider), AGC-T slider and
-  AF gain.
-- **Right column** — frequency display (`14.200.000` MHz, click to type,
-  scroll on a digit to step), S-meter showing live `-97 dBm` / S5,
-  great-circle compass, DSP panel (NB / NR / ANF / SNB / NBP) and TX
-  filter / leveler controls.
-- **Bottom row** — Logbook, TX stage meters (idle here — ALC, MIC, EQ,
-  LVLR, CFC, COMP, ALC, ALC GR, OUT), and a transport bar with MOX,
-  TUNE, audio mute, mic level, SPLIT, RIT, SAVE MEM, and PA-temp /
-  link-state chips.
-
-Engage QRZ on a logged contact and the panadapter background swaps in a
-**great-circle world map** centred on your station, with the contact's
-operator portrait pinned over their grid:
-
-![Zeus great-circle map overlay with QRZ portrait](docs/pics/screenshots/zeus-connected-with-map.png)
-
-The amber trace and waterfall stay live on top of the map so you can
-keep watching the band while the geography of the QSO is in front of
-you. The map is interactive — hold **⌥ (Alt)** to zoom and pan; the
-panadapter click-to-tune is paused while you're navigating the map.
+- [Installation](https://github.com/brianbruff/openhpsdr-zeus/wiki/Installation) — installers, PWA install, macOS xattr step
+- [Getting Started](https://github.com/brianbruff/openhpsdr-zeus/wiki/Getting-Started) — first-minute walkthrough
+- [Panadapter and Waterfall](https://github.com/brianbruff/openhpsdr-zeus/wiki/Panadapter-and-Waterfall) — click-to-tune, zoom, palettes
+- [Modes and Bands](https://github.com/brianbruff/openhpsdr-zeus/wiki/Modes-and-Bands) and [Bandwidth and Filters](https://github.com/brianbruff/openhpsdr-zeus/wiki/Bandwidth-and-Filters)
+- [Frequency and VFO](https://github.com/brianbruff/openhpsdr-zeus/wiki/Frequency-and-VFO) and [Front-End and Gain](https://github.com/brianbruff/openhpsdr-zeus/wiki/Front-End-and-Gain)
+- [DSP Noise Controls](https://github.com/brianbruff/openhpsdr-zeus/wiki/DSP), [Meters](https://github.com/brianbruff/openhpsdr-zeus/wiki/Meters), [TX Controls](https://github.com/brianbruff/openhpsdr-zeus/wiki/TX-Controls), [CW Keyer](https://github.com/brianbruff/openhpsdr-zeus/wiki/CW-Keyer)
+- [QRZ and World Map](https://github.com/brianbruff/openhpsdr-zeus/wiki/QRZ-and-World-Map), [Logbook](https://github.com/brianbruff/openhpsdr-zeus/wiki/Logbook), [Keyboard & Mouse Shortcuts](https://github.com/brianbruff/openhpsdr-zeus/wiki/Shortcuts)
 
 ## Download
 

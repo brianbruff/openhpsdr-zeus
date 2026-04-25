@@ -369,17 +369,36 @@ public class DspPipelineService : BackgroundService
         }
         if (s.PsEnabled != _appliedPsEnabled)
         {
-            engine.SetPsEnabled(s.PsEnabled);
+            // pihpsdr transmitter.c:2467-2473 inverts the order: write the
+            // wire (RxSpec / HighPriority with PS bits set) FIRST, then sleep
+            // 100 ms to let the radio firmware spin up DDC0/DDC1 sync, then
+            // arm the engine. Without the settle window, the first 5-20
+            // pscc calls receive partial / glitched samples, scheck flags
+            // binfo[6], bs_count climbs to 2, calcc resets to LRESET — and
+            // the loop sometimes thrashes instead of converging.
+            //
+            // Disarm path stays engine-first: drop the engine run flag, then
+            // close the wire, then drain any in-flight paired frames so they
+            // don't arrive after PS has shut down.
+            //
+            // Task.Delay(100).Wait() is acceptable here — OnRadioStateChanged
+            // runs on a state-change handler thread, not the request path.
             // TODO(ps-p1): when P1 PS lands, dispatch to _radio.ActiveClient
             // here too (the P1 client gains a SetPuresignal(bool) sibling
             // — see hermes.md item 4b). Today the P1 ActiveClient receives
             // no PS bit and the frontend gates the PS toggle off on P1.
-            _p2Client?.SetPsFeedbackEnabled(s.PsEnabled);
-            // Drain stale frames if we just disarmed: the radio will keep
-            // sending paired packets in flight for a few ms after we drop
-            // the bit on the wire, and stalled frames in the pump channel
-            // would arrive at the engine after PS shut down.
-            if (!s.PsEnabled) DrainPsFeedback();
+            if (s.PsEnabled)
+            {
+                _p2Client?.SetPsFeedbackEnabled(true);
+                try { Task.Delay(100).Wait(); } catch { /* ignore */ }
+                engine.SetPsEnabled(true);
+            }
+            else
+            {
+                engine.SetPsEnabled(false);
+                _p2Client?.SetPsFeedbackEnabled(false);
+                DrainPsFeedback();
+            }
             _appliedPsEnabled = s.PsEnabled;
         }
         if (s.PsFeedbackSource != _appliedPsFeedbackSource)

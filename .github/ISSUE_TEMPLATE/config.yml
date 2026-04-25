@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Zeus wiki
+    url: https://github.com/brianbruff/openhpsdr-zeus/wiki
+    about: Setup, supported radios, and usage notes live on the wiki — please skim before filing.

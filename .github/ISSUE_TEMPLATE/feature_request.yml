@@ -1,0 +1,39 @@
+name: Feature request
+description: Suggest a new capability or an improvement to existing behaviour
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: Zeus aims for parity with Thetis behaviour first, and visual / UX /
+        default-value changes are decided by the maintainer (Brian, EI6LF). Suggestions in
+        those areas are welcome, but they may be discussed before any code is written.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: What can't you do today, or what's awkward about how Zeus does it now?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What should Zeus do instead? Rough sketches and screenshots are fine.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you thought about, including "leave it alone".
+
+  - type: input
+    id: board
+    attributes:
+      label: Affected radio(s)
+      description: If the request is board-specific (HL2, ANAN, Orion, G2…), say which.
+      placeholder: e.g. Hermes Lite 2 only / all boards / N/A

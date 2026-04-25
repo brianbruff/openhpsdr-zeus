@@ -51,3 +51,7 @@ native/build/
 # Ad-hoc screenshot captures (debug PNGs) in the repo root. Real docs
 # imagery lives under docs/ when we need it.
 /*.png
+
+# Installer output directories
+installers/output/
+installers/dmg_temp/

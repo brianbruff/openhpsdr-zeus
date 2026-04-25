@@ -1,0 +1,208 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.1.0)'
+        required: true
+        type: string
+
+jobs:
+  build-release:
+    name: Build Release (${{ matrix.config.os }})
+    runs-on: ${{ matrix.config.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - os: windows
+            runner: windows-latest
+            rid: win-x64
+            artifact: windows-installer
+          - os: linux
+            runner: ubuntu-latest
+            rid: linux-x64
+            artifact: linux-tarball
+          - os: macos-x64
+            runner: macos-13  # Intel Mac
+            rid: osx-x64
+            artifact: macos-x64-dmg
+          - os: macos-arm64
+            runner: macos-latest  # Apple Silicon
+            rid: osx-arm64
+            artifact: macos-arm64-dmg
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Building version: ${VERSION}"
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: zeus-web/package-lock.json
+
+      - name: Build frontend
+        run: |
+          npm ci
+          npm run build
+        working-directory: zeus-web
+
+      - name: Publish .NET application
+        run: |
+          dotnet publish Zeus.Server/Zeus.Server.csproj \
+            -c Release \
+            -r ${{ matrix.config.rid }} \
+            --self-contained true \
+            -p:PublishReadyToRun=true \
+            -p:VersionPrefix=${{ steps.version.outputs.version }} \
+            -p:DebugType=embedded \
+            -p:DebugSymbols=false
+
+      - name: Build Windows Installer (Inno Setup)
+        if: matrix.config.os == 'windows'
+        shell: pwsh
+        run: |
+          choco install innosetup -y
+          $env:PATH += ";C:\Program Files (x86)\Inno Setup 6"
+          iscc /DMyAppVersion="${{ steps.version.outputs.version }}" installers\zeus-windows.iss
+
+      - name: Upload Windows Installer
+        if: matrix.config.os == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.config.artifact }}
+          path: installers/output/Zeus-${{ steps.version.outputs.version }}-win-x64-setup.exe
+          if-no-files-found: error
+
+      - name: Build Linux Package
+        if: matrix.config.os == 'linux'
+        run: |
+          chmod +x installers/create-linux-package.sh
+          installers/create-linux-package.sh ${{ steps.version.outputs.version }}
+
+      - name: Upload Linux Package
+        if: matrix.config.os == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.config.artifact }}
+          path: installers/output/zeus-${{ steps.version.outputs.version }}-linux-x64.tar.gz
+          if-no-files-found: error
+
+      - name: Build macOS Package
+        if: startsWith(matrix.config.os, 'macos')
+        run: |
+          chmod +x installers/create-macos-app.sh
+          ARCH="${{ matrix.config.rid == 'osx-arm64' && 'arm64' || 'x64' }}"
+          installers/create-macos-app.sh ${{ steps.version.outputs.version }} $ARCH
+
+      - name: Upload macOS Package
+        if: startsWith(matrix.config.os, 'macos')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.config.artifact }}
+          path: installers/output/Zeus-${{ steps.version.outputs.version }}-macos-*.dmg
+          if-no-files-found: error
+
+  create-release:
+    name: Create GitHub Release
+    needs: build-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=v${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Display artifact structure
+        run: ls -R release-artifacts
+
+      - name: Create Release Notes
+        run: |
+          cat > release-notes.md << 'EOF'
+          # Zeus v${{ steps.version.outputs.version }}
+
+          Cross-platform SDR client for OpenHPSDR Protocol-1 and Protocol-2 radios.
+
+          ## Downloads
+
+          ### Windows (x64)
+          - **Zeus-${{ steps.version.outputs.version }}-win-x64-setup.exe** - Windows installer
+            - Includes .NET runtime and all dependencies
+            - Run the installer and follow the prompts
+
+          ### macOS
+          - **Zeus-${{ steps.version.outputs.version }}-macos-arm64.dmg** - Apple Silicon (M1/M2/M3)
+          - **Zeus-${{ steps.version.outputs.version }}-macos-x64.dmg** - Intel Macs
+
+          **IMPORTANT for macOS users**: After installation, you must remove the quarantine attribute:
+          ```bash
+          xattr -cr /Applications/Zeus.app
+          ```
+          This is required because Zeus is not signed by a registered Apple Developer.
+
+          ### Linux (x64)
+          - **zeus-${{ steps.version.outputs.version }}-linux-x64.tar.gz** - Linux x64 tarball
+            - Extract and run `./zeus` from the extracted directory
+            - Requires libfftw3 (usually pre-installed)
+
+          ## Changes
+
+          See the [full changelog](https://github.com/brianbruff/openhpsdr-zeus/compare/...v${{ steps.version.outputs.version }}) for details.
+
+          ## License
+
+          GNU GPL v2 or later. See [LICENSE](https://github.com/brianbruff/openhpsdr-zeus/blob/main/LICENSE) for details.
+          EOF
+
+      - name: Create or Update Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Zeus v${{ steps.version.outputs.version }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: false
+          files: |
+            release-artifacts/windows-installer/*
+            release-artifacts/linux-tarball/*
+            release-artifacts/macos-x64-dmg/*
+            release-artifacts/macos-arm64-dmg/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

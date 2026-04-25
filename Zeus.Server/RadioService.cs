@@ -421,6 +421,19 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
+    public string[] GetFavoriteFilterSlots(RxMode mode)
+    {
+        return _filterPresetStore?.GetFavoriteSlots(mode) ?? new[] { "F6", "F5", "F4" };
+    }
+
+    public StateDto SetFavoriteFilterSlots(RxMode mode, string[] slotNames)
+    {
+        if (slotNames.Length > 3)
+            throw new ArgumentException("Maximum 3 favorite slots allowed", nameof(slotNames));
+        _filterPresetStore?.SetFavoriteSlots(mode, slotNames);
+        return Snapshot();
+    }
+
     private void StoreFamilyFilter(RxMode mode, int loAbs, int hiAbs)
     {
         var slot = new FamilyFilter(loAbs, hiAbs);

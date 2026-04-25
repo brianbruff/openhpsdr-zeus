@@ -53,7 +53,6 @@ import { MobilePttButton } from './components/MobilePttButton';
 import { MobileZoomSlider } from './components/MobileZoomSlider';
 import { ModeBandwidth } from './components/ModeBandwidth';
 import { FilterPanel } from './components/filter/FilterPanel';
-import { FilterRibbon, useFilterRibbonOpenSync } from './components/filter/FilterRibbon';
 import { MoxButton } from './components/MoxButton';
 import { Panadapter } from './components/Panadapter';
 import { PaTempChip } from './components/PaTempChip';
@@ -109,12 +108,10 @@ export default function App() {
   const preampOn = useConnectionStore((s) => s.preampOn);
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
-  const filterRibbonOpen = useConnectionStore((s) => s.filterAdvancedPaneOpen);
   const connected = status === 'Connected';
 
   useKeyboardShortcuts();
   useMicUplink();
-  useFilterRibbonOpenSync();
 
   useEffect(() => {
     const stop = startRealtime();
@@ -679,15 +676,8 @@ export default function App() {
         <FlexWorkspace />
       ) : (
       <div
-        className={`workspace ${terminatorActive ? 'terminator' : ''} ${filterRibbonOpen ? 'has-filter-ribbon' : ''}`}
+        className={`workspace ${terminatorActive ? 'terminator' : ''}`}
       >
-        {/* Advanced filter ribbon — dedicated row above the hero, same column
-            width as the panadapter. Hidden on mobile by the enclosing .app
-            layout (mobile uses the fixed grid, which doesn't reach this
-            branch via ?layout=flex). When closed, FilterRibbon renders null
-            and the `has-filter-ribbon` class is absent, so the workspace
-            collapses to its original two-row layout. */}
-        <FilterRibbon />
         {/* Hero — spectrum + waterfall with QRZ world-map layer */}
         <div className={`panel hero ${terminatorActive ? 'qrz-mode' : ''} ${mapInteractive ? 'map-mode' : ''}`}>
           <div className="panel-head">

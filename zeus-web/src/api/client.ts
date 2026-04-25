@@ -545,6 +545,42 @@ export function setFilterPresetOverride(
   );
 }
 
+export function getFavoriteFilterSlots(
+  mode: RxMode,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  return jsonFetch(
+    `/api/filter/favorites?mode=${mode}`,
+    { method: 'GET', signal },
+    (raw) => {
+      if (typeof raw === 'object' && raw !== null && 'slotNames' in raw) {
+        const slotNames = raw.slotNames;
+        if (Array.isArray(slotNames)) {
+          return slotNames.filter((s): s is string => typeof s === 'string');
+        }
+      }
+      return ['F6', 'F5', 'F4']; // Default fallback
+    },
+  );
+}
+
+export function setFavoriteFilterSlots(
+  mode: RxMode,
+  slotNames: string[],
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/filter/favorites',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode, slotNames }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
 export type SampleRate = 48_000 | 96_000 | 192_000 | 384_000;
 
 export function setSampleRate(

@@ -163,10 +163,80 @@
   flex-direction: column;
   gap: 6px;
 }
-.filter-ribbon__preset-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+/* Favorites count badge next to the presets label */
+.filter-ribbon__fav-count {
+  margin-left: auto;
+  font-size: 10px;
+  color: #7c8088;
+  letter-spacing: 0.05em;
+}
+
+/* Scrollable list of all preset rows */
+.filter-ribbon__preset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  max-height: 200px;
+}
+
+/* Each row: chip button + star button */
+.filter-ribbon__preset-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.filter-ribbon__preset-row .filter-ribbon__chip {
+  flex: 1;
+  display: flex;
+  align-items: center;
   gap: 6px;
+  text-align: left;
+}
+.filter-ribbon__chip-name {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: #7c8088;
+  min-width: 28px;
+  text-transform: uppercase;
+}
+.filter-ribbon__chip-label {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Star toggle button */
+.filter-ribbon__star {
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: #7c8088;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 100ms ease, border-color 100ms ease;
+}
+.filter-ribbon__star:hover:not(:disabled) {
+  color: #edeef1;
+  border-color: #4a4e55;
+}
+.filter-ribbon__star.is-favorite {
+  color: var(--accent);
+}
+.filter-ribbon__star.is-favorite:hover {
+  color: #7caeff;
+  border-color: #4a4e55;
+}
+.filter-ribbon__star:disabled {
+  opacity: 0.25;
+  cursor: default;
 }
 
 /* Beveled neutral-gray chip — sized to match the app's .btn.sm. */

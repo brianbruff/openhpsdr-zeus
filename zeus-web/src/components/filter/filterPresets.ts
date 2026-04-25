@@ -250,3 +250,34 @@ export function nudgeStepHz(mode: RxMode): number {
     default: return 10;
   }
 }
+
+// ─── Favorites ────────────────────────────────────────────────────────────────
+
+export const FILTER_MAX_FAVORITES = 3;
+const FAVORITES_STORAGE_PREFIX = 'zeus.filter.favorites.';
+
+// Default to F4/F5/F6 (3.3k / 2.9k / 2.7k) for SSB; same positions for other modes.
+const DEFAULT_FAVORITES: Partial<Record<RxMode, string[]>> = {
+  USB:  ['F4', 'F5', 'F6'],
+  LSB:  ['F4', 'F5', 'F6'],
+};
+
+export function loadFavorites(mode: RxMode): string[] {
+  try {
+    const raw = window.localStorage.getItem(FAVORITES_STORAGE_PREFIX + mode);
+    if (raw) {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) return (parsed as string[]).slice(0, FILTER_MAX_FAVORITES);
+    }
+  } catch { /* ok */ }
+  return (DEFAULT_FAVORITES[mode] ?? ['F4', 'F5', 'F6']).slice(0, FILTER_MAX_FAVORITES);
+}
+
+export function saveFavorites(mode: RxMode, favorites: string[]): void {
+  try {
+    window.localStorage.setItem(
+      FAVORITES_STORAGE_PREFIX + mode,
+      JSON.stringify(favorites.slice(0, FILTER_MAX_FAVORITES)),
+    );
+  } catch { /* ok */ }
+}

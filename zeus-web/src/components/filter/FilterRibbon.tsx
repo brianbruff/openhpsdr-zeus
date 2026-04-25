@@ -4,33 +4,22 @@
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 //
-// Filter visualization PRD §3.2 — advanced filter ribbon. Matches the
-// updated mockup (docs/pics/filterpanel_mockup.png):
-//
-//   ┌────────────────────────────────────────────────────────────┐
-//   │ BANDWIDTH │ LOW CUT │ PASSBAND │ HIGH CUT │  ≡ PRESETS  ×  │
-//   │           │  freq   │  2.70 kHz│  freq    │  2.4  2.7  3.6 │
-//   │ ───────────────────────────────────────    │  6.0  9.0 12.0 │
-//   │ │  spectrum trace with passband box    │   │  [  CUSTOM  ✎ ]│
-//   │ └──────────────────────────────────────┘   │                │
-//   │  14.249 14.251 14.253 14.255 14.257 …      │                │
-//   │      DRAG EDGES TO ADJUST · DRAG INSIDE    │                │
-//   └────────────────────────────────────────────────────────────┘
-//
-// The ribbon lives as a dedicated workspace row above the hero — same
-// column width as the panadapter. Preset column is a fixed-width right
-// rail; everything else (readouts + mini-pan + hint) stacks vertically
-// on the left so the mini-pan gets the full spectrum-strip width.
+// Unified filter ribbon — the full panel opened via the ≡ button.
+// Left column: BANDWIDTH / LOW CUT / PASSBAND / HIGH CUT readouts + mini-pan.
+// Right column: all presets (F1–F10, VAR1/VAR2) with ★ star toggles to
+// manage the three favorite quick-access slots shown in the toolbar.
 
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useConnectionStore } from '../../state/connection-store';
-import { setFilter, setFilterAdvancedPaneOpen } from '../../api/client';
+import { setFilter, setFilterAdvancedPaneOpen, getFilterPresets, type FilterPresetDto } from '../../api/client';
 import {
+  getPresetsForMode,
   formatAbsFreq,
-  getRibbonPresetsForMode,
   nudgeStepHz,
+  FILTER_MAX_FAVORITES,
   type FilterPresetSlot,
 } from './filterPresets';
+import { useFavoriteFilters } from './useFavoriteFilters';
 import { FilterMiniPan } from './FilterMiniPan';
 
 const LOCAL_STORAGE_KEY = 'zeus.filter.advancedPaneOpen';
@@ -59,10 +48,31 @@ export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) 
   const open = useConnectionStore((s) => s.filterAdvancedPaneOpen);
   const applyState = useConnectionStore((s) => s.applyState);
 
-  const presets = getRibbonPresetsForMode(mode);
   const lowAbs = vfoHz + filterLow;
   const highAbs = vfoHz + filterHigh;
   const widthKHz = Math.abs(filterHigh - filterLow) / 1000;
+
+  // Fetch server VAR slot overrides
+  const [serverPresets, setServerPresets] = useState<FilterPresetDto[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    getFilterPresets(mode)
+      .then((presets) => { if (!cancelled) setServerPresets(presets); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [mode]);
+
+  const allPresets: readonly FilterPresetSlot[] = (() => {
+    const local = getPresetsForMode(mode);
+    if (!serverPresets) return local;
+    return local.map((slot) => {
+      if (!slot.isVar) return slot;
+      const srv = serverPresets.find((s) => s.slotName === slot.slotName);
+      return srv ? { ...slot, lowHz: srv.lowHz, highHz: srv.highHz } : slot;
+    });
+  })();
+
+  const { favorites, toggleFavorite, atMax } = useFavoriteFilters(mode);
 
   const selectPreset = useCallback((slot: FilterPresetSlot) => {
     useConnectionStore.setState({
@@ -107,9 +117,7 @@ export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) 
   }, [embedded, open, mode, applyState, closeRibbon]);
 
   if (!embedded && !open) return null;
-  if (presets.length === 0) return null;
-
-  const currentWidth = Math.abs(filterHigh - filterLow);
+  if (allPresets.length === 0) return null;
 
   return (
     <div
@@ -129,7 +137,7 @@ export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) 
       )}
 
       <div className="filter-ribbon__body">
-        {/* Left column: top readout row, full-width mini-pan, footer hint */}
+        {/* Left column: readout row + mini-pan + hint */}
         <div className="filter-ribbon__main">
           <div className="filter-ribbon__topRow">
             <div className="filter-ribbon__topCol filter-ribbon__topCol--bw">
@@ -161,27 +169,45 @@ export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) 
           </div>
         </div>
 
-        {/* Right column: presets rail, full ribbon height */}
+        {/* Right column: full preset list with star toggles */}
         <div className="filter-ribbon__presets">
           <div className="filter-ribbon__label filter-ribbon__label--icon">
             <span className="filter-ribbon__presets-icon">≡</span>
-            <span>PRESET BANDWIDTHS</span>
+            <span>PRESETS</span>
+            <span className="filter-ribbon__fav-count">
+              {favorites.length}/{FILTER_MAX_FAVORITES} ★
+            </span>
           </div>
-          <div className="filter-ribbon__preset-grid">
-            {presets.map((slot) => {
-              const slotWidth = Math.abs(slot.highHz - slot.lowHz);
-              const active = Math.abs(slotWidth - currentWidth) <= 20;
-              const widthK = slotWidth / 1000;
+          <div className="filter-ribbon__preset-list">
+            {allPresets.map((slot) => {
+              const active = filterPresetName === slot.slotName;
+              const isFavorite = favorites.includes(slot.slotName);
+              const canStar = isFavorite || !atMax;
               return (
-                <button
-                  key={slot.slotName}
-                  type="button"
-                  onClick={() => selectPreset(slot)}
-                  title={`${widthK.toFixed(1)} kHz (${slot.lowHz}..${slot.highHz} Hz)`}
-                  className={`filter-ribbon__chip ${active ? 'is-active' : ''}`}
-                >
-                  {widthK.toFixed(1)} kHz
-                </button>
+                <div key={slot.slotName} className="filter-ribbon__preset-row">
+                  <button
+                    type="button"
+                    onClick={() => selectPreset(slot)}
+                    title={`${slot.slotName}: ${slot.lowHz}..${slot.highHz} Hz`}
+                    className={`filter-ribbon__chip ${active ? 'is-active' : ''}`}
+                  >
+                    <span className="filter-ribbon__chip-name">{slot.slotName}</span>
+                    <span className="filter-ribbon__chip-label">
+                      {slot.slotName === 'VAR1' || slot.slotName === 'VAR2' ? slot.slotName : slot.label}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => toggleFavorite(slot.slotName)}
+                    disabled={!canStar}
+                    className={`filter-ribbon__star ${isFavorite ? 'is-favorite' : ''}`}
+                    title={isFavorite ? 'Remove from favorites' : atMax ? `Max ${FILTER_MAX_FAVORITES} favorites` : 'Add to favorites'}
+                    aria-pressed={isFavorite}
+                    aria-label={isFavorite ? `Unmark ${slot.slotName} as favorite` : `Mark ${slot.slotName} as favorite`}
+                  >
+                    {isFavorite ? '★' : '☆'}
+                  </button>
+                </div>
               );
             })}
           </div>

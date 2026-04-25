@@ -135,11 +135,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
     // ---- PureSignal feedback (DDC0 + DDC1 paired on UDP 1035) ----
     // PS feedback decoder: when armed, packets on port 1035 carry interleaved
-    // (DDC0=TX-mod-IQ, DDC1=feedback-coupler-IQ) sample pairs (pihpsdr
-    // process_ps_iq_data, new_protocol.c:2463-2510). The accumulator collects
-    // 1024 complex pairs across packets before emitting a frame. When PS is
-    // disarmed the radio reverts to single-DDC packets and the standard RX
-    // demuxer takes over. Volatile because RxLoop reads it across threads.
+    // (DDC0=PS_RX_FEEDBACK=post-PA coupler IQ, DDC1=PS_TX_FEEDBACK=TX-DAC
+    // loopback IQ) sample pairs (pihpsdr new_protocol.c:1615-1616, 2463-2510;
+    // transmitter.c:2015-2030, 2066). DDC0 feeds pscc's "rx" arg; DDC1 feeds
+    // pscc's "tx" arg. The accumulator collects 1024 complex pairs across
+    // packets before emitting a frame. When PS is disarmed the radio reverts
+    // to single-DDC packets and the standard RX demuxer takes over.
+    // Volatile because RxLoop reads it across threads.
     private volatile bool _psFeedbackEnabled;
     private const int PsFeedbackBlockSize = 1024;
     private readonly Channel<PsFeedbackFrame> _psFeedbackFrames = Channel.CreateUnbounded<PsFeedbackFrame>(
@@ -872,10 +874,11 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // 6B DDC1). 16 + 119*12 = 1444 = BufLen. We accumulate into the 1024-
     // sample paired buffers and emit a PsFeedbackFrame per full block.
     //
-    // Sample layout per pair (big-endian, signed 24-bit):
-    //   off+0..2 : DDC0 I
+    // Sample layout per pair (big-endian, signed 24-bit), per pihpsdr
+    // new_protocol.c:1615-1616:
+    //   off+0..2 : DDC0 I  (PS_RX_FEEDBACK — post-PA coupler — pscc's "rx")
     //   off+3..5 : DDC0 Q
-    //   off+6..8 : DDC1 I
+    //   off+6..8 : DDC1 I  (PS_TX_FEEDBACK — TX-DAC loopback — pscc's "tx")
     //   off+9..11: DDC1 Q
     private void HandlePsPairedPacket(byte[] buf)
     {
@@ -891,10 +894,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             int d1i = SignExtend24((buf[off + 6] << 16) | (buf[off + 7] << 8) | buf[off + 8]);
             int d1q = SignExtend24((buf[off + 9] << 16) | (buf[off + 10] << 8) | buf[off + 11]);
 
-            _psTxI[_psBlockFill] = d0i * scale;
-            _psTxQ[_psBlockFill] = d0q * scale;
-            _psRxI[_psBlockFill] = d1i * scale;
-            _psRxQ[_psBlockFill] = d1q * scale;
+            // DDC0 (off+0..5) is PS_RX_FEEDBACK -> pscc's "rx" pair.
+            // DDC1 (off+6..11) is PS_TX_FEEDBACK -> pscc's "tx" pair.
+            _psRxI[_psBlockFill] = d0i * scale;
+            _psRxQ[_psBlockFill] = d0q * scale;
+            _psTxI[_psBlockFill] = d1i * scale;
+            _psTxQ[_psBlockFill] = d1q * scale;
 
             if (_psBlockFill == 0) _psBlockStartSeq = seq;
             _psBlockFill++;

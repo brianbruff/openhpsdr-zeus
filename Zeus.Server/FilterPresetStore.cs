@@ -202,7 +202,13 @@ public sealed class FilterPresetStore : IDisposable
             };
             if (slotName == "VAR1") { entry.HasVar1 = true; entry.Var1Lo = loHz; entry.Var1Hi = hiHz; }
             else                    { entry.HasVar2 = true; entry.Var2Lo = loHz; entry.Var2Hi = hiHz; }
-            _entries.Insert(entry);
+            // Two stores can race the find-then-insert against the same shared
+            // zeus-prefs.db (xUnit boots WebApplicationFactory in parallel and
+            // every host builds its own FilterPresetStore singleton). The
+            // unique ModeKey index is what keeps the row count correct; if a
+            // racer beat us in, that's exactly the seeded state we wanted.
+            try { _entries.Insert(entry); }
+            catch (LiteException ex) when (ex.ErrorCode == LiteException.INDEX_DUPLICATE_KEY) { }
         }
         else if (slotName == "VAR1" && !existing.HasVar1)
         {

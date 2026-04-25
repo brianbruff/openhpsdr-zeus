@@ -35,7 +35,6 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-using System.Runtime.InteropServices;
 using Zeus.Contracts;
 using Zeus.Dsp;
 using Zeus.Dsp.Wdsp;
@@ -462,12 +461,6 @@ public class WdspDspEngineTests
         }
     }
 
-    private static class DebugNative
-    {
-        [DllImport("libwdsp", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern double GetRXAMeter(int channel, int mt);
-    }
-
     [SkippableFact]
     public void GetRXAMeter_SAv_EscapesSentinel_AfterIqFlows_WithTxChannelAndProductionState()
     {
@@ -517,8 +510,8 @@ public class WdspDspEngineTests
                 if (totalDrained >= 1024) break;
             }
 
-            double sAv = DebugNative.GetRXAMeter(channel, 1);
-            double adcAv = DebugNative.GetRXAMeter(channel, 3);
+            double sAv = NativeMethods.GetRXAMeter(channel, 1);
+            double adcAv = NativeMethods.GetRXAMeter(channel, 3);
             Assert.True(totalDrained > 0, $"expected audio to drain; S_AV={sAv:F1} ADC_AV={adcAv:F1}");
             Assert.True(sAv > -399.0, $"RXA_S_AV still at -400 sentinel; ADC_AV={adcAv:F1}");
         }

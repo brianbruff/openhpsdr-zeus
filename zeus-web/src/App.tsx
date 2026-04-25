@@ -740,12 +740,7 @@ export default function App() {
                 <span className="v">{mapInteractive ? 'MAP' : 'hold'}</span>
               </span>
             )}
-            <span className="chip mono">
-              <span className="k">HZ/PX</span>
-              <span className="v">
-                {useDisplayHzPerPixel()}
-              </span>
-            </span>
+            <HzPerPixelChip />
           </div>
           <div className="panel-body hero-body">
             <div className={`map-layer ${terminatorActive ? 'visible' : ''}`}>
@@ -949,13 +944,21 @@ export default function App() {
   );
 }
 
-// Small hook hoisted to a name so the Hero chip reads the current bin width
-// without blocking re-render of siblings that don't care about hzPerPixel.
+// Isolated child component so the hzPerPixel store subscription is scoped to
+// this chip rather than the whole App tree — bin-width changes re-render only
+// the chip, not the panadapter / waterfall / VFO siblings.
 import { useDisplayStore } from './state/display-store';
-function useDisplayHzPerPixel(): string {
+function HzPerPixelChip() {
   const v = useDisplayStore((s) => s.hzPerPixel);
-  if (!Number.isFinite(v) || v <= 0) return '—';
-  return v >= 1 ? `${v.toFixed(1)} Hz` : `${(v * 1000).toFixed(0)} mHz`;
+  const text = !Number.isFinite(v) || v <= 0
+    ? '—'
+    : v >= 1 ? `${v.toFixed(1)} Hz` : `${(v * 1000).toFixed(0)} mHz`;
+  return (
+    <span className="chip mono">
+      <span className="k">HZ/PX</span>
+      <span className="v">{text}</span>
+    </span>
+  );
 }
 
 // QRZ XML gives us a sparser record than the design-time Contact type; fill

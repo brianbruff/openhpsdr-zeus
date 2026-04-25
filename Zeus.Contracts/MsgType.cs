@@ -79,4 +79,12 @@ public enum MsgType : byte
     // seconds timescale, so bolting it onto the 10 Hz TX meter cadence
     // would be overkill. Broadcast at 2 Hz always.
     PaTemp = 0x17,
+
+    // PureSignal stage telemetry. Broadcast at 10 Hz only while PsEnabled is
+    // armed — keeps the wire quiet during normal operation. Carries WDSP
+    // GetPSInfo readouts (info[4] = feedback level, info[14] = correcting
+    // bit, info[15] = cal-state enum) plus a derived correction-depth dB
+    // and the GetPSMaxTX envelope peak. Bare-payload like TxMetersV2 (no
+    // 16-byte header) — same 10 Hz rate logic.
+    PsMeters = 0x18,
 }

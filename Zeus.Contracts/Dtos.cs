@@ -108,7 +108,38 @@ public sealed record StateDto(
     // is −50..+20 dB (see RadioService.SetRxAfGain). Per-RX not supported
     // yet; when multi-RX lands this becomes the master and the per-RX
     // values layer on top.
-    double RxAfGainDb = 0.0);
+    double RxAfGainDb = 0.0,
+
+    // ---- PureSignal predistortion (TXA-side; WDSP calcc/iqc stages) ----
+    // PsEnabled is the master arm bit. Deliberately NOT persisted server-side
+    // — operator must re-arm each session (parity with MOX). The other PS
+    // fields ARE persisted via PsSettingsStore so the operator's calibration
+    // tuning survives restarts.
+    bool PsEnabled = false,
+    bool PsAuto = true,             // continuous adapt by default once armed
+    bool PsSingle = false,          // one-shot SetPSControl(1,1,0,0)
+    bool PsPtol = false,            // false = strict 0.4; true = relax 0.8
+    bool PsAutoAttenuate = true,
+    double PsMoxDelaySec = 0.2,
+    double PsLoopDelaySec = 0.0,
+    double PsAmpDelayNs = 150.0,
+    // PS hardware peak — set per protocol/hardware by RadioService at connect
+    // time. P1 = 0.4072 (Hermes/ANAN-10/100); P2 OrionMkII/Saturn = 0.6121;
+    // P2 ANAN-7000/8000 = 0.2899. Default here (P1) is a safe neutral; the
+    // RadioService HW-peak switch overrides on the first ConnectAsync /
+    // ConnectP2Async. See PLAN section 7 / hermes.md §7.1.
+    double PsHwPeak = 0.4072,
+    string PsIntsSpiPreset = "16/256",
+    double PsFeedbackLevel = 0.0,   // info[4] read-back, 0..256
+    byte PsCalState = 0,            // info[15] enum
+    bool PsCorrecting = false,      // info[14]
+    // ---- TwoTone test generator (TXA PostGen mode=1; protocol-agnostic) ----
+    // Standard PureSignal calibration excitation. Defaults match pihpsdr's
+    // TwoTone defaults — 700/1900 Hz, 0.49 linear amplitude per tone.
+    bool TwoToneEnabled = false,
+    double TwoToneFreq1 = 700.0,
+    double TwoToneFreq2 = 1900.0,
+    double TwoToneMag = 0.49);
 
 public sealed record RadioInfo(
     string MacAddress,
@@ -234,3 +265,32 @@ public sealed record RadioSelectionDto(
     string Effective);
 
 public sealed record RadioSelectionSetRequest(string Preferred);
+
+// ---- PureSignal request records ----
+// PsControlSetRequest = master arm (Enabled) + mode (Auto vs Single).
+// PsAdvancedSetRequest = nullable so partial updates from the settings
+// panel don't reset other fields.
+public sealed record PsControlSetRequest(bool Enabled, bool Auto, bool Single);
+
+public sealed record PsAdvancedSetRequest(
+    bool? Ptol = null,
+    bool? AutoAttenuate = null,
+    double? MoxDelaySec = null,
+    double? LoopDelaySec = null,
+    double? AmpDelayNs = null,
+    double? HwPeak = null,
+    string? IntsSpiPreset = null);
+
+public sealed record PsResetRequest();
+
+public sealed record PsSaveRequest(string Filename);
+
+public sealed record PsRestoreRequest(string Filename);
+
+// Two-tone test generator (used as PS calibration excitation but works
+// standalone too). Protocol-agnostic.
+public sealed record TwoToneSetRequest(
+    bool Enabled,
+    double? Freq1 = null,
+    double? Freq2 = null,
+    double? Mag = null);

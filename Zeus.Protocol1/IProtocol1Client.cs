@@ -69,6 +69,8 @@ public interface IProtocol1Client : IDisposable
     long TotalFrames { get; }
 
     void SetVfoAHz(long hz);
+    void SetTxVfoHz(long hz);
+    void SetSplit(bool enabled);
     void SetSampleRate(HpsdrSampleRate rate);
     void SetPreamp(bool on);
     void SetAttenuator(HpsdrAtten atten);

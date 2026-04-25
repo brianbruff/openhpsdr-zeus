@@ -108,7 +108,16 @@ public sealed record StateDto(
     // is −50..+20 dB (see RadioService.SetRxAfGain). Per-RX not supported
     // yet; when multi-RX lands this becomes the master and the per-RX
     // values layer on top.
-    double RxAfGainDb = 0.0);
+    double RxAfGainDb = 0.0,
+    // Split operation: when enabled, TxVfoHz is used for transmit while VfoHz
+    // is used for receive. When disabled (default), TxVfoHz is ignored and
+    // VfoHz is used for both RX and TX (classic single-VFO operation).
+    bool SplitEnabled = false,
+    // TX VFO frequency in Hz. Only used when SplitEnabled=true. When split is
+    // off, the hardware TX frequency follows VfoHz. Clamped to 0-60 MHz like
+    // the RX VFO. Defaults to VfoHz on first split-enable so the operator
+    // starts from their current frequency.
+    long TxVfoHz = 14_200_000);
 
 public sealed record RadioInfo(
     string MacAddress,
@@ -125,6 +134,10 @@ public sealed record ConnectRequest(
     int? Atten = null);
 
 public sealed record VfoSetRequest(long Hz);
+
+public sealed record TxVfoSetRequest(long Hz);
+
+public sealed record SplitSetRequest(bool Enabled);
 
 public sealed record ModeSetRequest(RxMode Mode);
 

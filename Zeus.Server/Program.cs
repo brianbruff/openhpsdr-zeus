@@ -375,6 +375,18 @@ app.MapPost("/api/vfo", (VfoSetRequest req, RadioService r) =>
     return r.SetVfo(req.Hz);
 });
 
+app.MapPost("/api/txvfo", (TxVfoSetRequest req, RadioService r) =>
+{
+    log.LogInformation("api.txvfo hz={Hz}", req.Hz);
+    return r.SetTxVfo(req.Hz);
+});
+
+app.MapPost("/api/split", (SplitSetRequest req, RadioService r) =>
+{
+    log.LogInformation("api.split enabled={Enabled}", req.Enabled);
+    return r.SetSplit(req.Enabled);
+});
+
 app.MapPost("/api/mode", (ModeSetRequest req, RadioService r) =>
 {
     log.LogInformation("api.mode mode={Mode}", req.Mode);

@@ -78,6 +78,9 @@ export type ConnectionState = {
   preampOn: boolean;
   nr: NrConfigDto;
   zoomLevel: ZoomLevel;
+  // Split operation: when enabled, TX uses txVfoHz while RX uses vfoHz
+  splitEnabled: boolean;
+  txVfoHz: number;
   inflight: boolean;
   // Endpoint of the most recently successful /api/connect. Survives a
   // disconnect so ConnectPanel can float it to the top of the next scan.
@@ -116,6 +119,8 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   preampOn: false,
   nr: { ...NR_CONFIG_DEFAULT },
   zoomLevel: 1,
+  splitEnabled: false,
+  txVfoHz: 14_200_000,
   inflight: false,
   lastConnectedEndpoint: null,
   // Default to 'ready' so a page-load before the WS attach doesn't show the
@@ -142,6 +147,8 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
       adcOverloadWarning: s.adcOverloadWarning,
       nr: s.nr,
       zoomLevel: s.zoomLevel,
+      splitEnabled: s.splitEnabled,
+      txVfoHz: s.txVfoHz,
     }),
   setInflight: (inflight) => set({ inflight }),
   setBoardId: (boardId) => set({ boardId }),

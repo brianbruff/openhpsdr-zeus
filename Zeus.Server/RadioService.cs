@@ -301,6 +301,42 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
+    public StateDto SetTxVfo(long hz)
+    {
+        long clamped = Math.Clamp(hz, 0L, 60_000_000L);
+        long previous;
+        lock (_sync) previous = _state.TxVfoHz;
+        Mutate(s => s with { TxVfoHz = clamped });
+        // Notify Protocol1Client of the new TX VFO
+        ActiveClient?.SetTxVfoHz(clamped);
+        // Band edge crossed? Per-band PA gain / OC bits may have swapped.
+        if (BandUtils.FreqToBand(previous) != BandUtils.FreqToBand(clamped))
+        {
+            RecomputePaAndPush();
+        }
+        return Snapshot();
+    }
+
+    public StateDto SetSplit(bool enabled)
+    {
+        Mutate(s =>
+        {
+            // When enabling split for the first time, initialize TxVfoHz to
+            // current RX VFO so the operator starts from a known frequency.
+            long txVfo = s.TxVfoHz;
+            if (enabled && !s.SplitEnabled)
+            {
+                txVfo = s.VfoHz;
+            }
+            return s with { SplitEnabled = enabled, TxVfoHz = txVfo };
+        });
+        // Notify Protocol1Client of split mode change
+        var snapshot = Snapshot();
+        ActiveClient?.SetSplit(snapshot.SplitEnabled);
+        ActiveClient?.SetTxVfoHz(snapshot.TxVfoHz);
+        return snapshot;
+    }
+
     // Per-mode-family remembered filter magnitudes. Mode switching snapshots
     // the current abs-filter into the departing family's slot and restores the
     // target family's slot on entry — so FM→USB brings back the SSB width

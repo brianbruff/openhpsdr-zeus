@@ -107,6 +107,9 @@ export type RadioStateDto = {
   zoomLevel: ZoomLevel;
   // Master RX AF gain in dB — 0 = unity (WDSP SetRXAPanelGain1(1.0) default).
   rxAfGainDb: number;
+  // Split operation: when enabled, TX uses txVfoHz while RX uses vfoHz
+  splitEnabled: boolean;
+  txVfoHz: number;
 };
 
 export type FilterPresetDto = {
@@ -258,6 +261,9 @@ export function normalizeState(raw: unknown): RadioStateDto {
     // 0 dB matches the pre-#77 unity-gain default — older servers without
     // the field behave identically to a fresh-install slider at centre.
     rxAfGainDb: typeof r.rxAfGainDb === 'number' ? r.rxAfGainDb : 0,
+    // Split operation: default disabled for backward compatibility
+    splitEnabled: typeof r.splitEnabled === 'boolean' ? r.splitEnabled : false,
+    txVfoHz: typeof r.txVfoHz === 'number' ? r.txVfoHz : (typeof r.vfoHz === 'number' ? r.vfoHz : 14_200_000),
   };
 }
 
@@ -392,6 +398,38 @@ export function setVfo(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ hz }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+export function setTxVfo(
+  hz: number,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/txvfo',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ hz }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+export function setSplit(
+  enabled: boolean,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/split',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled }),
       signal,
     },
     normalizeState,

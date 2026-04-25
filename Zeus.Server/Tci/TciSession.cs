@@ -605,9 +605,15 @@ public sealed class TciSession : IDisposable
 
         if (args.Length == 1)
         {
-            Send(TciProtocol.Command("split_enable", rx, false));
+            // Query: return current split state
+            var state = _radio.Snapshot();
+            Send(TciProtocol.Command("split_enable", rx, state.SplitEnabled));
         }
-        // Ignore set — split not implemented
+        else if (args.Length >= 2 && TciProtocol.TryParseBool(args[1], out bool enabled))
+        {
+            // Set split mode
+            _radio.SetSplit(enabled);
+        }
     }
 
     private void HandleRitEnable(string[] args)

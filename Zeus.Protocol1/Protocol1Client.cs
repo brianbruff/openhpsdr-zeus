@@ -68,6 +68,8 @@ public sealed class Protocol1Client : IProtocol1Client
     // Mutation state written from any thread, read from the TX thread.
     // 64-bit fields are written atomically on 64-bit .NET (Interlocked.Exchange used for safety).
     private long _vfoAHz = 7_100_000;
+    private long _txVfoHz = 14_200_000;  // TX VFO for split operation
+    private int _splitEnabled;           // 0 / 1 — split mode flag
     private int _rate = (int)HpsdrSampleRate.Rate48k;
     private int _preamp;       // 0 / 1
     private int _attenDb;      // 0..31 dB (HpsdrAtten value)
@@ -214,6 +216,8 @@ public sealed class Protocol1Client : IProtocol1Client
     }
 
     public void SetVfoAHz(long hz) => Interlocked.Exchange(ref _vfoAHz, hz);
+    public void SetTxVfoHz(long hz) => Interlocked.Exchange(ref _txVfoHz, hz);
+    public void SetSplit(bool enabled) => Interlocked.Exchange(ref _splitEnabled, enabled ? 1 : 0);
     public void SetSampleRate(HpsdrSampleRate rate) => Interlocked.Exchange(ref _rate, (int)rate);
     public void SetPreamp(bool on) => Interlocked.Exchange(ref _preamp, on ? 1 : 0);
     public void SetAttenuator(HpsdrAtten atten) => Interlocked.Exchange(ref _attenDb, atten.ClampedDb);
@@ -264,7 +268,9 @@ public sealed class Protocol1Client : IProtocol1Client
             HasN2adr: Volatile.Read(ref _hasN2adr) != 0,
             DriveLevel: drive,
             UserOcTxMask: (byte)Volatile.Read(ref _ocTxMask),
-            UserOcRxMask: (byte)Volatile.Read(ref _ocRxMask));
+            UserOcRxMask: (byte)Volatile.Read(ref _ocRxMask),
+            SplitEnabled: Volatile.Read(ref _splitEnabled) != 0,
+            TxVfoHz: Interlocked.Read(ref _txVfoHz));
     }
 
     private void RxLoop()

@@ -89,7 +89,13 @@ internal static class ControlFrame
         // anything. Selected by MOX: TX mask during transmit, RX mask otherwise
         // (piHPSDR `old_protocol.c:1884-1904`).
         byte UserOcTxMask = 0,
-        byte UserOcRxMask = 0);
+        byte UserOcRxMask = 0,
+        // Split operation: when enabled, TxVfoHz is used for transmit frequency.
+        // When disabled, VfoAHz is used for both RX and TX (classic operation).
+        bool SplitEnabled = false,
+        // TX VFO frequency in Hz. Only used when SplitEnabled=true. The TX loop
+        // will send this as the TxFreq register (0x02) when MOX is active.
+        long TxVfoHz = 14_200_000);
 
     /// <summary>
     /// Write the 5 C&amp;C bytes for <paramref name="register"/> given the current
@@ -110,9 +116,14 @@ internal static class ControlFrame
                 break;
 
             case CcRegister.RxFreq:
-            case CcRegister.TxFreq:
-                // Frequency payload is a BE uint32 in C1..C4 (doc 02 §4 "Frequency payload").
+                // RX frequency: always use VfoAHz for receive
                 BinaryPrimitives.WriteUInt32BigEndian(cc[1..5], (uint)state.VfoAHz);
+                break;
+
+            case CcRegister.TxFreq:
+                // TX frequency: use TxVfoHz when split enabled, otherwise VfoAHz
+                long txFreq = state.SplitEnabled ? state.TxVfoHz : state.VfoAHz;
+                BinaryPrimitives.WriteUInt32BigEndian(cc[1..5], (uint)txFreq);
                 break;
 
             case CcRegister.DriveFilter:

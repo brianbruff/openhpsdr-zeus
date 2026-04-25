@@ -93,10 +93,10 @@ public static class TciHandshake
         sb.Append(TciProtocol.Command("if", 0, 0, 0));
         sb.Append(TciProtocol.Command("if", 0, 1, 0));
 
-        // VFO frequencies (rx=0, channel=0 and channel=1)
-        // In single-VFO mode both channels show the same freq
+        // VFO frequencies (rx=0, channel=0 for RX and channel=1 for TX)
+        // Channel 0 is RX VFO, Channel 1 is TX VFO (used when split is enabled)
         sb.Append(TciProtocol.Command("vfo", 0, 0, state.VfoHz));
-        sb.Append(TciProtocol.Command("vfo", 0, 1, state.VfoHz));
+        sb.Append(TciProtocol.Command("vfo", 0, 1, state.TxVfoHz));
 
         // Mode
         string tciMode = TciProtocol.ModeToTci(state.Mode);
@@ -106,7 +106,7 @@ public static class TciHandshake
         sb.Append(TciProtocol.Command("rx_enable", 0, true));
 
         // Split, TX, TRX state
-        sb.Append(TciProtocol.Command("split_enable", 0, false)); // no split yet
+        sb.Append(TciProtocol.Command("split_enable", 0, state.SplitEnabled));
         sb.Append(TciProtocol.Command("tx_enable", 0, moxOn || tunOn));
         sb.Append(TciProtocol.Command("trx", 0, moxOn));
         sb.Append(TciProtocol.Command("tune", 0, tunOn));
@@ -121,8 +121,9 @@ public static class TciHandshake
         sb.Append(TciProtocol.Command("drive", 0, drivePercent));
         sb.Append(TciProtocol.Command("tune_drive", 0, drivePercent)); // same for now
 
-        // TX frequency (event-only in spec, but sent in handshake)
-        sb.Append(TciProtocol.Command("tx_frequency", state.VfoHz));
+        // TX frequency: use TxVfoHz when split enabled, otherwise VfoHz
+        long txFreq = state.SplitEnabled ? state.TxVfoHz : state.VfoHz;
+        sb.Append(TciProtocol.Command("tx_frequency", txFreq));
 
         // Handshake complete
         sb.Append(TciProtocol.Command("ready"));

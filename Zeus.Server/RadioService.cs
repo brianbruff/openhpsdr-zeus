@@ -54,6 +54,7 @@ public sealed class RadioService : IDisposable
     private readonly DspSettingsStore _dspSettingsStore;
     private readonly PaSettingsStore _paStore;
     private readonly PreferredRadioStore? _preferredRadioStore;
+    private readonly PsSettingsStore? _psStore;
     private readonly FilterPresetStore? _filterPresetStore;
     // Last-known preset name per mode, preserved across mode switches.
     // Accessed only from inside Mutate (under _sync) or at init.
@@ -128,13 +129,14 @@ public sealed class RadioService : IDisposable
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
         _dspSettingsStore = dspSettingsStore;
         _paStore = paStore;
         _preferredRadioStore = preferredRadioStore;
+        _psStore = psStore;
         _filterPresetStore = filterPresetStore;
         _paStore.Changed += RecomputePaAndPush;
         if (_preferredRadioStore is not null)
@@ -151,6 +153,12 @@ public sealed class RadioService : IDisposable
             foreach (RxMode m in Enum.GetValues<RxMode>())
                 _lastPresetPerMode[m] = filterPresetStore.GetLastSelectedPreset(m);
         }
+
+        // Load persisted PS settings — operator's calibration tuning. Master
+        // arm and cal-mode are deliberately NOT persisted (parity with MOX);
+        // only the timing/preset/auto-att tuning is. PsHwPeak is left at the
+        // P1 default; ConnectAsync / ConnectP2Async overrides per-radio.
+        var ps = _psStore?.Get();
 
         _state = new(
             Status: ConnectionStatus.Disconnected,
@@ -169,7 +177,16 @@ public sealed class RadioService : IDisposable
             AdcOverloadWarning: false,
             // Zeus default filter (150/2850) maps to the seeded USB VAR1 slot.
             FilterPresetName: "VAR1",
-            FilterAdvancedPaneOpen: filterPresetStore?.GetAdvancedPaneOpen() ?? false);
+            FilterAdvancedPaneOpen: filterPresetStore?.GetAdvancedPaneOpen() ?? false,
+            // PS persisted fields (or DTO defaults when not persisted yet).
+            // PsEnabled NOT persisted — always starts off each session.
+            PsAuto: ps?.Auto ?? true,
+            PsPtol: ps?.Ptol ?? false,
+            PsAutoAttenuate: ps?.AutoAttenuate ?? true,
+            PsMoxDelaySec: ps?.MoxDelaySec ?? 0.2,
+            PsLoopDelaySec: ps?.LoopDelaySec ?? 0.0,
+            PsAmpDelayNs: ps?.AmpDelayNs ?? 150.0,
+            PsIntsSpiPreset: ps?.IntsSpiPreset ?? "16/256");
     }
 
     // Ribbon-visibility setter — frontend toggles via REST, server broadcasts
@@ -679,6 +696,117 @@ public sealed class RadioService : IDisposable
         _dspSettingsStore.Upsert(cfg);
 
         return Snapshot();
+    }
+
+    // ---------------- PureSignal ----------------
+    // SetPs flips master arm and cal-mode in a single mutate so the engine
+    // sees a consistent state when DspPipelineService.OnRadioStateChanged
+    // fires.
+    public StateDto SetPs(PsControlSetRequest req)
+    {
+        ArgumentNullException.ThrowIfNull(req);
+        Mutate(s => s with
+        {
+            PsEnabled = req.Enabled,
+            PsAuto = req.Auto,
+            PsSingle = req.Single,
+        });
+        return Snapshot();
+    }
+
+    public StateDto SetPsAdvanced(PsAdvancedSetRequest req)
+    {
+        ArgumentNullException.ThrowIfNull(req);
+        Mutate(s => s with
+        {
+            PsPtol = req.Ptol ?? s.PsPtol,
+            PsAutoAttenuate = req.AutoAttenuate ?? s.PsAutoAttenuate,
+            PsMoxDelaySec = req.MoxDelaySec ?? s.PsMoxDelaySec,
+            PsLoopDelaySec = req.LoopDelaySec ?? s.PsLoopDelaySec,
+            PsAmpDelayNs = req.AmpDelayNs ?? s.PsAmpDelayNs,
+            PsHwPeak = req.HwPeak ?? s.PsHwPeak,
+            PsIntsSpiPreset = req.IntsSpiPreset ?? s.PsIntsSpiPreset,
+        });
+        // Persist the new tuning.
+        var snap = Snapshot();
+        _psStore?.Upsert(new PsSettingsEntry
+        {
+            Auto = snap.PsAuto,
+            Ptol = snap.PsPtol,
+            AutoAttenuate = snap.PsAutoAttenuate,
+            MoxDelaySec = snap.PsMoxDelaySec,
+            LoopDelaySec = snap.PsLoopDelaySec,
+            AmpDelayNs = snap.PsAmpDelayNs,
+            IntsSpiPreset = snap.PsIntsSpiPreset,
+        });
+        return snap;
+    }
+
+    public StateDto SetTwoTone(TwoToneSetRequest req)
+    {
+        ArgumentNullException.ThrowIfNull(req);
+        Mutate(s => s with
+        {
+            TwoToneEnabled = req.Enabled,
+            TwoToneFreq1 = req.Freq1 ?? s.TwoToneFreq1,
+            TwoToneFreq2 = req.Freq2 ?? s.TwoToneFreq2,
+            TwoToneMag = req.Mag ?? s.TwoToneMag,
+        });
+        return Snapshot();
+    }
+
+    // Update the live state to track PS read-back from the engine. Called by
+    // TxMetersService at 10 Hz while PS is armed.
+    public void UpdatePsLiveReadout(double feedbackLevel, byte calState, bool correcting)
+    {
+        Mutate(s => s with
+        {
+            PsFeedbackLevel = feedbackLevel,
+            PsCalState = calState,
+            PsCorrecting = correcting,
+        });
+    }
+
+    /// <summary>
+    /// Resolves the operator-correct PS hardware-peak default for the given
+    /// protocol + board kind. Sources:
+    ///   - P1 Hermes / ANAN-10/100/100D/200D / Hermes-II / 10E / 100B → 0.4072
+    ///   - P2 OrionMkII (G2 / Saturn) → 0.6121
+    ///   - P2 ANAN-7000 / 8000 (default P2) → 0.2899
+    ///   - HermesLite2 (either protocol) → 0.233 (MI0BOT special, but only if
+    ///     someone connects an HL2 — Brian's Hermes is original, not HL2)
+    /// Source authority: Thetis clsHardwareSpecific.cs:295-318 +
+    /// pihpsdr transmitter.c:1166-1179 NEW_DEVICE_SATURN.
+    /// </summary>
+    public static double ResolvePsHwPeak(bool isProtocol2, HpsdrBoardKind board) =>
+        // Per-protocol switch shaped so the P1 follow-up (TODO(ps-p1)) can
+        // wire HW-peak per-board too. P1 today is gated off in the frontend
+        // but the engine still receives the right number on connect — keeps
+        // Synthetic + tests deterministic.
+        (isProtocol2, board) switch
+        {
+            // TODO(ps-p1): P1 path is deferred — only P2 is wired through to
+            // Protocol2Client.SetPsFeedbackEnabled and the feedback pump.
+            (false, HpsdrBoardKind.HermesLite2)              => 0.233,
+            (false, _)                                        => 0.4072,
+            (true,  HpsdrBoardKind.OrionMkII)                 => 0.6121,
+            (true,  HpsdrBoardKind.HermesLite2)               => 0.233,
+            (true,  _)                                        => 0.2899,
+        };
+
+    /// <summary>
+    /// Apply a per-radio PS hardware-peak default to the StateDto. Called by
+    /// DspPipelineService after a successful connect (P1 or P2) so the
+    /// engine sees the correct curve scale before the operator arms PS.
+    /// Doesn't fire StateChanged unless the value actually moves.
+    /// </summary>
+    public void ApplyPsHwPeakForConnection(bool isProtocol2, HpsdrBoardKind board)
+    {
+        double peak = ResolvePsHwPeak(isProtocol2, board);
+        Mutate(s => s.PsHwPeak == peak ? s : s with { PsHwPeak = peak });
+        _log.LogInformation(
+            "radio.applyPsHwPeak proto={Proto} board={Board} peak={Peak:F4}",
+            isProtocol2 ? "P2" : "P1", board, peak);
     }
 
     public StateDto SetZoom(int level)

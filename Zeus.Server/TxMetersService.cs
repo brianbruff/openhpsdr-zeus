@@ -107,6 +107,7 @@ public sealed class TxMetersService : BackgroundService
     private const float PaTempMaxC = 125f;
 
     private readonly StreamingHub _hub;
+    private readonly RadioService _radio;
     private readonly TxService _tx;
     private readonly DspPipelineService _pipe;
     private readonly ILogger<TxMetersService> _log;
@@ -131,6 +132,7 @@ public sealed class TxMetersService : BackgroundService
     public TxMetersService(StreamingHub hub, RadioService radio, TxService tx, DspPipelineService pipe, ILogger<TxMetersService> log)
     {
         _hub = hub;
+        _radio = radio;
         _tx = tx;
         _pipe = pipe;
         _log = log;
@@ -302,6 +304,28 @@ public sealed class TxMetersService : BackgroundService
                 }
 
                 _hub.Broadcast(frame);
+
+                // PureSignal stage meters — broadcast only while PsEnabled is
+                // armed so idle wire stays quiet. The engine returns
+                // `PsStageMeters.Silent` when PS is off, so we double-gate on
+                // both the StateDto bit and the engine view to avoid emitting
+                // a frame between the operator arming PS and the engine
+                // applying it.
+                var snap = _radio.Snapshot();
+                if (snap.PsEnabled && _pipe.CurrentEngine is IDspEngine ps)
+                {
+                    var psm = ps.GetPsStageMeters();
+                    var psFrame = new PsMetersFrame(
+                        FeedbackLevel: psm.FeedbackLevel,
+                        CorrectionDb: psm.CorrectionDb,
+                        CalState: psm.CalState,
+                        Correcting: psm.Correcting,
+                        MaxTxEnvelope: psm.MaxTxEnvelope);
+                    _hub.Broadcast(psFrame);
+                    // Mirror the live read-out into the StateDto so REST/state
+                    // pollers see it too — same pattern PA/Mic meters use.
+                    _radio.UpdatePsLiveReadout(psm.FeedbackLevel, psm.CalState, psm.Correcting);
+                }
 
                 // PA temperature broadcast — 2 Hz always, throttled against
                 // wall-clock so the 10 Hz MOX loop emits it every 5th tick

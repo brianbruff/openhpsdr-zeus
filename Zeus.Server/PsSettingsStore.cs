@@ -1,0 +1,96 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF),
+//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//
+// This program is free software: you can redistribute it and/or modify it
+// under the terms of the GNU General Public License as published by the
+// Free Software Foundation, either version 2 of the License, or (at your
+// option) any later version. See the LICENSE file at the root of this
+// repository for the full text, or https://www.gnu.org/licenses/.
+//
+// See ATTRIBUTIONS.md at the repository root for the full provenance
+// statement and per-component attribution.
+
+using LiteDB;
+
+namespace Zeus.Server;
+
+// PureSignal settings persistence. Stores the operator's calibration tuning
+// (timing delays, ints/spi preset, ptol mode, auto-attenuate) so it survives
+// server restarts. Shares zeus-prefs.db with DspSettingsStore.
+//
+// Deliberately does NOT persist `PsEnabled` (the master arm) or `PsAuto` /
+// `PsSingle` (cal mode) — these reset to safe defaults each session. Same
+// pattern as MOX / TUN: arming PS is an operator action, never an automatic
+// "resume what we did last time" behaviour. PsHwPeak isn't persisted either
+// because RadioService re-derives it per-radio at connect time.
+public sealed class PsSettingsStore : IDisposable
+{
+    private readonly LiteDatabase _db;
+    private readonly ILiteCollection<PsSettingsEntry> _entries;
+    private readonly ILogger<PsSettingsStore> _log;
+
+    public PsSettingsStore(ILogger<PsSettingsStore> log)
+    {
+        _log = log;
+        var dbPath = GetDatabasePath();
+
+        var dir = Path.GetDirectoryName(dbPath);
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            Directory.CreateDirectory(dir);
+
+        _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
+        _entries = _db.GetCollection<PsSettingsEntry>("ps_settings");
+        _entries.EnsureIndex(x => x.ProfileId, unique: true);
+
+        _log.LogInformation("PsSettingsStore initialized at {Path}", dbPath);
+    }
+
+    public PsSettingsEntry? Get(string profileId = "default")
+        => _entries.FindOne(x => x.ProfileId == profileId);
+
+    public void Upsert(PsSettingsEntry entry, string profileId = "default")
+    {
+        entry.ProfileId = profileId;
+        entry.UpdatedUtc = DateTime.UtcNow;
+        var existing = _entries.FindOne(x => x.ProfileId == profileId);
+        if (existing is null)
+        {
+            _entries.Insert(entry);
+        }
+        else
+        {
+            entry.Id = existing.Id;
+            _entries.Update(entry);
+        }
+    }
+
+    public void Dispose() => _db.Dispose();
+
+    private static string GetDatabasePath()
+    {
+        var appDataDir = Environment.GetFolderPath(
+            Environment.SpecialFolder.LocalApplicationData,
+            Environment.SpecialFolderOption.Create);
+        return Path.Combine(appDataDir, "Zeus", "zeus-prefs.db");
+    }
+}
+
+public sealed class PsSettingsEntry
+{
+    public int Id { get; set; }
+    public string ProfileId { get; set; } = string.Empty;
+    // Cal-mode default — Auto = continuous adapt. Persisted because operators
+    // who prefer single-shot calibration (and run TwoTone manually) want that
+    // selection to stick across sessions.
+    public bool Auto { get; set; } = true;
+    public bool Ptol { get; set; }
+    public bool AutoAttenuate { get; set; } = true;
+    public double MoxDelaySec { get; set; } = 0.2;
+    public double LoopDelaySec { get; set; } = 0.0;
+    public double AmpDelayNs { get; set; } = 150.0;
+    public string IntsSpiPreset { get; set; } = "16/256";
+    public DateTime UpdatedUtc { get; set; }
+}

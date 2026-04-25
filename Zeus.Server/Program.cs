@@ -128,6 +128,7 @@ builder.Services.AddSingleton<LayoutStore>();
 builder.Services.AddSingleton<DspSettingsStore>();
 builder.Services.AddSingleton<PaSettingsStore>();
 builder.Services.AddSingleton<PreferredRadioStore>();
+builder.Services.AddSingleton<PsSettingsStore>();
 builder.Services.AddSingleton<FilterPresetStore>();
 builder.Services.AddSingleton<QrzService>();
 builder.Services.AddSingleton<LogService>();
@@ -534,6 +535,74 @@ app.MapPost("/api/tx/tune-drive", (TuneDriveSetRequest req, RadioService r) =>
         return Results.BadRequest(new { error = "percent must be 0..100" });
     r.SetTuneDrive(req.Percent);
     return Results.Ok(new { tunePercent = req.Percent });
+});
+
+// Two-tone test generator (TXA PostGen mode=1). Protocol-agnostic — works
+// on both P1 and P2 because it only touches WDSP TXA, not the wire format.
+app.MapPost("/api/tx/twotone", (TwoToneSetRequest req, RadioService r) =>
+{
+    log.LogInformation(
+        "api.tx.twotone enabled={On} f1={F1} f2={F2} mag={Mag}",
+        req.Enabled, req.Freq1, req.Freq2, req.Mag);
+    if (req.Mag is double m && (m < 0.0 || m > 1.0 || double.IsNaN(m)))
+        return Results.BadRequest(new { error = "mag must be 0..1" });
+    if (req.Freq1 is double f1 && (f1 < 50.0 || f1 > 5000.0 || double.IsNaN(f1)))
+        return Results.BadRequest(new { error = "freq1 must be 50..5000 Hz" });
+    if (req.Freq2 is double f2 && (f2 < 50.0 || f2 > 5000.0 || double.IsNaN(f2)))
+        return Results.BadRequest(new { error = "freq2 must be 50..5000 Hz" });
+    return Results.Ok(r.SetTwoTone(req));
+});
+
+// PureSignal master arm + cal-mode. P1 is gated off in the frontend in v1
+// because the Protocol1Client wire-format work for PS isn't done yet, but
+// the server endpoint stays open — RadioService.SetPs sets the StateDto bit
+// and the engine receives SetPsEnabled either way; only the radio-side
+// feedback path is P2-only. See hermes.md / TODO(ps-p1).
+app.MapPost("/api/tx/ps", (PsControlSetRequest req, RadioService r) =>
+{
+    log.LogInformation(
+        "api.tx.ps enabled={On} auto={Auto} single={Single}",
+        req.Enabled, req.Auto, req.Single);
+    return Results.Ok(r.SetPs(req));
+});
+
+app.MapPost("/api/tx/ps/advanced", (PsAdvancedSetRequest req, RadioService r) =>
+{
+    if (req.HwPeak is double p && (p <= 0.0 || p > 2.0 || double.IsNaN(p)))
+        return Results.BadRequest(new { error = "hwPeak must be in (0, 2]" });
+    if (req.MoxDelaySec is double mox && (mox < 0.0 || mox > 10.0 || double.IsNaN(mox)))
+        return Results.BadRequest(new { error = "moxDelaySec must be 0..10" });
+    if (req.LoopDelaySec is double loop && (loop < 0.0 || loop > 100.0 || double.IsNaN(loop)))
+        return Results.BadRequest(new { error = "loopDelaySec must be 0..100" });
+    if (req.AmpDelayNs is double amp && (amp < 0.0 || amp > 25e6 || double.IsNaN(amp)))
+        return Results.BadRequest(new { error = "ampDelayNs must be 0..25e6" });
+    log.LogInformation("api.tx.ps.advanced");
+    return Results.Ok(r.SetPsAdvanced(req));
+});
+
+app.MapPost("/api/tx/ps/reset", (DspPipelineService pipe) =>
+{
+    log.LogInformation("api.tx.ps.reset");
+    pipe.CurrentEngine?.ResetPs();
+    return Results.Ok(new { reset = true });
+});
+
+app.MapPost("/api/tx/ps/save", (PsSaveRequest req, DspPipelineService pipe) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Filename))
+        return Results.BadRequest(new { error = "filename required" });
+    log.LogInformation("api.tx.ps.save filename={Filename}", req.Filename);
+    pipe.CurrentEngine?.SavePsCorrection(req.Filename);
+    return Results.Ok(new { saved = req.Filename });
+});
+
+app.MapPost("/api/tx/ps/restore", (PsRestoreRequest req, DspPipelineService pipe) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Filename))
+        return Results.BadRequest(new { error = "filename required" });
+    log.LogInformation("api.tx.ps.restore filename={Filename}", req.Filename);
+    pipe.CurrentEngine?.RestorePsCorrection(req.Filename);
+    return Results.Ok(new { restored = req.Filename });
 });
 
 app.MapPost("/api/rx/nr", (NrSetRequest req, RadioService r) =>

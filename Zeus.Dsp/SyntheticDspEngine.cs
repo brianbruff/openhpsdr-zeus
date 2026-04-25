@@ -155,6 +155,23 @@ public sealed class SyntheticDspEngine : IDspEngine
     public void SetTxTune(bool on) { }
     public TxStageMeters GetTxStageMeters() => TxStageMeters.Silent;
 
+    // TwoTone — no PostGen, so no-op on synthetic.
+    public void SetTwoTone(bool on, double freq1, double freq2, double mag) { }
+
+    // PureSignal — synthetic has no TXA / calcc / iqc. All setters and the
+    // feedback pump are no-ops; GetPsStageMeters returns the silent record.
+    public void SetPsEnabled(bool enabled) { }
+    public void SetPsControl(bool autoCal, bool singleCal) { }
+    public void SetPsAdvanced(bool ptol, double moxDelaySec, double loopDelaySec,
+                              double ampDelayNs, double hwPeak, int ints, int spi) { }
+    public void SetPsHwPeak(double hwPeak) { }
+    public void FeedPsFeedbackBlock(ReadOnlySpan<float> txI, ReadOnlySpan<float> txQ,
+                                    ReadOnlySpan<float> rxI, ReadOnlySpan<float> rxQ) { }
+    public PsStageMeters GetPsStageMeters() => PsStageMeters.Silent;
+    public void ResetPs() { }
+    public void SavePsCorrection(string path) { }
+    public void RestorePsCorrection(string path) { }
+
     // Synthetic has no TX analyzer; the TX panadapter stays on the RX trace.
     // Returning false tells DspPipelineService.Tick to leave the display alone
     // while MOX is on, matching the existing "no new data" semantics.

@@ -171,6 +171,18 @@ public class MicGainEndpointTests : IClassFixture<MicGainEndpointTests.Factory>
         public int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved) => 0;
         public void SetTxTune(bool on) { }
         public TxStageMeters GetTxStageMeters() => TxStageMeters.Silent;
+        public void SetTwoTone(bool on, double freq1, double freq2, double mag) { }
+        public void SetPsEnabled(bool enabled) { }
+        public void SetPsControl(bool autoCal, bool singleCal) { }
+        public void SetPsAdvanced(bool ptol, double moxDelaySec, double loopDelaySec,
+                                  double ampDelayNs, double hwPeak, int ints, int spi) { }
+        public void SetPsHwPeak(double hwPeak) { }
+        public void FeedPsFeedbackBlock(ReadOnlySpan<float> txI, ReadOnlySpan<float> txQ,
+                                        ReadOnlySpan<float> rxI, ReadOnlySpan<float> rxQ) { }
+        public PsStageMeters GetPsStageMeters() => PsStageMeters.Silent;
+        public void ResetPs() { }
+        public void SavePsCorrection(string path) { }
+        public void RestorePsCorrection(string path) { }
         public void Dispose() { }
     }
 

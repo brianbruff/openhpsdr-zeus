@@ -194,6 +194,24 @@ public sealed class WdspDspEngine : IDspEngine
     private int _txDispRxSampleRateHz;
     private bool _txDispAlive;
 
+    // PureSignal state. _psLock serializes the WDSP PS setters (which mutate
+    // shared state inside calcc.c) and FeedPsFeedbackBlock. _psInfoBuf is
+    // pinned once and reused on every GetPSInfo call.
+    private readonly object _psLock = new();
+    private bool _psEnabled;
+    private bool _psAuto = true;
+    private bool _psSingle;
+    private double _psHwPeak = 0.4072;   // P1 default; RadioService overrides at connect
+    private int _psInts = 16;
+    private int _psSpi = 256;
+    private double _psMoxDelaySec = 0.2;
+    private double _psLoopDelaySec = 0.0;
+    private double _psAmpDelayNs = 150.0;
+    private bool _psPtol;                // false = strict 0.4 ; true = relax 0.8
+    private const int PsFeedbackBlockSize = 1024;
+    private readonly int[] _psInfoBuf = new int[16];
+    private double _psMaxTxEnvelope;
+
     public WdspDspEngine(ILogger<WdspDspEngine>? logger = null)
     {
         _log = logger ?? NullLogger<WdspDspEngine>.Instance;
@@ -856,6 +874,33 @@ public sealed class WdspDspEngine : IDspEngine
 
             _txaChannelId = id;
 
+            // PureSignal seed. The TXA channel already owns `calcc.p` and
+            // `iqc.p0/p1` as a side effect of create_txa() (TXA.c:405,424);
+            // these setters tune the WDSP state machine to safe defaults so
+            // arming PS later just needs SetPSRunCal(1) + SetPSControl mode-on.
+            //
+            // HW-peak is *not* set here — RadioService.SetPsHwPeak runs after
+            // discovery so the right value (P1=0.4072 / G2=0.6121 / ANAN-7000
+            // =0.2899) is applied per actual connected radio. The 0.4072 in
+            // `_psHwPeak` is just a neutral default.
+            //
+            // See `docs/lessons/wdsp-init-gotchas.md`: setters before state-
+            // flip is the load-bearing pattern. PS setters are independent of
+            // `SetChannelState`, so they're safe to run unconditionally at
+            // TXA open time.
+            NativeMethods.SetPSFeedbackRate(id, 192_000);
+            NativeMethods.SetPSPtol(id, _psPtol ? 0.8 : 0.4);
+            NativeMethods.SetPSPinMode(id, 0);
+            NativeMethods.SetPSMapMode(id, 0);
+            NativeMethods.SetPSStabilize(id, 0);
+            NativeMethods.SetPSIntsAndSpi(id, _psInts, _psSpi);
+            NativeMethods.SetPSMoxDelay(id, _psMoxDelaySec);
+            NativeMethods.SetPSLoopDelay(id, _psLoopDelaySec);
+            _ = NativeMethods.SetPSTXDelay(id, _psAmpDelayNs * 1e-9);
+            NativeMethods.SetPSHWPeak(id, _psHwPeak);
+            NativeMethods.SetPSControl(id, 1, 0, 0, 0);   // RESET state
+            // SetPSRunCal stays 0 until the operator arms PS.
+
             // TX panadapter analyzer — issue #81. Match the first RXA's pixel
             // width and zoom so the TX trace renders into the same widget
             // without a span change on MOX. If no RXA exists yet (shouldn't
@@ -954,9 +999,17 @@ public sealed class WdspDspEngine : IDspEngine
             txaPrior = NativeMethods.SetChannelState(txaId, 1, 0);
             // No priming: Thetis (console.cs:31375) does not prime — bfo=1
             // semantics already make the first fexchange wait for real output.
+            // Tell PureSignal calcc that MOX is now true so the LCOLLECT phase
+            // can advance once feedback IQ starts flowing. Safe to call even
+            // when PS isn't armed — it just toggles a flag inside calcc.
+            NativeMethods.SetPSMox(txaId, 1);
         }
         else
         {
+            // Drop the PS MOX flag *before* the TXA state-flip so the iqc
+            // stage sees "no longer transmitting" while the chain is still
+            // alive — same ordering pihpsdr uses (transmitter.c:2422-2444).
+            NativeMethods.SetPSMox(txaId, 0);
             txaPrior = NativeMethods.SetChannelState(txaId, 0, 1);
             rxaPrior = NativeMethods.SetChannelState(rxaId, 1, 0);
             // Unkeying: clear the stage-meter snapshot so UI doesn't latch the
@@ -1078,6 +1131,299 @@ public sealed class WdspDspEngine : IDspEngine
             NativeMethods.SetTXABandpassFreqs(txa, lowHz, highHz);
         }
         _log.LogInformation("wdsp.setTxFilter low={Low} high={High}", lowHz, highHz);
+    }
+
+    public void SetTwoTone(bool on, double freq1, double freq2, double mag)
+    {
+        if (_disposed != 0) return;
+        // Clamp to safe ranges. Audio passband 50..5000; mag 0..1 linear.
+        if (freq1 < 50.0) freq1 = 50.0;
+        if (freq1 > 5000.0) freq1 = 5000.0;
+        if (freq2 < 50.0) freq2 = 50.0;
+        if (freq2 > 5000.0) freq2 = 5000.0;
+        if (mag < 0.0) mag = 0.0;
+        if (mag > 1.0) mag = 1.0;
+        lock (_txaLock)
+        {
+            if (_txaChannelId is not int txa) return;
+            if (on)
+            {
+                // PostGen mode=1 = two-tone summed (gen.c:221-241).
+                NativeMethods.SetTXAPostGenMode(txa, 1);
+                NativeMethods.SetTXAPostGenTTFreq(txa, freq1, freq2);
+                NativeMethods.SetTXAPostGenTTMag(txa, mag, mag);
+                NativeMethods.SetTXAPostGenRun(txa, 1);
+                // Same Leveler-off pattern SetTxTune uses; the test signal
+                // doesn't need voice-energy AGC and Leveler can pump on the
+                // discrete tones.
+                NativeMethods.SetTXALevelerSt(txa, 0);
+            }
+            else
+            {
+                NativeMethods.SetTXAPostGenRun(txa, 0);
+                NativeMethods.SetTXALevelerSt(txa, 1);
+            }
+        }
+        _log.LogInformation(
+            "wdsp.setTwoTone on={On} f1={F1} f2={F2} mag={Mag:F3}",
+            on, freq1, freq2, mag);
+    }
+
+    public void SetPsHwPeak(double hwPeak)
+    {
+        if (_disposed != 0) return;
+        if (hwPeak <= 0.0 || hwPeak > 2.0) return;   // bogus value, ignore
+        lock (_psLock)
+        {
+            _psHwPeak = hwPeak;
+            int? txa;
+            lock (_txaLock) txa = _txaChannelId;
+            if (txa is int id)
+            {
+                NativeMethods.SetPSHWPeak(id, hwPeak);
+            }
+        }
+        _log.LogInformation("wdsp.setPsHwPeak peak={Peak:F4}", hwPeak);
+    }
+
+    public void SetPsControl(bool autoCal, bool singleCal)
+    {
+        if (_disposed != 0) return;
+        lock (_psLock)
+        {
+            _psAuto = autoCal;
+            _psSingle = singleCal;
+            int? txa;
+            lock (_txaLock) txa = _txaChannelId;
+            if (txa is not int id) return;
+            // (reset, mancal, automode, turnon) — see Thetis PSForm.cs.
+            // Single takes precedence over auto when both true.
+            int reset = 0;
+            int mancal = singleCal ? 1 : 0;
+            int automode = (autoCal && !singleCal) ? 1 : 0;
+            int turnon = 0;
+            if (!autoCal && !singleCal)
+            {
+                // Both off → reset / idle.
+                reset = 1;
+            }
+            NativeMethods.SetPSControl(id, reset, mancal, automode, turnon);
+        }
+        _log.LogInformation("wdsp.setPsControl auto={Auto} single={Single}", autoCal, singleCal);
+    }
+
+    public void SetPsAdvanced(bool ptol, double moxDelaySec, double loopDelaySec,
+                              double ampDelayNs, double hwPeak, int ints, int spi)
+    {
+        if (_disposed != 0) return;
+        lock (_psLock)
+        {
+            int? txa;
+            lock (_txaLock) txa = _txaChannelId;
+            int id = txa ?? -1;
+
+            if (ptol != _psPtol)
+            {
+                _psPtol = ptol;
+                if (id >= 0) NativeMethods.SetPSPtol(id, ptol ? 0.8 : 0.4);
+            }
+            if (moxDelaySec != _psMoxDelaySec)
+            {
+                _psMoxDelaySec = moxDelaySec;
+                if (id >= 0) NativeMethods.SetPSMoxDelay(id, moxDelaySec);
+            }
+            if (loopDelaySec != _psLoopDelaySec)
+            {
+                _psLoopDelaySec = loopDelaySec;
+                if (id >= 0) NativeMethods.SetPSLoopDelay(id, loopDelaySec);
+            }
+            if (ampDelayNs != _psAmpDelayNs)
+            {
+                _psAmpDelayNs = ampDelayNs;
+                if (id >= 0) _ = NativeMethods.SetPSTXDelay(id, ampDelayNs * 1e-9);
+            }
+            if (hwPeak > 0.0 && hwPeak <= 2.0 && hwPeak != _psHwPeak)
+            {
+                _psHwPeak = hwPeak;
+                if (id >= 0) NativeMethods.SetPSHWPeak(id, hwPeak);
+            }
+            // Only call SetPSIntsAndSpi when the values actually changed —
+            // it's a heavy restart inside calcc.c (allocates new buffers).
+            if (ints > 0 && spi > 0 && (ints != _psInts || spi != _psSpi))
+            {
+                _psInts = ints;
+                _psSpi = spi;
+                if (id >= 0) NativeMethods.SetPSIntsAndSpi(id, ints, spi);
+            }
+        }
+        _log.LogInformation(
+            "wdsp.setPsAdvanced ptol={Ptol} mox={Mox:F3}s loop={Loop:F3}s amp={Amp:F1}ns peak={Peak:F4} ints={Ints} spi={Spi}",
+            ptol, moxDelaySec, loopDelaySec, ampDelayNs, hwPeak, ints, spi);
+    }
+
+    public void SetPsEnabled(bool enabled)
+    {
+        if (_disposed != 0) return;
+        lock (_psLock)
+        {
+            int? txa;
+            lock (_txaLock) txa = _txaChannelId;
+            if (txa is not int id)
+            {
+                _psEnabled = false;
+                return;
+            }
+
+            if (enabled)
+            {
+                _psEnabled = true;
+                NativeMethods.SetPSRunCal(id, 1);
+                int mancal = _psSingle ? 1 : 0;
+                int automode = (_psAuto && !_psSingle) ? 1 : 0;
+                NativeMethods.SetPSControl(id, 0, mancal, automode, 0);
+            }
+            else
+            {
+                _psEnabled = false;
+                // pihpsdr shutdown gotcha (transmitter.c:2422-2444): when
+                // disabling PS while NOT keyed, push 7 zero-IQ blocks through
+                // psccF so the calcc state machine advances to LRESET cleanly
+                // and doesn't latch a stale curve in iqc on re-arm.
+                var zeros = new float[PsFeedbackBlockSize];
+                for (int i = 0; i < 7; i++)
+                {
+                    NativeMethods.psccF(id, PsFeedbackBlockSize, zeros, zeros, zeros, zeros, 0, 0);
+                }
+                NativeMethods.SetPSRunCal(id, 0);
+                NativeMethods.SetPSControl(id, 1, 0, 0, 0);
+            }
+        }
+        _log.LogInformation("wdsp.setPsEnabled enabled={Enabled}", enabled);
+    }
+
+    public void FeedPsFeedbackBlock(ReadOnlySpan<float> txI, ReadOnlySpan<float> txQ,
+                                    ReadOnlySpan<float> rxI, ReadOnlySpan<float> rxQ)
+    {
+        if (_disposed != 0) return;
+        if (txI.Length != PsFeedbackBlockSize ||
+            txQ.Length != PsFeedbackBlockSize ||
+            rxI.Length != PsFeedbackBlockSize ||
+            rxQ.Length != PsFeedbackBlockSize)
+        {
+            // Don't throw — log once and drop, so a transient sizing mismatch
+            // upstream (DDC re-config edge) doesn't crash the pipeline.
+            _log.LogWarning("wdsp.feedPsFeedback block sizes mismatch; expected {Expected}", PsFeedbackBlockSize);
+            return;
+        }
+        int? txa;
+        lock (_txaLock) txa = _txaChannelId;
+        if (txa is not int id) return;
+
+        // psccF takes float[] (not Span). Allocate fresh — caller may reuse
+        // its buffers immediately after this returns.
+        var bufTxI = txI.ToArray();
+        var bufTxQ = txQ.ToArray();
+        var bufRxI = rxI.ToArray();
+        var bufRxQ = rxQ.ToArray();
+
+        lock (_psLock)
+        {
+            // mox/solidmox args are ignored by psccF (calcc.c:846); SetPSMox
+            // is the source of truth and is driven from SetMox above.
+            NativeMethods.psccF(id, PsFeedbackBlockSize, bufTxI, bufTxQ, bufRxI, bufRxQ, 0, 0);
+        }
+    }
+
+    public PsStageMeters GetPsStageMeters()
+    {
+        if (_disposed != 0) return PsStageMeters.Silent;
+        int? txa;
+        lock (_txaLock) txa = _txaChannelId;
+        if (txa is not int id) return PsStageMeters.Silent;
+        // Skip the GetPSInfo P/Invoke when PS isn't armed — saves a per-tick
+        // jaunt into the native side and matches the wire-quiet contract for
+        // the PsMeters frame.
+        if (!_psEnabled) return PsStageMeters.Silent;
+
+        // Pin the int[16] buffer for the duration of the GetPSInfo call so
+        // WDSP can write into it. Re-using the same buffer between calls is
+        // fine because GetPSInfo writes synchronously.
+        int feedbackRaw;
+        byte calState;
+        bool correcting;
+        double maxTx;
+        lock (_psLock)
+        {
+            unsafe
+            {
+                fixed (int* p = _psInfoBuf)
+                {
+                    NativeMethods.GetPSInfo(id, (IntPtr)p);
+                }
+            }
+            feedbackRaw = _psInfoBuf[4];
+            correcting = _psInfoBuf[14] != 0;
+            calState = (byte)Math.Clamp(_psInfoBuf[15], 0, 255);
+            NativeMethods.GetPSMaxTX(id, out maxTx);
+            _psMaxTxEnvelope = maxTx;
+        }
+
+        // CorrectionDb: until we tap GetPSDisp's curve, derive a coarse
+        // proxy as 20*log10(feedbackLevel/256+eps). Replace with a real RMS
+        // when we wire GetPSDisp. Safe: callers treat <=−200 as "bypassed".
+        float feedback = feedbackRaw;
+        float depthDb = correcting
+            ? (float)(20.0 * Math.Log10(Math.Max(feedback, 1e-3) / 256.0))
+            : 0f;
+        return new PsStageMeters(
+            FeedbackLevel: feedback,
+            CalState: calState,
+            Correcting: correcting,
+            CorrectionDb: depthDb,
+            MaxTxEnvelope: (float)maxTx);
+    }
+
+    public void ResetPs()
+    {
+        if (_disposed != 0) return;
+        int? txa;
+        lock (_txaLock) txa = _txaChannelId;
+        if (txa is not int id) return;
+        lock (_psLock)
+        {
+            NativeMethods.SetPSControl(id, 1, 0, 0, 0);
+        }
+        _log.LogInformation("wdsp.resetPs");
+    }
+
+    public void SavePsCorrection(string path)
+    {
+        if (_disposed != 0) return;
+        if (string.IsNullOrWhiteSpace(path)) return;
+        int? txa;
+        lock (_txaLock) txa = _txaChannelId;
+        if (txa is not int id) return;
+        lock (_psLock)
+        {
+            NativeMethods.PSSaveCorr(id, path);
+        }
+        _log.LogInformation("wdsp.savePsCorrection path={Path}", path);
+    }
+
+    public void RestorePsCorrection(string path)
+    {
+        if (_disposed != 0) return;
+        if (string.IsNullOrWhiteSpace(path)) return;
+        int? txa;
+        lock (_txaLock) txa = _txaChannelId;
+        if (txa is not int id) return;
+        lock (_psLock)
+        {
+            NativeMethods.PSRestoreCorr(id, path);
+            // Restore-and-go pattern from Thetis PSForm.cs:982-1162: turnon=1
+            NativeMethods.SetPSControl(id, 0, 0, 0, 1);
+        }
+        _log.LogInformation("wdsp.restorePsCorrection path={Path}", path);
     }
 
     private DateTime _lastTxMeterLogUtc;

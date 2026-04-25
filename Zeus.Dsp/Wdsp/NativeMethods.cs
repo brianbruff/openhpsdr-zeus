@@ -582,6 +582,17 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetTXAPostGenToneFreq(int channel, double freq);
 
+    // Two-tone test generator (wdsp.h:590-591). PostGen mode=1 sums two
+    // tones at the modulator input. Standard PS calibration excitation —
+    // see Thetis PSForm.cs:935-940. Independent of TUN (mode=0).
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAPostGenTTMag(int channel, double mag1, double mag2);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXAPostGenTTFreq(int channel, double freq1, double freq2);
+
     // Pre-DSP generator (injected before the TX chain). pihpsdr transmitter.c
     // :1293-1296 explicitly disables PreGen on TXA open — WDSP's create_channel
     // doesn't guarantee mag=0/run=0, and a residual PreGen tone would appear
@@ -638,4 +649,91 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial IntPtr wisdom_get_status();
+
+    // -- PureSignal (predistortion). Lives inside the TXA channel via
+    //    create_calcc / create_iqc (TXA.c:405,424). Symbol set verified
+    //    against native/wdsp/wdsp.h. The mox/solidmox args to psccF are
+    //    documented as ignored — drive MOX state through SetPSMox instead
+    //    (calcc.c:846).
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSControl(int channel, int reset, int mancal, int automode, int turnon);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSRunCal(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSMox(int channel, int mox);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSFeedbackRate(int channel, int rate);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSHWPeak(int channel, double peak);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSPtol(int channel, double ptol);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSPinMode(int channel, int pin);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSMapMode(int channel, int map);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSStabilize(int channel, int stbl);
+
+    // SetPSIntsAndSpi is a heavy restart, not a setter (calcc.c:1132-1151).
+    // Only safe to call when not actively calibrating.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSIntsAndSpi(int channel, int ints, int spi);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSMoxDelay(int channel, double delay);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetPSLoopDelay(int channel, double delay);
+
+    // Returns the actual delay applied (clamped). pihpsdr stores the return.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial double SetPSTXDelay(int channel, double delay);
+
+    // info[16]: state-machine snapshot. Caller passes a pinned int[16].
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void GetPSInfo(int channel, IntPtr info);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void GetPSMaxTX(int channel, out double maxtx);
+
+    // pscc float variant (calcc.c:840). Feed paired TX-modulator IQ + RX
+    // feedback IQ. Block size is 1024 complex samples per pihpsdr's
+    // receiver.c:636. mox/solidmox are dead args — pass 0/0.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void psccF(int channel, int size,
+                                       float[] Itxbuff, float[] Qtxbuff,
+                                       float[] Irxbuff, float[] Qrxbuff,
+                                       int mox, int solidmox);
+
+    [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void PSSaveCorr(int channel, string filename);
+
+    [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void PSRestoreCorr(int channel, string filename);
 }

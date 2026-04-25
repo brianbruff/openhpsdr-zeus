@@ -309,6 +309,45 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetRXAEMNRpost2Rate(int channel, double tc);
 
+    // SBNR (NR4) — libspecbleach spectral-bleaching NR. Symbols defined in
+    // native/wdsp/sbnr.c with the float / int signatures shown here.
+    // IMPORTANT: requires libwdsp rebuild — Phase 1 of issue #79; the
+    // bundled binaries shipped today do NOT export these symbols, so any
+    // call here will fail with EntryPointNotFoundException at runtime.
+    // The engine guards SBNR-on against the missing library; tests that
+    // try to actually flip Sbnr Run=1 are [Skip]'d until Phase 1 lands.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRPosition(int channel, int position);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRreductionAmount(int channel, float amount);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRsmoothingFactor(int channel, float factor);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRwhiteningFactor(int channel, float factor);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRnoiseRescale(int channel, float factor);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRpostFilterThreshold(int channel, float threshold);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRnoiseScalingType(int channel, int noise_scaling_type);
+
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetRXASNBARun(int channel, int run);

@@ -501,12 +501,14 @@ public sealed class WdspDspEngine : IDspEngine
         {
             case NrMode.Anr:
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
+                TrySetSbnrRun(channelId, 0);
                 NativeMethods.SetRXAANRVals(channelId, NrDefaults.AnrTaps, NrDefaults.AnrDelay, NrDefaults.AnrGain, NrDefaults.AnrLeakage);
                 NativeMethods.SetRXAANRPosition(channelId, NrDefaults.Position);
                 NativeMethods.SetRXAANRRun(channelId, 1);
                 break;
             case NrMode.Emnr:
                 NativeMethods.SetRXAANRRun(channelId, 0);
+                TrySetSbnrRun(channelId, 0);
                 NativeMethods.SetRXAEMNRgainMethod(channelId, NrDefaults.EmnrGainMethod);
                 NativeMethods.SetRXAEMNRnpeMethod(channelId, NrDefaults.EmnrNpeMethod);
                 NativeMethods.SetRXAEMNRaeRun(channelId, NrDefaults.EmnrAeRun);
@@ -514,19 +516,28 @@ public sealed class WdspDspEngine : IDspEngine
                 // post2 comfort-noise injection. emnr.c:981–1023 generates a
                 // smoothed noise floor that masks residual EMNR warble — the
                 // psychoacoustic mechanism behind Thetis's noticeably smoother
-                // NR2 hiss. Configure params before flipping post2Run, then
-                // Run=1 below activates EMNR with post2 already armed.
-                NativeMethods.SetRXAEMNRpost2Factor(channelId, NrDefaults.EmnrPost2Factor);
-                NativeMethods.SetRXAEMNRpost2Nlevel(channelId, NrDefaults.EmnrPost2Nlevel);
-                NativeMethods.SetRXAEMNRpost2Rate(channelId, NrDefaults.EmnrPost2Rate);
-                NativeMethods.SetRXAEMNRpost2Taper(channelId, NrDefaults.EmnrPost2Taper);
-                NativeMethods.SetRXAEMNRpost2Run(channelId, NrDefaults.EmnrPost2Run);
+                // NR2 hiss. Operator-tunable values come from cfg; null falls
+                // back to the Thetis-derived NrDefaults baseline.
+                ApplyNr2Post2(channelId, cfg);
                 NativeMethods.SetRXAEMNRRun(channelId, 1);
+                break;
+            case NrMode.Sbnr:
+                // NR4 — libspecbleach spectral bleaching. Disable the other
+                // post-RXA NR paths first (mutual exclusion), then push the
+                // operator-tuned (or Thetis-default) parameters before flipping
+                // Run=1. Wrapped in TrySetSbnr* so a libwdsp build that
+                // pre-dates Phase 1 (no SBNR exports) leaves the channel in
+                // NR-off rather than crashing the worker.
+                NativeMethods.SetRXAANRRun(channelId, 0);
+                NativeMethods.SetRXAEMNRpost2Run(channelId, 0);
+                NativeMethods.SetRXAEMNRRun(channelId, 0);
+                ApplyNr4Sbnr(channelId, cfg);
                 break;
             default:
                 NativeMethods.SetRXAANRRun(channelId, 0);
                 NativeMethods.SetRXAEMNRpost2Run(channelId, 0);
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
+                TrySetSbnrRun(channelId, 0);
                 break;
         }
 
@@ -579,6 +590,55 @@ public sealed class WdspDspEngine : IDspEngine
             cfg.NbMode, scaledThreshold);
     }
 
+    // NR2 (EMNR) post2 comfort-noise tunables. Configures all five params
+    // before flipping post2Run so the post-processing stage starts coherent.
+    // Null fields fall back to NrDefaults so the operator's "leave it default"
+    // choice (cleared field) is honoured at write time without baking the
+    // current default into the persisted config.
+    private static void ApplyNr2Post2(int channelId, NrConfig cfg)
+    {
+        NativeMethods.SetRXAEMNRpost2Factor(channelId, cfg.EmnrPost2Factor ?? NrDefaults.EmnrPost2Factor);
+        NativeMethods.SetRXAEMNRpost2Nlevel(channelId, cfg.EmnrPost2Nlevel ?? NrDefaults.EmnrPost2Nlevel);
+        NativeMethods.SetRXAEMNRpost2Rate(channelId, cfg.EmnrPost2Rate ?? NrDefaults.EmnrPost2Rate);
+        NativeMethods.SetRXAEMNRpost2Taper(channelId, cfg.EmnrPost2Taper ?? NrDefaults.EmnrPost2Taper);
+        bool runOn = cfg.EmnrPost2Run ?? (NrDefaults.EmnrPost2Run != 0);
+        NativeMethods.SetRXAEMNRpost2Run(channelId, runOn ? 1 : 0);
+    }
+
+    // NR4 (SBNR / libspecbleach) parameter push + Run=1. Native setters take
+    // float; we downcast at the seam. Wrapped in TrySet* because a libwdsp
+    // built without Phase 1 of issue #79 will throw EntryPointNotFoundException
+    // here — the operator gets NR-off behaviour instead of a worker crash.
+    private void ApplyNr4Sbnr(int channelId, NrConfig cfg)
+    {
+        try
+        {
+            NativeMethods.SetRXASBNRPosition(channelId, cfg.Nr4Position ?? NrDefaults.Nr4Position);
+            NativeMethods.SetRXASBNRreductionAmount(channelId, (float)(cfg.Nr4ReductionAmount ?? NrDefaults.Nr4ReductionAmount));
+            NativeMethods.SetRXASBNRsmoothingFactor(channelId, (float)(cfg.Nr4SmoothingFactor ?? NrDefaults.Nr4SmoothingFactor));
+            NativeMethods.SetRXASBNRwhiteningFactor(channelId, (float)(cfg.Nr4WhiteningFactor ?? NrDefaults.Nr4WhiteningFactor));
+            NativeMethods.SetRXASBNRnoiseRescale(channelId, (float)(cfg.Nr4NoiseRescale ?? NrDefaults.Nr4NoiseRescale));
+            NativeMethods.SetRXASBNRpostFilterThreshold(channelId, (float)(cfg.Nr4PostFilterThreshold ?? NrDefaults.Nr4PostFilterThreshold));
+            NativeMethods.SetRXASBNRnoiseScalingType(channelId, cfg.Nr4NoiseScalingType ?? NrDefaults.Nr4NoiseScalingType);
+            NativeMethods.SetRXASBNRRun(channelId, 1);
+        }
+        catch (EntryPointNotFoundException ex)
+        {
+            _log.LogWarning(
+                "wdsp.sbnr.unavailable channel={Id} reason=\"libwdsp build does not export SBNR symbols (Phase 1 of issue #79 not yet shipped)\" detail={Msg}",
+                channelId, ex.Message);
+        }
+    }
+
+    // Pre-Phase-1-binary safe Run=0 — the only SBNR call we make outside the
+    // Sbnr arm. EntryPointNotFoundException here just means "the library
+    // doesn't have SBNR; nothing to turn off."
+    private void TrySetSbnrRun(int channelId, int run)
+    {
+        try { NativeMethods.SetRXASBNRRun(channelId, run); }
+        catch (EntryPointNotFoundException) { /* libwdsp pre-Phase-1; SBNR is a no-op */ }
+    }
+
     // Post-RXA NR defaults — sourced from Thetis setup.designer.cs + radio.cs.
     // UI-space scaling (gain × 1e-6, leakage × 1e-3) is already resolved: these
     // are the post-scale values WDSP actually receives. See docs/prd/10-noise-reduction.md.
@@ -607,6 +667,18 @@ public sealed class WdspDspEngine : IDspEngine
         public const double EmnrPost2Nlevel = 0.15;
         public const double EmnrPost2Rate = 5.0;
         public const int EmnrPost2Taper = 12;
+
+        // NR4 (SBNR / libspecbleach) defaults — sourced from Thetis radio.cs
+        // :2350-2462 (rx_nr4_* private fields). Native setters take float;
+        // we keep them as double here and downcast at the P/Invoke seam to
+        // match the rest of the contract surface.
+        public const double Nr4ReductionAmount = 10.0;
+        public const double Nr4SmoothingFactor = 0.0;
+        public const double Nr4WhiteningFactor = 0.0;
+        public const double Nr4NoiseRescale = 2.0;
+        public const double Nr4PostFilterThreshold = 0.0;
+        public const int Nr4NoiseScalingType = 0;
+        public const int Nr4Position = 1;
 
         // NB1/NB2 runtime-steady-state params — what Thetis actually runs with
         // once radio.cs's NB property setters have fired (tau=advtime=hangtime

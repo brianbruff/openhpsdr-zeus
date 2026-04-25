@@ -747,6 +747,44 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
+    // Right-click popover save for NR2 (EMNR) post2 tunables. Merges only
+    // the non-null fields onto the current NrConfig so the operator can edit
+    // a single knob without disturbing siblings, then re-pushes the whole
+    // block through SetNr to keep persistence and engine state in lock-step.
+    public StateDto SetNr2Post2(Nr2Post2ConfigSetRequest req)
+    {
+        ArgumentNullException.ThrowIfNull(req);
+        var current = Snapshot().Nr ?? new NrConfig();
+        var merged = current with
+        {
+            EmnrPost2Run = req.Post2Run ?? current.EmnrPost2Run,
+            EmnrPost2Factor = req.Post2Factor ?? current.EmnrPost2Factor,
+            EmnrPost2Nlevel = req.Post2Nlevel ?? current.EmnrPost2Nlevel,
+            EmnrPost2Rate = req.Post2Rate ?? current.EmnrPost2Rate,
+            EmnrPost2Taper = req.Post2Taper ?? current.EmnrPost2Taper,
+        };
+        return SetNr(merged);
+    }
+
+    // Right-click popover save for NR4 (SBNR) tunables — same merge-and-
+    // re-push pattern as SetNr2Post2.
+    public StateDto SetNr4(Nr4ConfigSetRequest req)
+    {
+        ArgumentNullException.ThrowIfNull(req);
+        var current = Snapshot().Nr ?? new NrConfig();
+        var merged = current with
+        {
+            Nr4ReductionAmount = req.ReductionAmount ?? current.Nr4ReductionAmount,
+            Nr4SmoothingFactor = req.SmoothingFactor ?? current.Nr4SmoothingFactor,
+            Nr4WhiteningFactor = req.WhiteningFactor ?? current.Nr4WhiteningFactor,
+            Nr4NoiseRescale = req.NoiseRescale ?? current.Nr4NoiseRescale,
+            Nr4PostFilterThreshold = req.PostFilterThreshold ?? current.Nr4PostFilterThreshold,
+            Nr4NoiseScalingType = req.NoiseScalingType ?? current.Nr4NoiseScalingType,
+            Nr4Position = req.Position ?? current.Nr4Position,
+        };
+        return SetNr(merged);
+    }
+
     // ---------------- PureSignal ----------------
     // SetPs flips master arm and cal-mode in a single mutate so the engine
     // sees a consistent state when DspPipelineService.OnRadioStateChanged

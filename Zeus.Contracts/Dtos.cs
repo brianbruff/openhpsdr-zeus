@@ -52,9 +52,13 @@ public enum PsFeedbackSource : byte { Internal = 0, External = 1 }
 public enum ConnectionStatus { Disconnected, Connecting, Connected, Error }
 
 // Thetis NR-button state: Off = no spectral NR, Anr = NR1 (time-domain LMS),
-// Emnr = NR2 (Ephraim–Malah spectral). ANR and EMNR are mutually exclusive
-// in Thetis, so the button carries both in one enum.
-public enum NrMode : byte { Off, Anr, Emnr }
+// Emnr = NR2 (Ephraim–Malah spectral), Sbnr = NR4 (libspecbleach spectral
+// bleaching — issue #79). NR3 (RNNR) is intentionally absent: training data
+// for the bundled RNNoise model is voice-corpus-only and underperforms on
+// HF noise. All four modes are mutually exclusive in WDSP, so the button
+// carries them in one enum. Byte order is fixed — appending only — because
+// persisted DspSettingsStore rows would mis-deserialize on a reorder.
+public enum NrMode : byte { Off, Anr, Emnr, Sbnr = 3 }
 
 // Pre-RXA time-domain blanker. Nb1 = ANB (noise blanker), Nb2 = NOB (noise gate).
 // Engine silently ignores this until the pre-RXA pipeline lands (task #4);
@@ -64,13 +68,38 @@ public enum NbMode : byte { Off, Nb1, Nb2 }
 // Thetis default NbThreshold = 3.3 (WDSP units), which is `0.165 × 20` — the
 // Thetis UI slider sitting at 20. Kept here so REST round-trips preserve the
 // UI-space value rather than the scaled one.
+//
+// NR2 post2 + NR4 (Sbnr) tunables are nullable so legacy state frames (no
+// fields present) deserialize unchanged; null at the engine seam means
+// "use the WdspDspEngine.NrDefaults baseline". Persisted globally (not
+// per-band/mode/profile) per Thetis behaviour — see DspSettingsStore.
 public sealed record NrConfig(
     NrMode NrMode = NrMode.Off,
     bool AnfEnabled = false,
     bool SnbEnabled = false,
     bool NbpNotchesEnabled = false,
     NbMode NbMode = NbMode.Off,
-    double NbThreshold = 20.0);
+    double NbThreshold = 20.0,
+    // ---- NR2 (EMNR) post2 comfort-noise tunables ----
+    // Already wired in WdspDspEngine.NrDefaults; surfacing them via the
+    // right-click popover. Slider scale: factor/nlevel UI 0..100 → WDSP
+    // 0..1 (Thetis divides by 100). Taper is bins (0..100), Rate is
+    // time-constant in seconds. Run gates the comfort-noise injection.
+    bool? EmnrPost2Run = null,
+    double? EmnrPost2Factor = null,
+    double? EmnrPost2Nlevel = null,
+    double? EmnrPost2Rate = null,
+    int? EmnrPost2Taper = null,
+    // ---- NR4 (SBNR / libspecbleach) tunables ----
+    // Defaults from Thetis radio.cs:2350-2462. Native setters take float;
+    // we marshal to double on the wire and downcast at the P/Invoke seam.
+    double? Nr4ReductionAmount = null,
+    double? Nr4SmoothingFactor = null,
+    double? Nr4WhiteningFactor = null,
+    double? Nr4NoiseRescale = null,
+    double? Nr4PostFilterThreshold = null,
+    int? Nr4NoiseScalingType = null,
+    int? Nr4Position = null);
 
 public sealed record StateDto(
     ConnectionStatus Status,
@@ -195,6 +224,25 @@ public sealed record DriveSetRequest(int Percent);
 public sealed record TuneDriveSetRequest(int Percent);
 
 public sealed record NrSetRequest(NrConfig Nr);
+
+// Per-popover save requests for the NR right-click panels. Nullable shape so
+// the popover can PATCH a single field without disturbing siblings (the server
+// merges on top of the persisted NrConfig and re-applies the engine state).
+public sealed record Nr2Post2ConfigSetRequest(
+    bool? Post2Run = null,
+    double? Post2Factor = null,
+    double? Post2Nlevel = null,
+    double? Post2Rate = null,
+    int? Post2Taper = null);
+
+public sealed record Nr4ConfigSetRequest(
+    double? ReductionAmount = null,
+    double? SmoothingFactor = null,
+    double? WhiteningFactor = null,
+    double? NoiseRescale = null,
+    double? PostFilterThreshold = null,
+    int? NoiseScalingType = null,
+    int? Position = null);
 
 // Panadapter/waterfall zoom levels. Level=1 means the analyzer covers the full
 // sample-rate span; level=2 means VFO-centered half-span (×2 bins/Hz), and so

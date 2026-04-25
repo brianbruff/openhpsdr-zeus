@@ -660,6 +660,27 @@ app.MapPost("/api/rx/nr", (NrSetRequest req, RadioService r) =>
     return Results.Ok(r.SetNr(req.Nr));
 });
 
+// Per-popover PATCH endpoints for the right-click NR settings panels (issue
+// #79). Each merges nullable fields onto the persisted NrConfig so the
+// operator can edit one knob without resending the whole NR block. Skipping
+// fields (or sending null) is a no-op for that field.
+app.MapPost("/api/rx/nr2/post2", (Nr2Post2ConfigSetRequest req, RadioService r) =>
+{
+    log.LogInformation(
+        "api.rx.nr2.post2 run={Run} factor={Factor} nlevel={Nlevel} rate={Rate} taper={Taper}",
+        req.Post2Run, req.Post2Factor, req.Post2Nlevel, req.Post2Rate, req.Post2Taper);
+    return Results.Ok(r.SetNr2Post2(req));
+});
+
+app.MapPost("/api/rx/nr4", (Nr4ConfigSetRequest req, RadioService r) =>
+{
+    log.LogInformation(
+        "api.rx.nr4 reduction={Red} smoothing={Smo} whitening={Whi} noiseRescale={Nr} postThr={Pft} scaling={Sc} pos={Pos}",
+        req.ReductionAmount, req.SmoothingFactor, req.WhiteningFactor,
+        req.NoiseRescale, req.PostFilterThreshold, req.NoiseScalingType, req.Position);
+    return Results.Ok(r.SetNr4(req));
+});
+
 app.MapPost("/api/rx/zoom", (ZoomSetRequest req, RadioService r) =>
 {
     log.LogInformation("api.rx.zoom level={Level}", req.Level);

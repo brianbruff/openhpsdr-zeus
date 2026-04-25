@@ -934,7 +934,21 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private void HandlePsPairedPacket(byte[] buf)
     {
         var seq = BinaryPrimitives.ReadUInt32BigEndian(buf);
-        const int samplesPerPacket = 119;
+        // Read samplesperframe from the packet header (pihpsdr
+        // new_protocol.c:2475). G2 at 192 kHz emits 238 samples/frame
+        // = 119 pairs/packet — the prior hardcoded literal happened to
+        // match. Defensive bounds check + fallback to 119 on any garbage
+        // value keeps the decoder working if the radio reports something
+        // unexpected (older firmware, future variants).
+        int samplesPerFrame = (buf[14] << 8) | buf[15];
+        int samplesPerPacket = samplesPerFrame / 2;
+        if (samplesPerPacket <= 0 || samplesPerPacket > 200)
+        {
+            _log.LogWarning(
+                "p2.psPaired bad samplesPerFrame={N}, falling back to 119",
+                samplesPerFrame);
+            samplesPerPacket = 119;
+        }
 
         for (int i = 0; i < samplesPerPacket; i++)
         {

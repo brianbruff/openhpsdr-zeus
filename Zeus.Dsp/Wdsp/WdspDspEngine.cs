@@ -220,6 +220,15 @@ public sealed class WdspDspEngine : IDspEngine
     private bool _psPtol;                // false = strict 0.8 ; true = relax 0.4 (matches pihpsdr/Thetis: ptol ? 0.4 : 0.8)
     private const int PsFeedbackBlockSize = 1024;
     private readonly int[] _psInfoBuf = new int[16];
+    // Edge-triggered state-transition log target. 255 is an out-of-range
+    // sentinel so the first observed state always logs (LRESET..LTURNON
+    // = 0..9 per calcc.c:543-552). Updated under _psLock.
+    private byte _lastLoggedPsState = 255;
+    // Pscc-call counter — incremented in FeedPsFeedbackBlock after psccF.
+    // At 192 kHz / 1024-sample blocks we expect ~187 calls/sec while keyed.
+    // Periodic log at every 100th call lets the operator confirm feedback is
+    // arriving from the radio without flooding when PS is idle.
+    private long _psFeedCount;
     private double _psMaxTxEnvelope;
     // Bring-up diagnostic — emit info[] every Nth GetPsStageMeters tick so the
     // calcc state machine is visible in the server log without flooding.
@@ -1339,6 +1348,10 @@ public sealed class WdspDspEngine : IDspEngine
             if (enabled)
             {
                 _psEnabled = true;
+                // Reset diagnostic counters so the first state transition
+                // and the first 100 pscc blocks log on every fresh arm.
+                _lastLoggedPsState = 255;
+                Interlocked.Exchange(ref _psFeedCount, 0);
                 NativeMethods.SetPSRunCal(id, 1);
                 int mancal = _psSingle ? 1 : 0;
                 int automode = (_psAuto && !_psSingle) ? 1 : 0;
@@ -1396,6 +1409,14 @@ public sealed class WdspDspEngine : IDspEngine
             // mox/solidmox args are ignored by psccF (calcc.c:846); SetPSMox
             // is the source of truth and is driven from SetMox above.
             NativeMethods.psccF(id, PsFeedbackBlockSize, bufTxI, bufTxQ, bufRxI, bufRxQ, 0, 0);
+            long n = Interlocked.Increment(ref _psFeedCount);
+            if (n % 100 == 1)
+            {
+                // Confirms paired packets are reaching the engine. If this
+                // line never appears while keyed + PS armed, the wire path
+                // (Protocol2Client paired-packet decode) isn't running.
+                _log.LogInformation("wdsp.pscc fed {N} blocks", n);
+            }
         }
     }
 
@@ -1440,6 +1461,23 @@ public sealed class WdspDspEngine : IDspEngine
         float depthDb = correcting
             ? (float)(20.0 * Math.Log10(Math.Max(feedback, 1e-3) / 256.0))
             : 0f;
+
+        // Edge-triggered state-transition log. calcc.c:543-552 LRESET=0,
+        // LWAIT=1, LMOXDELAY=2, LSETUP=3, LCOLLECT=4, MOXCHECK=5, LCALC=6,
+        // LDELAY=7, LSTAYON=8, LTURNON=9. info[14]=1 means corrections live;
+        // info[6] bitmask flags scheck rejections (see r3-correct.md §B1).
+        // The 5-sec periodic log below is too sparse to catch the
+        // LCOLLECT↔LRESET bounce that happens every ~50 ms when scheck fails;
+        // edge-triggered surfaces every transition without flooding when
+        // PS is parked (e.g. stuck at LRESET while idle).
+        if (_lastLoggedPsState != calState)
+        {
+            _log.LogInformation(
+                "wdsp.psState {Prev}->{Cur} info4={Fb} info6=0x{Sc:X4} info13={Dog} info14={Cor}",
+                _lastLoggedPsState, calState,
+                _psInfoBuf[4], _psInfoBuf[6], _psInfoBuf[13], _psInfoBuf[14]);
+            _lastLoggedPsState = calState;
+        }
 
         // Bring-up diagnostic — log info[0..7] + correcting/state every Nth
         // call so the calcc state machine progression is visible during a

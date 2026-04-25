@@ -38,6 +38,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+import type { RadioStateDto } from '../api/client';
+
 // TX-side state. Intentionally separate from connection-store so the TX panel
 // can mount/unmount cleanly and so TX-specific fields (drivePercent, micGainDb,
 // meter values, SWR alert) can accumulate here as subsequent slices land.
@@ -211,6 +213,13 @@ export type TxState = {
   setTwoToneFreq2: (hz: number) => void;
   twoToneMag: number;
   setTwoToneMag: (m: number) => void;
+
+  // Hydrate the persistable PS / TwoTone fields from the server's StateDto.
+  // Called from ConnectPanel and App.tsx alongside connection-store.applyState
+  // so a fresh browser (no localStorage) sees the operator's last persisted
+  // dial-in instead of the hard-coded defaults. Master-arm fields are
+  // intentionally NOT hydrated — the operator must re-arm each session.
+  hydrateFromState: (s: RadioStateDto) => void;
 };
 
 export const useTxStore = create<TxState>()(
@@ -328,6 +337,21 @@ export const useTxStore = create<TxState>()(
       setTwoToneFreq2: (hz) => set({ twoToneFreq2: hz }),
       twoToneMag: 0.49,
       setTwoToneMag: (m) => set({ twoToneMag: m }),
+
+      hydrateFromState: (s) =>
+        set({
+          psAuto: s.psAuto,
+          psPtol: s.psPtol,
+          psAutoAttenuate: s.psAutoAttenuate,
+          psMoxDelaySec: s.psMoxDelaySec,
+          psLoopDelaySec: s.psLoopDelaySec,
+          psAmpDelayNs: s.psAmpDelayNs,
+          psIntsSpiPreset: s.psIntsSpiPreset,
+          psFeedbackSource: s.psFeedbackSource,
+          twoToneFreq1: s.twoToneFreq1,
+          twoToneFreq2: s.twoToneFreq2,
+          twoToneMag: s.twoToneMag,
+        }),
     }),
     {
       name: 'zeus-tx',

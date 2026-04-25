@@ -134,7 +134,14 @@ export default function App() {
       ctrl = new AbortController();
       try {
         const next = await fetchState(ctrl.signal);
-        if (!cancelled) useConnectionStore.getState().applyState(next);
+        if (!cancelled) {
+          useConnectionStore.getState().applyState(next);
+          // Hydrate persistable PS / TwoTone fields from the server's StateDto
+          // so server-persisted edits (e.g. operator changed MOX delay on
+          // another tab) reach this tab even after the initial connect-time
+          // hydrate. Master-arm fields are session-only and skipped.
+          useTxStore.getState().hydrateFromState(next);
+        }
       } catch {
         /* transient errors reconcile on the next tick */
       }

@@ -187,7 +187,42 @@ public sealed class RadioService : IDisposable
             PsLoopDelaySec: ps?.LoopDelaySec ?? 0.0,
             PsAmpDelayNs: ps?.AmpDelayNs ?? 150.0,
             PsFeedbackSource: ps?.Source ?? PsFeedbackSource.Internal,
-            PsIntsSpiPreset: ps?.IntsSpiPreset ?? "16/256");
+            PsIntsSpiPreset: ps?.IntsSpiPreset ?? "16/256",
+            // Two-tone test generator dial-in. Defaults match pihpsdr / Thetis
+            // (700/1900 Hz, 0.49 each — peak ~0.98 just under WDSP IQ clip).
+            TwoToneFreq1: ps?.TwoToneFreq1 ?? 700.0,
+            TwoToneFreq2: ps?.TwoToneFreq2 ?? 1900.0,
+            TwoToneMag: ps?.TwoToneMag ?? 0.49);
+    }
+
+    /// <summary>
+    /// Single-source-of-truth Upsert helper for the PS settings store. Reads
+    /// the current StateDto snapshot and writes the full PsSettingsEntry so
+    /// callers don't drop fields by writing only what they touched. Called
+    /// from SetPs, SetPsAdvanced, SetPsFeedbackSource, and SetTwoTone.
+    ///
+    /// PsEnabled / TwoToneEnabled (master arm flags) and PsHwPeak (per-radio
+    /// derived) are intentionally NOT in the entry — same operator-action
+    /// discipline as MOX/TUN.
+    /// </summary>
+    private void PersistPsState()
+    {
+        if (_psStore is null) return;
+        var snap = Snapshot();
+        _psStore.Upsert(new PsSettingsEntry
+        {
+            Auto = snap.PsAuto,
+            Ptol = snap.PsPtol,
+            AutoAttenuate = snap.PsAutoAttenuate,
+            MoxDelaySec = snap.PsMoxDelaySec,
+            LoopDelaySec = snap.PsLoopDelaySec,
+            AmpDelayNs = snap.PsAmpDelayNs,
+            IntsSpiPreset = snap.PsIntsSpiPreset,
+            Source = snap.PsFeedbackSource,
+            TwoToneFreq1 = snap.TwoToneFreq1,
+            TwoToneFreq2 = snap.TwoToneFreq2,
+            TwoToneMag = snap.TwoToneMag,
+        });
     }
 
     // Ribbon-visibility setter — frontend toggles via REST, server broadcasts
@@ -712,6 +747,10 @@ public sealed class RadioService : IDisposable
             PsAuto = req.Auto,
             PsSingle = req.Single,
         });
+        // Persist Auto/Single change so the operator's cal-mode preference
+        // sticks across restarts. (PsEnabled is the master arm — not
+        // persisted; same discipline as MOX/TUN.)
+        PersistPsState();
         return Snapshot();
     }
 
@@ -728,20 +767,8 @@ public sealed class RadioService : IDisposable
             PsHwPeak = req.HwPeak ?? s.PsHwPeak,
             PsIntsSpiPreset = req.IntsSpiPreset ?? s.PsIntsSpiPreset,
         });
-        // Persist the new tuning.
-        var snap = Snapshot();
-        _psStore?.Upsert(new PsSettingsEntry
-        {
-            Auto = snap.PsAuto,
-            Ptol = snap.PsPtol,
-            AutoAttenuate = snap.PsAutoAttenuate,
-            MoxDelaySec = snap.PsMoxDelaySec,
-            LoopDelaySec = snap.PsLoopDelaySec,
-            AmpDelayNs = snap.PsAmpDelayNs,
-            IntsSpiPreset = snap.PsIntsSpiPreset,
-            Source = snap.PsFeedbackSource,
-        });
-        return snap;
+        PersistPsState();
+        return Snapshot();
     }
 
     /// <summary>
@@ -755,20 +782,8 @@ public sealed class RadioService : IDisposable
     {
         ArgumentNullException.ThrowIfNull(req);
         Mutate(s => s with { PsFeedbackSource = req.Source });
-        var snap = Snapshot();
-        // Persist alongside the other PS tuning so it survives a restart.
-        _psStore?.Upsert(new PsSettingsEntry
-        {
-            Auto = snap.PsAuto,
-            Ptol = snap.PsPtol,
-            AutoAttenuate = snap.PsAutoAttenuate,
-            MoxDelaySec = snap.PsMoxDelaySec,
-            LoopDelaySec = snap.PsLoopDelaySec,
-            AmpDelayNs = snap.PsAmpDelayNs,
-            IntsSpiPreset = snap.PsIntsSpiPreset,
-            Source = snap.PsFeedbackSource,
-        });
-        return snap;
+        PersistPsState();
+        return Snapshot();
     }
 
     public StateDto SetTwoTone(TwoToneSetRequest req)
@@ -781,6 +796,10 @@ public sealed class RadioService : IDisposable
             TwoToneFreq2 = req.Freq2 ?? s.TwoToneFreq2,
             TwoToneMag = req.Mag ?? s.TwoToneMag,
         });
+        // Persist freq1/freq2/mag — operator tunings survive restart.
+        // TwoToneEnabled (master arm) is NOT persisted; same operator-action
+        // discipline as MOX/TUN.
+        PersistPsState();
         return Snapshot();
     }
 

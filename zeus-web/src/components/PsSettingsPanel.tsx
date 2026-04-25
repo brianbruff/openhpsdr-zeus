@@ -137,11 +137,17 @@ export function PsSettingsPanel() {
     }).catch(() => setTwoToneOn(!next));
   }, [twoToneOn, twoToneFreq1, twoToneFreq2, twoToneMag, setTwoToneOn]);
 
+  // Two-tone freq/mag POSTs always go to the server, even when twoToneOn is
+  // false. The server persists freq1/freq2/mag via PsSettingsStore so an
+  // operator who dials in tones first ("set up the test, then arm") sees the
+  // values stick across restarts. Server SetTwoTone accepts partial fields
+  // and only flips the master arm if `enabled` changes — passing the current
+  // twoToneOn state keeps the radio's TwoTone arm state untouched.
   const onTwoToneFreq1Change = useCallback(
     (hz: number) => {
       const v = Math.max(50, Math.min(5000, Math.round(hz)));
       setTwoToneFreq1(v);
-      if (twoToneOn) setTwoTone({ enabled: true, freq1: v }).catch(() => {});
+      setTwoTone({ enabled: twoToneOn, freq1: v }).catch(() => {});
     },
     [twoToneOn, setTwoToneFreq1],
   );
@@ -150,7 +156,7 @@ export function PsSettingsPanel() {
     (hz: number) => {
       const v = Math.max(50, Math.min(5000, Math.round(hz)));
       setTwoToneFreq2(v);
-      if (twoToneOn) setTwoTone({ enabled: true, freq2: v }).catch(() => {});
+      setTwoTone({ enabled: twoToneOn, freq2: v }).catch(() => {});
     },
     [twoToneOn, setTwoToneFreq2],
   );
@@ -159,7 +165,7 @@ export function PsSettingsPanel() {
     (mag: number) => {
       const v = Math.max(0, Math.min(1, mag));
       setTwoToneMag(v);
-      if (twoToneOn) setTwoTone({ enabled: true, mag: v }).catch(() => {});
+      setTwoTone({ enabled: twoToneOn, mag: v }).catch(() => {});
     },
     [twoToneOn, setTwoToneMag],
   );

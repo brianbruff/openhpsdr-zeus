@@ -107,6 +107,21 @@ export type RadioStateDto = {
   zoomLevel: ZoomLevel;
   // Master RX AF gain in dB — 0 = unity (WDSP SetRXAPanelGain1(1.0) default).
   rxAfGainDb: number;
+  // PureSignal persisted tunings — server is the source of truth, hydrated
+  // into tx-store on connect so a fresh browser (no localStorage) sees the
+  // operator's last dial-in. PsEnabled, PsSingle, TwoToneEnabled (master-arm
+  // flags) are intentionally session-only and left out.
+  psAuto: boolean;
+  psPtol: boolean;
+  psAutoAttenuate: boolean;
+  psMoxDelaySec: number;
+  psLoopDelaySec: number;
+  psAmpDelayNs: number;
+  psIntsSpiPreset: string;
+  psFeedbackSource: 'internal' | 'external';
+  twoToneFreq1: number;
+  twoToneFreq2: number;
+  twoToneMag: number;
 };
 
 export type FilterPresetDto = {
@@ -258,6 +273,20 @@ export function normalizeState(raw: unknown): RadioStateDto {
     // 0 dB matches the pre-#77 unity-gain default — older servers without
     // the field behave identically to a fresh-install slider at centre.
     rxAfGainDb: typeof r.rxAfGainDb === 'number' ? r.rxAfGainDb : 0,
+    // PureSignal persisted tunings. Defaults match RadioService.cs init and
+    // PsSettingsEntry — older servers without the fields fall back cleanly.
+    psAuto: typeof r.psAuto === 'boolean' ? r.psAuto : true,
+    psPtol: typeof r.psPtol === 'boolean' ? r.psPtol : false,
+    psAutoAttenuate: typeof r.psAutoAttenuate === 'boolean' ? r.psAutoAttenuate : true,
+    psMoxDelaySec: typeof r.psMoxDelaySec === 'number' ? r.psMoxDelaySec : 0.2,
+    psLoopDelaySec: typeof r.psLoopDelaySec === 'number' ? r.psLoopDelaySec : 0,
+    psAmpDelayNs: typeof r.psAmpDelayNs === 'number' ? r.psAmpDelayNs : 150,
+    psIntsSpiPreset: typeof r.psIntsSpiPreset === 'string' ? r.psIntsSpiPreset : '16/256',
+    psFeedbackSource:
+      r.psFeedbackSource === 'External' || r.psFeedbackSource === 'external' ? 'external' : 'internal',
+    twoToneFreq1: typeof r.twoToneFreq1 === 'number' ? r.twoToneFreq1 : 700,
+    twoToneFreq2: typeof r.twoToneFreq2 === 'number' ? r.twoToneFreq2 : 1900,
+    twoToneMag: typeof r.twoToneMag === 'number' ? r.twoToneMag : 0.49,
   };
 }
 

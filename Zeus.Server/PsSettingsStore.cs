@@ -97,5 +97,14 @@ public sealed class PsSettingsEntry
     // (Bypass). Persisted so an operator who runs an external sniffer
     // doesn't have to re-pick it every session.
     public PsFeedbackSource Source { get; set; } = PsFeedbackSource.Internal;
+    // Two-tone test generator settings. Persisted so an operator who has
+    // dialled in custom IMD test tones (e.g. for a specific filter response
+    // or PA test) doesn't have to re-enter them every session. PsEnabled and
+    // TwoToneEnabled are intentionally NOT persisted — same operator-action
+    // discipline as MOX/TUN — but the dialled-in freqs/mag are.
+    // Defaults match tx-store.ts (700/1900/0.49) and pihpsdr.
+    public double TwoToneFreq1 { get; set; } = 700.0;
+    public double TwoToneFreq2 { get; set; } = 1900.0;
+    public double TwoToneMag { get; set; } = 0.49;
     public DateTime UpdatedUtc { get; set; }
 }

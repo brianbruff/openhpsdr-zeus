@@ -35,6 +35,32 @@ long-running project a lot of the DSP heritage traces back to.
   The experience isn't ideal yet and will improve over time.
 - **Radio discovery** on the LAN (Protocol-1 + Protocol-2 broadcast, in parallel)
 
+## Download
+
+Grab the latest installer from the **[Releases page](https://github.com/brianbruff/openhpsdr-zeus/releases/latest)**.
+
+| Platform              | File                                | Notes                       |
+| --------------------- | ----------------------------------- | --------------------------- |
+| Windows (x64)         | `Zeus-X.Y.Z-win-x64-setup.exe`      | Inno Setup installer        |
+| macOS (Apple Silicon) | `Zeus-X.Y.Z-macos-arm64.dmg`        | drag-to-install, see below  |
+| Linux (x64)           | `zeus-X.Y.Z-linux-x64.tar.gz`       | extract and run `./zeus`    |
+
+Zeus is also a Progressive Web App. If you'd rather not install a desktop
+package, run `Zeus.Server` from source and use your browser's **Install** icon
+on `http://localhost:6060` to add Zeus to the dock / start menu directly.
+
+### macOS — Removing Gatekeeper Warning
+
+Zeus is not signed with an Apple Developer certificate, so macOS will block it
+on first launch. To fix this, open Terminal and run:
+
+```bash
+xattr -cr /Applications/Zeus.app
+```
+
+If you still see a security warning, go to **System Settings → Privacy &
+Security** and click **Open Anyway**.
+
 ## Layout
 
 | Path                     | What it is                                          |
@@ -223,9 +249,9 @@ Shipping surfaces are being added one at a time, slowly:
 
 - **PWA (installable web app)** — available now. Precached shell, works
   offline for the static assets, installs from any browser that supports PWAs.
-- **Photino desktop installers (macOS / Windows / Linux)** — planned.
-  Native-window wrapper around the same web UI, shipped as real OS installers.
-  Release cadence: TBD.
+- **Native installers (Windows `.exe`, macOS `.dmg`, Linux `.tar.gz`)** —
+  available now. Self-contained .NET 10 publish + WDSP native libraries.
+  See the [Download](#download) section above.
 - **Mobile apps (iOS / Android) via Capacitor** — planned. Cadence: TBD.
 
 ## Requirements

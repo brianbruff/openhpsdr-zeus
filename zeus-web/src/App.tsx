@@ -90,6 +90,7 @@ import { useQrzStore } from './state/qrz-store';
 import { useRotatorStore } from './state/rotator-store';
 import { useLoggerStore } from './state/logger-store';
 import { useTxStore } from './state/tx-store';
+import { useLayoutPreferenceStore } from './state/layout-preference-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
 import { SpectrumWheelActionsContext, type SpectrumWheelActions } from './util/use-pan-tune-gesture';
 import type L from 'leaflet';
@@ -473,15 +474,16 @@ export default function App() {
     );
   }, [connected]);
 
-  // Feature flag: ?layout=flex activates the flexlayout-react dockable panel
-  // layout. Mobile viewports (≤900px) always use the fixed grid regardless of
-  // the flag — the mobile layout does not support flexlayout-react.
+  // Feature flag: layout preference store determines whether to use the
+  // flexlayout-react dockable panel layout. Mobile viewports (≤900px) always
+  // use the fixed grid regardless of the preference — the mobile layout does
+  // not support flexlayout-react.
+  const layoutMode = useLayoutPreferenceStore((s) => s.layoutMode);
   const useFlexLayout = useMemo(() => {
     if (typeof window === 'undefined') return false;
-    const wantsFlexLayout = new URLSearchParams(window.location.search).get('layout') === 'flex';
     const isMobile = window.matchMedia('(max-width: 900px)').matches;
-    return wantsFlexLayout && !isMobile;
-  }, []);
+    return layoutMode === 'flex' && !isMobile;
+  }, [layoutMode]);
 
   // Bundle workspace state into a context so panel components can consume it
   // without prop-drilling through the FlexWorkspace factory.

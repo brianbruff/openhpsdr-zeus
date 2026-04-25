@@ -16,15 +16,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { PaSettingsPanel } from './PaSettingsPanel';
 import { AboutPanel } from './AboutPanel';
+import { DisplayPanel } from './DisplayPanel';
 import { RadioSelector } from './RadioSelector';
 import { usePaStore } from '../state/pa-store';
 import { PsSettingsPanel } from './PsSettingsPanel';
 
-type TabId = 'pa' | 'ps' | 'about';
+type TabId = 'pa' | 'ps' | 'display' | 'about';
 
 const TABS: ReadonlyArray<{ id: TabId; label: string }> = [
   { id: 'pa', label: 'PA SETTINGS' },
   { id: 'ps', label: 'PURESIGNAL' },
+  { id: 'display', label: 'DISPLAY' },
   { id: 'about', label: 'ABOUT' },
 ];
 
@@ -280,6 +282,7 @@ export function SettingsMenu({ open, onClose }: Props) {
         >
           {active === 'pa' && <PaSettingsPanel />}
           {active === 'ps' && <PsSettingsPanel />}
+          {active === 'display' && <DisplayPanel />}
           {active === 'about' && <AboutPanel />}
         </div>
       </div>

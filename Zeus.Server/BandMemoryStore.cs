@@ -70,9 +70,38 @@ public sealed class BandMemoryStore : IDisposable
 
         _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
         _entries = _db.GetCollection<BandMemoryEntry>("band_memory");
+        // Pre-existing rows can violate the unique-Band invariant if they were
+        // written by a build before EnsureIndex(unique:true) was added, or by a
+        // race in Upsert before the index existed. Build will fail with
+        // "duplicate key" and every subsequent request 500s on construction —
+        // self-heal by collapsing duplicates (newest UpdatedUtc wins) before
+        // asking LiteDB to enforce uniqueness.
+        DedupeByBand();
         _entries.EnsureIndex(x => x.Band, unique: true);
 
         _log.LogInformation("BandMemoryStore initialized at {Path}", dbPath);
+    }
+
+    private void DedupeByBand()
+    {
+        var dupGroups = _entries.FindAll()
+            .GroupBy(e => e.Band, StringComparer.Ordinal)
+            .Where(g => g.Count() > 1)
+            .ToList();
+        foreach (var g in dupGroups)
+        {
+            var keeper = g.OrderByDescending(e => e.UpdatedUtc).First();
+            var removed = 0;
+            foreach (var dup in g)
+            {
+                if (dup.Id == keeper.Id) continue;
+                _entries.Delete(dup.Id);
+                removed++;
+            }
+            _log.LogWarning(
+                "BandMemoryStore: collapsed {Removed} duplicate row(s) for band {Band}; kept Id={KeptId} (UpdatedUtc={Updated:o})",
+                removed, g.Key, keeper.Id, keeper.UpdatedUtc);
+        }
     }
 
     public IReadOnlyList<BandMemoryDto> GetAll()
@@ -94,21 +123,32 @@ public sealed class BandMemoryStore : IDisposable
         var existing = _entries.FindOne(x => x.Band == band);
         if (existing is null)
         {
-            _entries.Insert(new BandMemoryEntry
+            // Concurrent PUTs for the same band (debounced batches, StrictMode
+            // double-effects) can both observe FindOne == null and race into
+            // Insert; the unique-Band index then trips one of them. Catch the
+            // collision and fall through to the update path with a re-fetch.
+            try
             {
-                Band = band,
-                Hz = hz,
-                Mode = mode,
-                UpdatedUtc = DateTime.UtcNow,
-            });
+                _entries.Insert(new BandMemoryEntry
+                {
+                    Band = band,
+                    Hz = hz,
+                    Mode = mode,
+                    UpdatedUtc = DateTime.UtcNow,
+                });
+                return;
+            }
+            catch (LiteException ex) when (ex.ErrorCode == LiteException.INDEX_DUPLICATE_KEY)
+            {
+                existing = _entries.FindOne(x => x.Band == band);
+                if (existing is null) throw;
+            }
         }
-        else
-        {
-            existing.Hz = hz;
-            existing.Mode = mode;
-            existing.UpdatedUtc = DateTime.UtcNow;
-            _entries.Update(existing);
-        }
+
+        existing.Hz = hz;
+        existing.Mode = mode;
+        existing.UpdatedUtc = DateTime.UtcNow;
+        _entries.Update(existing);
     }
 
     public void Dispose() => _db.Dispose();

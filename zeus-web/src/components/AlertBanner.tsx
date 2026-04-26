@@ -73,6 +73,11 @@ export function AlertBanner() {
       <span className="mono" style={{ flex: 1, color: 'var(--fg-0)' }}>
         {alert.message}
       </span>
+      {alert.action && (
+        <button type="button" onClick={alert.action.onClick} className="btn sm">
+          {alert.action.label}
+        </button>
+      )}
       <button type="button" onClick={() => setAlert(null)} className="btn sm">
         Dismiss
       </button>

@@ -73,11 +73,18 @@ export type TxMeters = {
 
 export enum AlertKind {
   SwrTrip = 0,
+  FrontendUpdate = 1,
 }
+
+export type AlertAction = {
+  label: string;
+  onClick: () => void;
+};
 
 export type Alert = {
   kind: AlertKind;
   message: string;
+  action?: AlertAction;
 };
 
 export type TxState = {

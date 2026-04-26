@@ -66,6 +66,7 @@ import { TunButton } from './components/TunButton';
 import { VfoDisplay } from './components/VfoDisplay';
 import { Waterfall } from './components/Waterfall';
 import { ZoomControl } from './components/ZoomControl';
+import { useSwUpdatePrompt } from './pwa/useSwUpdatePrompt';
 import { AzimuthMap } from './components/design/AzimuthMap';
 import { CONTACTS, bandOf } from './components/design/data';
 import { CwKeyer } from './components/design/CwKeyer';
@@ -99,6 +100,7 @@ import type { Contact } from './components/design/data';
 const STATE_POLL_MS = 333;
 
 export default function App() {
+  useSwUpdatePrompt();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<'pa' | 'qrz' | 'rotator' | 'about' | undefined>();
   const status = useConnectionStore((s) => s.status);

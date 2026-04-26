@@ -114,6 +114,7 @@ public class TxAudioIngestTests
         public void ResetPs() { }
         public void SavePsCorrection(string path) { }
         public void RestorePsCorrection(string path) { }
+        public void SetCfcConfig(CfcConfig cfg) { }
         public void Dispose() { }
     }
 

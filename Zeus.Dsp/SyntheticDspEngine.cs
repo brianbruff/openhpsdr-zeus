@@ -178,6 +178,16 @@ public sealed class SyntheticDspEngine : IDspEngine
     public void SavePsCorrection(string path) { }
     public void RestorePsCorrection(string path) { }
 
+    // CFC — synthetic has no TXA so SetCfcConfig only validates the payload
+    // shape so bad client requests fail fast in dev/CI without touching audio.
+    public void SetCfcConfig(CfcConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        if (cfg.Bands is null) throw new ArgumentException("Bands must not be null", nameof(cfg));
+        if (cfg.Bands.Length != 10)
+            throw new ArgumentException($"Bands must have exactly 10 entries; got {cfg.Bands.Length}", nameof(cfg));
+    }
+
     // Synthetic has no TX analyzer; the TX panadapter stays on the RX trace.
     // Returning false tells DspPipelineService.Tick to leave the display alone
     // while MOX is on, matching the existing "no new data" semantics.

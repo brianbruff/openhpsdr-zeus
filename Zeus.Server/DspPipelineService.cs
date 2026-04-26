@@ -132,6 +132,12 @@ public class DspPipelineService : BackgroundService
     private double _appliedTwoToneFreq1 = 700.0;
     private double _appliedTwoToneFreq2 = 1900.0;
     private double _appliedTwoToneMag = 0.49;
+    // CFC (Continuous Frequency Compressor) — issue #123. Default-OFF so a
+    // fresh state-change push (no Cfc field on the wire) doesn't flip the
+    // engine into a partial config. _psResyncRequired piggybacks: when a P2
+    // reconnect tears down the engine, we re-push the CFC profile too so the
+    // new WdspDspEngine instance picks up the operator's persisted config.
+    private CfcConfig _appliedCfc = CfcConfig.Default;
 
     private uint _seq;
     private uint _audioSeq;
@@ -445,6 +451,23 @@ public class DspPipelineService : BackgroundService
             _p2Client?.SetPsFeedbackSource(s.PsFeedbackSource == PsFeedbackSource.External);
             _appliedPsFeedbackSource = s.PsFeedbackSource;
         }
+
+        // ---- CFC (Continuous Frequency Compressor) ---------------------
+        // issue #123. Same resync rule as PS: a P2 disconnect tears down the
+        // engine, so the next state-change push has to re-assert the operator
+        // CFC config even when the StateDto value hasn't changed. Equality
+        // check uses CfcConfig record value semantics (the Bands array length
+        // is fixed at 10, contents compared element-wise via the auto-record
+        // Equals — but `record` only does reference equality on arrays, so
+        // value-compare manually). null on the wire (legacy state frame)
+        // falls back to CfcConfig.Default → engine sees a clean OFF profile.
+        var cfc = s.Cfc ?? CfcConfig.Default;
+        if (resync || !CfcConfigsEqual(cfc, _appliedCfc))
+        {
+            engine.SetCfcConfig(cfc);
+            _appliedCfc = cfc;
+        }
+
         // PS-Monitor (issue #121) — pure UI source routing. No engine call,
         // no wire write; Tick reads _psMonitorEnabled and prefers the
         // PS-feedback analyzer when on + PS armed + correcting. Latched
@@ -454,9 +477,33 @@ public class DspPipelineService : BackgroundService
             _log.LogInformation("psMonitor.latch enabled={Enabled}", s.PsMonitorEnabled);
             _psMonitorEnabled = s.PsMonitorEnabled;
         }
+
         // Resync done — clear the flag so subsequent state changes use
         // normal change-detect (no spurious wire writes on each tick).
         _psResyncRequired = false;
+    }
+
+    // CfcConfig auto-generated record Equals does reference equality on the
+    // Bands array, which would always trigger a re-push on every tick where
+    // the panel rebuilt the array. Explicit element-wise compare so a no-op
+    // POST round-trip stays cheap.
+    private static bool CfcConfigsEqual(CfcConfig a, CfcConfig b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        if (a is null || b is null) return false;
+        if (a.Enabled != b.Enabled) return false;
+        if (a.PostEqEnabled != b.PostEqEnabled) return false;
+        if (a.PreCompDb != b.PreCompDb) return false;
+        if (a.PrePeqDb != b.PrePeqDb) return false;
+        if (a.Bands is null || b.Bands is null) return ReferenceEquals(a.Bands, b.Bands);
+        if (a.Bands.Length != b.Bands.Length) return false;
+        for (int i = 0; i < a.Bands.Length; i++)
+        {
+            if (a.Bands[i].FreqHz != b.Bands[i].FreqHz) return false;
+            if (a.Bands[i].CompLevelDb != b.Bands[i].CompLevelDb) return false;
+            if (a.Bands[i].PostGainDb != b.Bands[i].PostGainDb) return false;
+        }
+        return true;
     }
 
     // "16/256" → (16, 256). Falls back to (16, 256) on any parse failure

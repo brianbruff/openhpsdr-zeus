@@ -44,7 +44,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-import type { RadioStateDto } from '../api/client';
+import type { CfcConfigDto, RadioStateDto } from '../api/client';
+import { CFC_CONFIG_DEFAULT } from '../api/client';
 
 // TX-side state. Intentionally separate from connection-store so the TX panel
 // can mount/unmount cleanly and so TX-specific fields (drivePercent, micGainDb,
@@ -235,6 +236,16 @@ export type TxState = {
   twoToneMag: number;
   setTwoToneMag: (m: number) => void;
 
+  // ---- CFC (Continuous Frequency Compressor) — issue #123. Whole config
+  // travels as one object so the panel's per-band edits + master toggles
+  // round-trip atomically. Persisted via partialize so a reload reads the
+  // same UI state without waiting for the server hydrate. Hydrated from
+  // the server's StateDto.cfc on connect — the server is the source of
+  // truth (LiteDB-backed) so a fresh browser sees the operator's last
+  // dial-in.
+  cfcConfig: CfcConfigDto;
+  setCfcConfig: (cfg: CfcConfigDto) => void;
+
   // Hydrate the persistable PS / TwoTone fields from the server's StateDto.
   // Called from ConnectPanel and App.tsx alongside connection-store.applyState
   // so a fresh browser (no localStorage) sees the operator's last persisted
@@ -361,6 +372,12 @@ export const useTxStore = create<TxState>()(
       twoToneMag: 0.49,
       setTwoToneMag: (m) => set({ twoToneMag: m }),
 
+      // CFC — defaults mirror CfcConfig.Default on the server (master OFF,
+      // pihpsdr-classic 10-band split). The server is authoritative and
+      // hydrates over this on connect.
+      cfcConfig: CFC_CONFIG_DEFAULT,
+      setCfcConfig: (cfg) => set({ cfcConfig: cfg }),
+
       hydrateFromState: (s) =>
         set({
           psAuto: s.psAuto,
@@ -374,6 +391,7 @@ export const useTxStore = create<TxState>()(
           twoToneFreq1: s.twoToneFreq1,
           twoToneFreq2: s.twoToneFreq2,
           twoToneMag: s.twoToneMag,
+          cfcConfig: s.cfc,
         }),
     }),
     {
@@ -399,6 +417,9 @@ export const useTxStore = create<TxState>()(
         twoToneFreq1: s.twoToneFreq1,
         twoToneFreq2: s.twoToneFreq2,
         twoToneMag: s.twoToneMag,
+        // CFC tuning — persisted client-side too so the panel paints with
+        // the operator's last config before the server hydrate lands.
+        cfcConfig: s.cfcConfig,
       }),
     },
   ),

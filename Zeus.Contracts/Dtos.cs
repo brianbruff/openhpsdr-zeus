@@ -193,7 +193,13 @@ public sealed record StateDto(
     bool TwoToneEnabled = false,
     double TwoToneFreq1 = 700.0,
     double TwoToneFreq2 = 1900.0,
-    double TwoToneMag = 0.49);
+    double TwoToneMag = 0.49,
+
+    // ---- CFC (Continuous Frequency Compressor) — issue #123 ----
+    // Nullable so legacy state frames (no Cfc field) deserialize unchanged;
+    // null at the engine seam means "use CfcConfig.Default" — same pattern
+    // as the Nr field above. Persisted globally via DspSettingsStore.
+    CfcConfig? Cfc = null);
 
 public sealed record RadioInfo(
     string MacAddress,
@@ -378,3 +384,58 @@ public sealed record TwoToneSetRequest(
     double? Freq1 = null,
     double? Freq2 = null,
     double? Mag = null);
+
+// ---- CFC (Continuous Frequency Compressor) — issue #123 ------------------
+// Multi-band frequency-domain compressor exposed by WDSP's xcfcomp stage
+// (already wired in xtxa between xeqp and xbandpass). Mirrors pihpsdr's
+// classic 10-band non-parametric design — see cfc_menu.c. The architecture
+// proposal on issue #123 enumerates every WDSP CFCOMP setter we surface.
+//
+// Persisted GLOBALLY (not per-band/mode) per kb2uka's spec — operator
+// profiles are a future feature. CFC defaults to OFF so existing operators
+// (including the project owner's external analog rack workflow) see no
+// behavior change unless they enable. PostEqEnabled is a separate toggle
+// from the master Enabled to mirror pihpsdr — operators may want CFC
+// compression without the EQ branch.
+
+/// <summary>One CFC band: centre frequency in Hz (operator-typed),
+/// compression-level threshold in dB, and post-comp makeup gain in dB.
+/// WDSP sorts the band array internally (cfcomp.c:147), so the on-the-wire
+/// order is informational only — the engine relies on WDSP to canonicalise.
+/// </summary>
+public sealed record CfcBand(double FreqHz, double CompLevelDb, double PostGainDb);
+
+/// <summary>Operator-tunable CFC configuration. <c>Bands</c> length is
+/// fixed at 10 to match pihpsdr's classic-mode default and keep the panel
+/// layout stable. Engine validates length at the seam.</summary>
+public sealed record CfcConfig(
+    bool Enabled,
+    bool PostEqEnabled,
+    double PreCompDb,
+    double PrePeqDb,
+    CfcBand[] Bands)
+{
+    /// <summary>Pihpsdr's vfo.c:284-314 baseline — 10 bands at the voice-band
+    /// frequencies operators recognise from PowerSDR. All compression and
+    /// gains zeroed so enabling neutral CFC is audibly transparent.</summary>
+    public static CfcConfig Default => new(
+        Enabled: false,
+        PostEqEnabled: false,
+        PreCompDb: 0.0,
+        PrePeqDb: 0.0,
+        Bands: new[]
+        {
+            new CfcBand(50,    0, 0),
+            new CfcBand(100,   0, 0),
+            new CfcBand(200,   0, 0),
+            new CfcBand(500,   0, 0),
+            new CfcBand(1000,  0, 0),
+            new CfcBand(1500,  0, 0),
+            new CfcBand(2000,  0, 0),
+            new CfcBand(2500,  0, 0),
+            new CfcBand(3000,  0, 0),
+            new CfcBand(5000,  0, 0),
+        });
+}
+
+public sealed record CfcSetRequest(CfcConfig Config);

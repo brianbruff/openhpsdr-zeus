@@ -61,6 +61,43 @@ public sealed class DspSettingsStore : IDisposable
             Nr4Position: e.Nr4Position);
     }
 
+    // CFC (Continuous Frequency Compressor) — issue #123. Persisted globally
+    // (one row per profileId, sharing the same DspSettingsEntry). Returns null
+    // when the entry is missing OR when CFC has never been written, so the
+    // caller can fall back to <see cref="CfcConfig.Default"/>. Old DB rows
+    // (pre-CFC) load with all CfcEnabled/CfcBandN* fields at their nullable
+    // / zero defaults, which means CfcEnabled is null on a legacy upsert; we
+    // return null in that case to preserve the default-OFF promise.
+    public CfcConfig? GetCfc(string profileId = "default")
+    {
+        var e = _entries.FindOne(x => x.ProfileId == profileId);
+        if (e is null) return null;
+        if (e.CfcEnabled is null) return null;  // never written → caller uses Default
+
+        // Reconstruct the 10-band array from the per-band scalars. Order of
+        // the rows on disk is stable (band index 0..9), so the operator's
+        // typed order survives the round-trip exactly.
+        var bands = new CfcBand[10]
+        {
+            new(e.CfcBand1Freq, e.CfcBand1Comp, e.CfcBand1Post),
+            new(e.CfcBand2Freq, e.CfcBand2Comp, e.CfcBand2Post),
+            new(e.CfcBand3Freq, e.CfcBand3Comp, e.CfcBand3Post),
+            new(e.CfcBand4Freq, e.CfcBand4Comp, e.CfcBand4Post),
+            new(e.CfcBand5Freq, e.CfcBand5Comp, e.CfcBand5Post),
+            new(e.CfcBand6Freq, e.CfcBand6Comp, e.CfcBand6Post),
+            new(e.CfcBand7Freq, e.CfcBand7Comp, e.CfcBand7Post),
+            new(e.CfcBand8Freq, e.CfcBand8Comp, e.CfcBand8Post),
+            new(e.CfcBand9Freq, e.CfcBand9Comp, e.CfcBand9Post),
+            new(e.CfcBand10Freq, e.CfcBand10Comp, e.CfcBand10Post),
+        };
+        return new CfcConfig(
+            Enabled: e.CfcEnabled.Value,
+            PostEqEnabled: e.CfcPostEqEnabled ?? false,
+            PreCompDb: e.CfcPreCompDb ?? 0.0,
+            PrePeqDb: e.CfcPrePeqDb ?? 0.0,
+            Bands: bands);
+    }
+
     public void Upsert(NrConfig config, string profileId = "default")
     {
         var existing = _entries.FindOne(x => x.ProfileId == profileId);
@@ -115,6 +152,61 @@ public sealed class DspSettingsStore : IDisposable
         }
     }
 
+    // CFC upsert — extends the same row used for NR. Insert path needs all the
+    // NR fields too because the row may not exist yet (a fresh install where
+    // the operator opens TX Audio Tools before touching NR). NR fields are
+    // seeded from a default NrConfig in that case so the legacy NR path
+    // continues to round-trip on subsequent NR-only Upserts.
+    public void Upsert(CfcConfig config, string profileId = "default")
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        if (config.Bands is null || config.Bands.Length != 10)
+            throw new ArgumentException($"Bands must have exactly 10 entries; got {config.Bands?.Length ?? 0}", nameof(config));
+
+        var existing = _entries.FindOne(x => x.ProfileId == profileId);
+        if (existing is null)
+        {
+            var nrSeed = new NrConfig();
+            existing = new DspSettingsEntry
+            {
+                ProfileId = profileId,
+                NrMode = nrSeed.NrMode,
+                AnfEnabled = nrSeed.AnfEnabled,
+                SnbEnabled = nrSeed.SnbEnabled,
+                NbpNotchesEnabled = nrSeed.NbpNotchesEnabled,
+                NbMode = nrSeed.NbMode,
+                NbThreshold = nrSeed.NbThreshold,
+            };
+            ApplyCfcToEntry(existing, config);
+            existing.UpdatedUtc = DateTime.UtcNow;
+            _entries.Insert(existing);
+        }
+        else
+        {
+            ApplyCfcToEntry(existing, config);
+            existing.UpdatedUtc = DateTime.UtcNow;
+            _entries.Update(existing);
+        }
+    }
+
+    private static void ApplyCfcToEntry(DspSettingsEntry e, CfcConfig c)
+    {
+        e.CfcEnabled = c.Enabled;
+        e.CfcPostEqEnabled = c.PostEqEnabled;
+        e.CfcPreCompDb = c.PreCompDb;
+        e.CfcPrePeqDb = c.PrePeqDb;
+        e.CfcBand1Freq = c.Bands[0].FreqHz;  e.CfcBand1Comp = c.Bands[0].CompLevelDb;  e.CfcBand1Post = c.Bands[0].PostGainDb;
+        e.CfcBand2Freq = c.Bands[1].FreqHz;  e.CfcBand2Comp = c.Bands[1].CompLevelDb;  e.CfcBand2Post = c.Bands[1].PostGainDb;
+        e.CfcBand3Freq = c.Bands[2].FreqHz;  e.CfcBand3Comp = c.Bands[2].CompLevelDb;  e.CfcBand3Post = c.Bands[2].PostGainDb;
+        e.CfcBand4Freq = c.Bands[3].FreqHz;  e.CfcBand4Comp = c.Bands[3].CompLevelDb;  e.CfcBand4Post = c.Bands[3].PostGainDb;
+        e.CfcBand5Freq = c.Bands[4].FreqHz;  e.CfcBand5Comp = c.Bands[4].CompLevelDb;  e.CfcBand5Post = c.Bands[4].PostGainDb;
+        e.CfcBand6Freq = c.Bands[5].FreqHz;  e.CfcBand6Comp = c.Bands[5].CompLevelDb;  e.CfcBand6Post = c.Bands[5].PostGainDb;
+        e.CfcBand7Freq = c.Bands[6].FreqHz;  e.CfcBand7Comp = c.Bands[6].CompLevelDb;  e.CfcBand7Post = c.Bands[6].PostGainDb;
+        e.CfcBand8Freq = c.Bands[7].FreqHz;  e.CfcBand8Comp = c.Bands[7].CompLevelDb;  e.CfcBand8Post = c.Bands[7].PostGainDb;
+        e.CfcBand9Freq = c.Bands[8].FreqHz;  e.CfcBand9Comp = c.Bands[8].CompLevelDb;  e.CfcBand9Post = c.Bands[8].PostGainDb;
+        e.CfcBand10Freq = c.Bands[9].FreqHz; e.CfcBand10Comp = c.Bands[9].CompLevelDb; e.CfcBand10Post = c.Bands[9].PostGainDb;
+    }
+
     public void Dispose() => _db.Dispose();
 
     private static string GetDatabasePath()
@@ -150,5 +242,25 @@ public sealed class DspSettingsEntry
     public double? Nr4PostFilterThreshold { get; set; }
     public int? Nr4NoiseScalingType { get; set; }
     public int? Nr4Position { get; set; }
+    // CFC (Continuous Frequency Compressor) — issue #123. Master flags are
+    // nullable so legacy rows (pre-CFC) load with CfcEnabled=null and
+    // GetCfc() returns null → operator gets CfcConfig.Default. Per-band
+    // scalars are non-nullable doubles and default to 0 on legacy rows; the
+    // null Enabled flag prevents those zeros from being interpreted as a
+    // valid CFC config.
+    public bool? CfcEnabled { get; set; }
+    public bool? CfcPostEqEnabled { get; set; }
+    public double? CfcPreCompDb { get; set; }
+    public double? CfcPrePeqDb { get; set; }
+    public double CfcBand1Freq { get; set; }  public double CfcBand1Comp { get; set; }  public double CfcBand1Post { get; set; }
+    public double CfcBand2Freq { get; set; }  public double CfcBand2Comp { get; set; }  public double CfcBand2Post { get; set; }
+    public double CfcBand3Freq { get; set; }  public double CfcBand3Comp { get; set; }  public double CfcBand3Post { get; set; }
+    public double CfcBand4Freq { get; set; }  public double CfcBand4Comp { get; set; }  public double CfcBand4Post { get; set; }
+    public double CfcBand5Freq { get; set; }  public double CfcBand5Comp { get; set; }  public double CfcBand5Post { get; set; }
+    public double CfcBand6Freq { get; set; }  public double CfcBand6Comp { get; set; }  public double CfcBand6Post { get; set; }
+    public double CfcBand7Freq { get; set; }  public double CfcBand7Comp { get; set; }  public double CfcBand7Post { get; set; }
+    public double CfcBand8Freq { get; set; }  public double CfcBand8Comp { get; set; }  public double CfcBand8Post { get; set; }
+    public double CfcBand9Freq { get; set; }  public double CfcBand9Comp { get; set; }  public double CfcBand9Post { get; set; }
+    public double CfcBand10Freq { get; set; } public double CfcBand10Comp { get; set; } public double CfcBand10Post { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

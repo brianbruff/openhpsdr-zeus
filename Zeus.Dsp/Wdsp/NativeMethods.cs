@@ -606,6 +606,53 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetTXACFCOMPRun(int channel, int run);
 
+    // CFC (Continuous Frequency Compressor — multi-band frequency-domain
+    // compressor sitting in xtxa between xeqp and xbandpass). Issue #123.
+    // Entry points are case-sensitive — note `prof_i_le` is lowercase per
+    // cfcomp.c. Verified via `nm -D libwdsp.so | grep -i CFC`.
+    //
+    // SetTXACFCOMPprofile takes parallel arrays F[], G[], E[] (frequency Hz,
+    // compression dB, post-EQ gain dB) plus optional Q-derivative arrays for
+    // the *parametric* mode. Pass IntPtr.Zero for Qg/Qe to select the classic
+    // (pihpsdr / PowerSDR) non-parametric mode — cfcomp.c:122-123 falls back
+    // to linear interpolation when the Q pointers are NULL. The caller pins
+    // F/G/E with `fixed` blocks and passes them via `ref *pF`.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXACFCOMPprofile(
+        int channel,
+        int nfreqs,
+        ref double F,
+        ref double G,
+        ref double E,
+        IntPtr Qg,
+        IntPtr Qe);
+
+    // Frequency-independent pre-compressor gain (dB).
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXACFCOMPPrecomp(int channel, double precomp);
+
+    // Frequency-independent pre-EQ gain (dB).
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXACFCOMPPrePeq(int channel, double prepeq);
+
+    // Post-comp EQ branch enable (separate toggle from the master CFCOMPRun).
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXACFCOMPPeqRun(int channel, int run);
+
+    // Per-bin compression-meter readback. `comp_values` must be a pinned
+    // double[] sized to the FFT bins; `ready` is set to 1 when a fresh frame
+    // is available. Read-only diagnostic — not on the hot path.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void GetTXACFCOMPDisplayCompression(
+        int channel,
+        ref double comp_values,
+        out int ready);
+
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetTXAPHROTRun(int channel, int run);

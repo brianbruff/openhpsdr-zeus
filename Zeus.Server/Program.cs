@@ -698,6 +698,22 @@ app.MapPost("/api/rx/nr4", (Nr4ConfigSetRequest req, RadioService r) =>
     return Results.Ok(r.SetNr4(req));
 });
 
+// CFC (Continuous Frequency Compressor) — issue #123. POSTs the full 10-band
+// CFC profile + master flags. Defaults to OFF so existing operators see no
+// behavior change. Validation is done by RadioService.SetCfc — bad shapes
+// throw ArgumentException which the framework returns as 400.
+app.MapPost("/api/tx/cfc", (CfcSetRequest req, RadioService r) =>
+{
+    if (req?.Config is null)
+        return Results.BadRequest(new { error = "Config required" });
+    if (req.Config.Bands is null || req.Config.Bands.Length != 10)
+        return Results.BadRequest(new { error = $"Bands must have exactly 10 entries; got {req.Config.Bands?.Length ?? 0}" });
+    log.LogInformation(
+        "api.tx.cfc enabled={Enabled} peq={Peq} preComp={Pre:F1}dB prePeq={PrePeq:F1}dB",
+        req.Config.Enabled, req.Config.PostEqEnabled, req.Config.PreCompDb, req.Config.PrePeqDb);
+    return Results.Ok(r.SetCfc(req));
+});
+
 app.MapPost("/api/rx/zoom", (ZoomSetRequest req, RadioService r) =>
 {
     log.LogInformation("api.rx.zoom level={Level}", req.Level);

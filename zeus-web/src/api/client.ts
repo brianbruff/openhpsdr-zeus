@@ -163,6 +163,47 @@ export type RadioStateDto = {
   twoToneFreq1: number;
   twoToneFreq2: number;
   twoToneMag: number;
+  // CFC (Continuous Frequency Compressor) — issue #123. Always present
+  // after normalisation; falls back to CFC_CONFIG_DEFAULT when the server
+  // omits it (legacy state frames).
+  cfc: CfcConfigDto;
+};
+
+// CFC mirrors Zeus.Contracts.CfcConfig. Bands array is fixed at 10 entries
+// — the panel layout depends on it; the server validates the same.
+export type CfcBandDto = {
+  freqHz: number;
+  compLevelDb: number;
+  postGainDb: number;
+};
+export type CfcConfigDto = {
+  enabled: boolean;
+  postEqEnabled: boolean;
+  preCompDb: number;
+  prePeqDb: number;
+  bands: CfcBandDto[];
+};
+
+// Pihpsdr classic-mode default — voice-band split the operator recognises
+// from PowerSDR. Master OFF + zeroed comp/post means a fresh enable is
+// audibly transparent. Mirrors CfcConfig.Default on the server.
+export const CFC_CONFIG_DEFAULT: CfcConfigDto = {
+  enabled: false,
+  postEqEnabled: false,
+  preCompDb: 0,
+  prePeqDb: 0,
+  bands: [
+    { freqHz: 50,   compLevelDb: 0, postGainDb: 0 },
+    { freqHz: 100,  compLevelDb: 0, postGainDb: 0 },
+    { freqHz: 200,  compLevelDb: 0, postGainDb: 0 },
+    { freqHz: 500,  compLevelDb: 0, postGainDb: 0 },
+    { freqHz: 1000, compLevelDb: 0, postGainDb: 0 },
+    { freqHz: 1500, compLevelDb: 0, postGainDb: 0 },
+    { freqHz: 2000, compLevelDb: 0, postGainDb: 0 },
+    { freqHz: 2500, compLevelDb: 0, postGainDb: 0 },
+    { freqHz: 3000, compLevelDb: 0, postGainDb: 0 },
+    { freqHz: 5000, compLevelDb: 0, postGainDb: 0 },
+  ],
 };
 
 export type FilterPresetDto = {
@@ -354,6 +395,50 @@ export function normalizeState(raw: unknown): RadioStateDto {
     twoToneFreq1: typeof r.twoToneFreq1 === 'number' ? r.twoToneFreq1 : 700,
     twoToneFreq2: typeof r.twoToneFreq2 === 'number' ? r.twoToneFreq2 : 1900,
     twoToneMag: typeof r.twoToneMag === 'number' ? r.twoToneMag : 0.49,
+    cfc: normalizeCfc(r.cfc),
+  };
+}
+
+// Normalise the wire CFC config. Missing or malformed payload falls back to
+// CFC_CONFIG_DEFAULT so a legacy server (no `cfc` field) still gives the
+// settings panel something to render. Bands are clamped to length 10 by
+// padding with the matching default-band slot if the server somehow returns
+// fewer; extras are truncated. The server validates length on POST.
+export function normalizeCfc(raw: unknown): CfcConfigDto {
+  if (!raw || typeof raw !== 'object') return cloneCfc(CFC_CONFIG_DEFAULT);
+  const r = raw as Record<string, unknown>;
+  const rawBands = Array.isArray(r.bands) ? (r.bands as unknown[]) : [];
+  const bands: CfcBandDto[] = [];
+  for (let i = 0; i < 10; i++) {
+    const b = (rawBands[i] ?? {}) as Record<string, unknown>;
+    // CFC_CONFIG_DEFAULT.bands has exactly 10 entries (frozen at module
+    // init), so the indexed lookup is always defined — but tsc's
+    // noUncheckedIndexedAccess can't see that, so fall through with a
+    // zeroed band as a belt-and-braces guard.
+    const fallback =
+      CFC_CONFIG_DEFAULT.bands[i] ?? { freqHz: 0, compLevelDb: 0, postGainDb: 0 };
+    bands.push({
+      freqHz: typeof b.freqHz === 'number' ? b.freqHz : fallback.freqHz,
+      compLevelDb: typeof b.compLevelDb === 'number' ? b.compLevelDb : fallback.compLevelDb,
+      postGainDb: typeof b.postGainDb === 'number' ? b.postGainDb : fallback.postGainDb,
+    });
+  }
+  return {
+    enabled: typeof r.enabled === 'boolean' ? r.enabled : false,
+    postEqEnabled: typeof r.postEqEnabled === 'boolean' ? r.postEqEnabled : false,
+    preCompDb: typeof r.preCompDb === 'number' ? r.preCompDb : 0,
+    prePeqDb: typeof r.prePeqDb === 'number' ? r.prePeqDb : 0,
+    bands,
+  };
+}
+
+function cloneCfc(c: CfcConfigDto): CfcConfigDto {
+  return {
+    enabled: c.enabled,
+    postEqEnabled: c.postEqEnabled,
+    preCompDb: c.preCompDb,
+    prePeqDb: c.prePeqDb,
+    bands: c.bands.map((b) => ({ ...b })),
   };
 }
 
@@ -1164,6 +1249,26 @@ export async function restorePs(filename: string, signal?: AbortSignal): Promise
       signal,
     },
     () => null,
+  );
+}
+
+// CFC (Continuous Frequency Compressor) — issue #123. POSTs the full
+// 10-band CFC profile + master flags. Server treats this as the
+// authoritative state and persists it. Optimistic-update pattern lives in
+// the panel — failures roll the local store back to the prior config.
+export async function setCfcConfig(
+  cfg: CfcConfigDto,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/cfc',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ config: cfg }),
+      signal,
+    },
+    (raw) => normalizeState(raw),
   );
 }
 

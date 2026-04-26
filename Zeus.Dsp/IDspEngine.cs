@@ -231,4 +231,19 @@ public interface IDspEngine : IDisposable
     /// <summary>Restore a previously-saved correction curve. Equivalent to
     /// PSForm's "Restore-and-go" with <c>SetPSControl(0,0,0,1)</c>.</summary>
     void RestorePsCorrection(string path);
+
+    // ----------------- CFC (Continuous Frequency Compressor) ---------------
+    // Multi-band frequency-domain compressor (xcfcomp) — issue #123. The
+    // stage already lives in xtxa between xeqp and xbandpass; this seam just
+    // pushes parameters and toggles run flags. Synthetic engine validates
+    // and no-ops; the WDSP engine pushes the profile arrays + scalar
+    // parameters under the TXA lock and flips Run last so a partial config
+    // never lands in the live audio path.
+
+    /// <summary>Apply a CFC profile: per-band frequencies/compression/post-gains
+    /// plus scalar pre-comp/pre-EQ/post-EQ-run/master-run toggles. The
+    /// <c>cfg.Bands</c> array must have exactly 10 entries (matches pihpsdr
+    /// classic-mode shape; the panel layout depends on it). No-op when no TXA
+    /// is open or on Synthetic.</summary>
+    void SetCfcConfig(CfcConfig cfg);
 }

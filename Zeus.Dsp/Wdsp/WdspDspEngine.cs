@@ -1846,6 +1846,75 @@ public sealed class WdspDspEngine : IDspEngine
         _log.LogInformation("wdsp.restorePsCorrection path={Path}", path);
     }
 
+    // CFC (Continuous Frequency Compressor) — issue #123. xcfcomp already
+    // sits in xtxa between xeqp and xbandpass; this method just pushes the
+    // operator-tuned profile + scalar params and toggles the run flag.
+    //
+    // Param push order matters: profile + scalars + post-EQ-run all happen
+    // BEFORE the master CFCOMPRun flip. That way when the master toggles on,
+    // the audio pipeline starts processing with a fully-configured stage —
+    // mirrors the same "configure, then enable" Thetis pattern we use for
+    // every other WDSP stage (see SetNoiseReduction NR2/NR4 ordering).
+    //
+    // Pass IntPtr.Zero for Qg/Qe — selects classic non-parametric mode
+    // (cfcomp.c:122-123 falls back to linear interpolation). Matches
+    // pihpsdr's cfc_menu.c, which is the canonical reference per issue #123.
+    public unsafe void SetCfcConfig(CfcConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        if (cfg.Bands is null) throw new ArgumentException("Bands must not be null", nameof(cfg));
+        if (cfg.Bands.Length != 10)
+            throw new ArgumentException($"Bands must have exactly 10 entries; got {cfg.Bands.Length}", nameof(cfg));
+
+        if (_disposed != 0) return;
+
+        int txa;
+        lock (_txaLock)
+        {
+            if (_txaChannelId is not int id) return;
+            txa = id;
+        }
+
+        // Build parallel arrays for SetTXACFCOMPprofile. WDSP sorts internally
+        // (cfcomp.c:147) and clamps to [0, Nyquist], so we don't pre-validate
+        // monotonicity — operators are free to type frequencies in any order.
+        const int nfreqs = 10;
+        double[] f = new double[nfreqs];
+        double[] g = new double[nfreqs];
+        double[] e = new double[nfreqs];
+        for (int i = 0; i < nfreqs; i++)
+        {
+            var band = cfg.Bands[i];
+            f[i] = band.FreqHz;
+            g[i] = band.CompLevelDb;
+            e[i] = band.PostGainDb;
+        }
+
+        lock (_txaLock)
+        {
+            // Re-check inside the lock — TXA could have closed between the
+            // outer lookup and here on a teardown race. Same pattern other
+            // _txaLock callers use.
+            if (_txaChannelId is not int id) return;
+
+            fixed (double* pF = f, pG = g, pE = e)
+            {
+                NativeMethods.SetTXACFCOMPprofile(
+                    id, nfreqs,
+                    ref *pF, ref *pG, ref *pE,
+                    IntPtr.Zero, IntPtr.Zero);
+            }
+            NativeMethods.SetTXACFCOMPPrecomp(id, cfg.PreCompDb);
+            NativeMethods.SetTXACFCOMPPrePeq(id, cfg.PrePeqDb);
+            NativeMethods.SetTXACFCOMPPeqRun(id, cfg.PostEqEnabled ? 1 : 0);
+            NativeMethods.SetTXACFCOMPRun(id, cfg.Enabled ? 1 : 0);
+        }
+
+        _log.LogInformation(
+            "wdsp.setCfc enabled={Enabled} peq={Peq} precomp={Pre:F1}dB prepeq={PrePeq:F1}dB",
+            cfg.Enabled, cfg.PostEqEnabled, cfg.PreCompDb, cfg.PrePeqDb);
+    }
+
     private DateTime _lastTxMeterLogUtc;
 
     public int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved)
@@ -1990,10 +2059,11 @@ public sealed class WdspDspEngine : IDspEngine
                 double ma = Math.Max(oi, oq); if (ma > ioutPeak) ioutPeak = ma;
             }
             _log.LogInformation(
-                "wdsp.tx.stage micBlockPeak={MP:F3} iqBlockPeak={IP:F4} | mic pk={MicPk:F1} av={MicAv:F1} | eq pk={EqPk:F1} av={EqAv:F1} | lvlr pk={LvlrPk:F1} av={LvlrAv:F1} gr={LvlrGr:F1} | alc pk={AlcPk:F1} av={AlcAv:F1} gr={AlcGr:F1} | out pk={OutPk:F1} av={OutAv:F1}",
+                "wdsp.tx.stage micBlockPeak={MP:F3} iqBlockPeak={IP:F4} | mic pk={MicPk:F1} av={MicAv:F1} | eq pk={EqPk:F1} av={EqAv:F1} | lvlr pk={LvlrPk:F1} av={LvlrAv:F1} gr={LvlrGr:F1} | cfc pk={CfcPk:F1} av={CfcAv:F1} gr={CfcGr:F1} | alc pk={AlcPk:F1} av={AlcAv:F1} gr={AlcGr:F1} | out pk={OutPk:F1} av={OutAv:F1}",
                 micBlockPeak, ioutPeak,
                 micPk, micAv, eqPk, eqAv,
                 lvlrPk, lvlrAv, -lvlrGain,
+                cfcPk, cfcAv, -cfcGain,
                 alcPk, alcAv, -alcGain,
                 outPk, outAv);
         }

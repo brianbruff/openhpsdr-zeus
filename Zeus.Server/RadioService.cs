@@ -151,6 +151,10 @@ public sealed class RadioService : IDisposable
 
         // Load persisted DSP settings from the store, or use defaults if not found
         var persistedNr = _dspSettingsStore.Get() ?? new NrConfig();
+        // CFC — issue #123. Persisted globally; null on a fresh install or
+        // legacy DB row falls back to the default-OFF baseline so the operator
+        // sees no behaviour change unless they enable.
+        var persistedCfc = _dspSettingsStore.GetCfc() ?? CfcConfig.Default;
 
         // Seed the last-preset cache from persisted store for all modes so
         // the first mode-switch in a session recalls the correct slot.
@@ -198,7 +202,8 @@ public sealed class RadioService : IDisposable
             // (700/1900 Hz, 0.49 each — peak ~0.98 just under WDSP IQ clip).
             TwoToneFreq1: ps?.TwoToneFreq1 ?? 700.0,
             TwoToneFreq2: ps?.TwoToneFreq2 ?? 1900.0,
-            TwoToneMag: ps?.TwoToneMag ?? 0.49);
+            TwoToneMag: ps?.TwoToneMag ?? 0.49,
+            Cfc: persistedCfc);
     }
 
     /// <summary>
@@ -789,6 +794,27 @@ public sealed class RadioService : IDisposable
             Nr4Position = req.Position ?? current.Nr4Position,
         };
         return SetNr(merged);
+    }
+
+    // CFC (Continuous Frequency Compressor) — issue #123. The whole 10-band
+    // config travels in one POST because the operator edits the panel as a
+    // single table; the engine then re-pushes the whole profile to WDSP.
+    // Mirrors the SetNr shape: validate, mutate state, persist, return
+    // snapshot. DspPipelineService picks up the change-detect on the next
+    // OnRadioStateChanged tick and pushes through to the engine.
+    public StateDto SetCfc(CfcSetRequest req)
+    {
+        ArgumentNullException.ThrowIfNull(req);
+        var cfg = req.Config ?? throw new ArgumentException("Config required", nameof(req));
+        if (cfg.Bands is null || cfg.Bands.Length != 10)
+            throw new ArgumentException($"Bands must have exactly 10 entries; got {cfg.Bands?.Length ?? 0}", nameof(req));
+
+        Mutate(s => s with { Cfc = cfg });
+        _dspSettingsStore.Upsert(cfg);
+        _log.LogInformation(
+            "radio.setCfc enabled={Enabled} peq={Peq} preComp={Pre:F1}dB prePeq={PrePeq:F1}dB",
+            cfg.Enabled, cfg.PostEqEnabled, cfg.PreCompDb, cfg.PrePeqDb);
+        return Snapshot();
     }
 
     // ---------------- PureSignal ----------------

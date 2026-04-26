@@ -981,6 +981,35 @@ app.Map("/ws", async (HttpContext ctx, StreamingHub hub) =>
     await hub.AttachClientAsync(ws, ctx.RequestAborted);
 });
 
+// Display startup banner with version and shutdown instructions
+{
+    var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+    var attr = assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+        .FirstOrDefault() as System.Reflection.AssemblyInformationalVersionAttribute;
+    var version = attr?.InformationalVersion ?? "unknown";
+
+    Console.WriteLine();
+    Console.WriteLine("═══════════════════════════════════════════════════════════════");
+    Console.WriteLine("  Zeus — OpenHPSDR Protocol 1 / Protocol 2 Client");
+    Console.WriteLine($"  Version: {version}");
+    Console.WriteLine("  Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors");
+    Console.WriteLine("  Licensed under GPL-2.0-or-later");
+    Console.WriteLine("═══════════════════════════════════════════════════════════════");
+    Console.WriteLine();
+    Console.WriteLine($"  Server listening on: http://localhost:{zeusPort}");
+    if (tciEnabled)
+        Console.WriteLine($"  TCI listening on:    {tciBindAddress}:{tciPort}");
+    Console.WriteLine();
+    Console.WriteLine("  Open your web browser and navigate to the server address above.");
+    Console.WriteLine();
+    Console.WriteLine("  To STOP the server:");
+    Console.WriteLine("    • Press Ctrl+C in this console window, or");
+    Console.WriteLine("    • Close this console window");
+    Console.WriteLine();
+    Console.WriteLine("  Server starting...");
+    Console.WriteLine();
+}
+
 app.Run();
 
 static bool TryValidateSampleRate(int rate, out string error)

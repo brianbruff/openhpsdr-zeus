@@ -107,6 +107,7 @@ public sealed class TciServer : IHostedService, IDisposable
         _radio.Connected += OnRadioConnected;
         _radio.Disconnected += OnRadioDisconnected;
         _pipeline.RxMeterUpdated += OnRxMeterUpdated;
+        _pipeline.RxIqAvailable += OnRxIqAvailable;
         _txMeters.TxMetersUpdated += OnTxMetersUpdated;
         _subscribed = true;
 
@@ -122,6 +123,7 @@ public sealed class TciServer : IHostedService, IDisposable
             _radio.Connected -= OnRadioConnected;
             _radio.Disconnected -= OnRadioDisconnected;
             _pipeline.RxMeterUpdated -= OnRxMeterUpdated;
+            _pipeline.RxIqAvailable -= OnRxIqAvailable;
             _txMeters.TxMetersUpdated -= OnTxMetersUpdated;
             _subscribed = false;
         }
@@ -219,6 +221,29 @@ public sealed class TciServer : IHostedService, IDisposable
         // TCI rx_smeter event: rx_smeter:<rx>,<chan>,<dbm>
         // Rate-limited to avoid flooding during rapid meter updates
         BroadcastRateLimited($"rx_smeter:0,{channelId}", TciProtocol.Command("rx_smeter", 0, channelId, (int)Math.Round(dbm)));
+    }
+
+    private void OnRxIqAvailable(int receiver, int sampleRateHz, ReadOnlyMemory<double> interleavedIQ)
+    {
+        // The pooled IQ buffer is only valid for the duration of this call.
+        // Build the binary frame synchronously (which copies samples into a
+        // freshly allocated byte[]) so the enqueued payload outlives the buffer.
+        if (_clients.IsEmpty) return;
+
+        // Cheap pre-flight: skip the allocate+copy if no client wants this RX.
+        bool anyWants = false;
+        foreach (var session in _clients.Values)
+        {
+            if (session.WantsIqStream(receiver)) { anyWants = true; break; }
+        }
+        if (!anyWants) return;
+
+        var payload = TciStreamPayload.BuildIqFromDoubles(receiver, sampleRateHz, interleavedIQ.Span);
+        foreach (var session in _clients.Values)
+        {
+            if (session.WantsIqStream(receiver))
+                session.SendBinary(payload);
+        }
     }
 
     private void OnTxMetersUpdated(float fwdWatts, float refWatts, float swr, float alcPk, float alcGr)

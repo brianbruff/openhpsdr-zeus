@@ -105,6 +105,30 @@ The following commands are accepted by the dispatcher but currently no-op (logge
 
 **Note:** Spots are stored but not rendered on the panadapter in this release.
 
+### Binary Streams (Phase 3)
+
+- `iq_start:<rx>,<bool>` — Subscribe (true) / unsubscribe (false) to RX IQ binary stream for the given receiver
+- `iq_stop:<rx>` — Alias for `iq_start:<rx>,false`
+- `iq_samplerate:<hz>` — Set/query requested IQ sample rate (clamped to 48000–384000)
+
+The actual rate of published frames is the radio's native IQ sample rate (set via the protocol layer); the server echoes the clamped requested rate so the client knows what it will receive. Streams emit WebSocket binary frames with the 64-byte TCI header described below.
+
+#### Binary frame layout (64-byte header + samples)
+
+All header fields are little-endian uint32. Layout matches Thetis `buildStreamPayload`:
+
+| Offset | Field | IQ value |
+|---|---|---|
+| 0..3 | receiver index | `0` |
+| 4..7 | sample rate (Hz) | radio native (48k/96k/192k/384k) |
+| 8..11 | sample type | `3` = FLOAT32 |
+| 12..19 | reserved | 0 |
+| 20..23 | length | float-value count = `complex_samples * 2` |
+| 24..27 | stream type | `0` = IQ_STREAM |
+| 28..31 | channels | `2` (I, Q interleaved) |
+| 32..63 | reserved | 0 |
+| 64.. | payload | FLOAT32 little-endian, interleaved I, Q, I, Q, … |
+
 ## Events (Server → Client)
 
 The server broadcasts these events to all connected clients when radio state changes:
@@ -176,10 +200,12 @@ tx_enable:0,true;
 - ✅ TX-meter event broadcasts (power, SWR, ALC)
 - 🟡 CW message / keyer commands (ack-only stubs; functional impl deferred pending CW engine)
 
-**Phase 3 — Binary Streams**
-- IQ streaming (`iq_start`, `iq_stop`, `iq_samplerate`)
-- Audio streaming (`audio_start`, `audio_stop`, `audio_samplerate`)
-- Backpressure handling
+**Phase 3 — Binary Streams** 🟡 (Partially Complete)
+- ✅ IQ streaming (`iq_start`, `iq_stop`, `iq_samplerate`) — single receiver, FLOAT32, native radio rate
+- ✅ Outbound priority queues (Urgent / Binary / Control) mirroring Thetis architecture
+- ⏸️ Audio streaming (`audio_start`, `audio_stop`, `audio_samplerate`)
+- ⏸️ Multi-receiver IQ when Zeus gains Diversity / dual-RX support
+- ⏸️ Conformance test against a real third-party client (Log4OM / SMP)
 
 **Phase 4 — Polish**
 - Noise reduction commands (NB, NR, ANF, ANC)

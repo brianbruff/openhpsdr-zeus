@@ -103,6 +103,13 @@ public class DspPipelineService : BackgroundService
     private double _appliedPsHwPeak = 0.4072;
     private string _appliedPsIntsSpiPreset = "16/256";
     private PsFeedbackSource _appliedPsFeedbackSource = PsFeedbackSource.Internal;
+    // PS-Monitor toggle (issue #121). Pure source-routing flag — Tick reads
+    // it on each tick to choose between the TX analyzer (predistorted IQ)
+    // and the PS-feedback analyzer (post-PA loopback IQ). volatile because
+    // OnRadioStateChanged writes from the state-handler thread and Tick
+    // reads from the pipeline thread — no compound mutation, just a bool.
+    private volatile bool _psMonitorEnabled;
+    private long _psMonitorTickCount;
     // Set by DisconnectP2Async so the next OnRadioStateChanged after a
     // fresh ConnectP2Async re-pushes every PS field regardless of equality
     // — necessary because the new WdspDspEngine instance starts with field
@@ -425,6 +432,15 @@ public class DspPipelineService : BackgroundService
             // the next CmdHighPriority emission. WDSP is unaffected.
             _p2Client?.SetPsFeedbackSource(s.PsFeedbackSource == PsFeedbackSource.External);
             _appliedPsFeedbackSource = s.PsFeedbackSource;
+        }
+        // PS-Monitor (issue #121) — pure UI source routing. No engine call,
+        // no wire write; Tick reads _psMonitorEnabled and prefers the
+        // PS-feedback analyzer when on + PS armed + correcting. Latched
+        // here so the volatile read in Tick stays cheap.
+        if (_psMonitorEnabled != s.PsMonitorEnabled)
+        {
+            _log.LogInformation("psMonitor.latch enabled={Enabled}", s.PsMonitorEnabled);
+            _psMonitorEnabled = s.PsMonitorEnabled;
         }
         // Resync done — clear the flag so subsequent state changes use
         // normal change-detect (no spurious wire writes on each tick).
@@ -813,11 +829,44 @@ public class DspPipelineService : BackgroundService
         // we fall through to the RX analyzer, matching the pre-issue-#81
         // behaviour. This fallback also covers the first ~1 tick after
         // keying before the analyzer averaging has settled.
+        //
+        // Issue #121 layered on top: if the operator has the "Monitor PA
+        // output" toggle on AND PS is armed AND PS has converged
+        // (info[14]==1, surfaced via GetPsStageMeters().Correcting), prefer
+        // the PS-feedback analyzer (post-PA loopback IQ). Falls back to the
+        // TX analyzer if the PS-FB analyzer hasn't produced a fresh FFT yet
+        // — same shape as the existing TX → RX fallback. Default-off
+        // toggle: when off the codepath is identical to pre-#121, byte for
+        // byte, on every board.
         bool pan = false, wf = false;
+        bool psFbPanUsed = false, psFbWfUsed = false;
         if (_keyed)
         {
-            pan = engine.TryGetTxDisplayPixels(DisplayPixout.Panadapter, panBuf);
-            wf = engine.TryGetTxDisplayPixels(DisplayPixout.Waterfall, wfBuf);
+            if (_appliedPsEnabled && _psMonitorEnabled
+                && engine.GetPsStageMeters().Correcting)
+            {
+                pan = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Panadapter, panBuf);
+                wf = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Waterfall, wfBuf);
+                psFbPanUsed = pan;
+                psFbWfUsed = wf;
+            }
+            if (!pan) pan = engine.TryGetTxDisplayPixels(DisplayPixout.Panadapter, panBuf);
+            if (!wf) wf = engine.TryGetTxDisplayPixels(DisplayPixout.Waterfall, wfBuf);
+        }
+        if (_keyed && _psMonitorEnabled)
+        {
+            _psMonitorTickCount++;
+            if (_psMonitorTickCount % 30 == 0)
+            {
+                var m = engine.GetPsStageMeters();
+                _log.LogInformation(
+                    "psMonitor.gate keyed=1 psEn={PsEn} mon=1 corr={Corr} psFbPan={Pan} psFbWf={Wf}",
+                    _appliedPsEnabled, m.Correcting, psFbPanUsed, psFbWfUsed);
+            }
+        }
+        else
+        {
+            _psMonitorTickCount = 0;
         }
         if (!pan) pan = engine.TryGetDisplayPixels(channel, DisplayPixout.Panadapter, panBuf);
         if (!wf) wf = engine.TryGetDisplayPixels(channel, DisplayPixout.Waterfall, wfBuf);

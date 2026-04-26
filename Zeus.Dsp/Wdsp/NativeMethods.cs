@@ -199,6 +199,17 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void Spectrum0(int run, int disp, int ss, int LO, ref double pbuff);
 
+    // Pull complex IQ samples from TXA's siphon ring. The siphon sits at
+    // xsiphon's position in xtxa, which is BEFORE iqc (PureSignal correction)
+    // and BEFORE cfir/rsmpout. Default run=1, mode=0, sipsize=16384 (set
+    // inside libwdsp's create_txa). Output buffer is 2*size floats interleaved
+    // I,Q,I,Q. This lets the panadapter render the operator's pre-distortion
+    // voice spectrum so the trace looks "clean" while PS is converging — the
+    // same approach Thetis uses (cmaster.cs:544-545 + siphon.c:268).
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void TXAGetaSipF1(int channel, ref float pout, int size);
+
     // Averaging trio. Mode 3 = log-recursive (EMA in dB space) — the Thetis
     // default. Backmult is the per-frame retention factor (0 = no smoothing,
     // 1 = frozen). NumAverage matters for modes 2/4; we're on mode 3 so it

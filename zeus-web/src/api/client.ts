@@ -992,6 +992,29 @@ export async function setPsFeedbackSource(
   );
 }
 
+// PS-Monitor toggle (issue #121). When on AND PS is armed AND PS has
+// converged, the TX panadapter switches its source from the post-CFIR
+// predistorted-IQ analyzer to the PS-feedback (post-PA loopback) analyzer
+// so the operator sees the actual on-air RF instead of the predistorted
+// baseband. Default off — preserves the Thetis-style predistorted view.
+// Server-side this is a pure UI source-routing flag; no WDSP setter, no
+// wire-format change, default-off is byte-identical to pre-#121.
+export async function setPsMonitor(
+  enabled: boolean,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/ps/monitor',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+      signal,
+    },
+    (raw) => raw as RadioStateDto,
+  );
+}
+
 export async function resetPs(signal?: AbortSignal): Promise<void> {
   await jsonFetch('/api/tx/ps/reset', { method: 'POST', signal }, () => null);
 }

@@ -123,6 +123,17 @@ public sealed record StateDto(
     // fields ARE persisted via PsSettingsStore so the operator's calibration
     // tuning survives restarts.
     bool PsEnabled = false,
+    // PsMonitorEnabled — operator-facing "Monitor PA output" toggle
+    // (issue #121). When true AND PsEnabled AND PS has converged
+    // (info[14]==1), DspPipelineService.Tick switches the TX panadapter /
+    // waterfall source from the post-CFIR predistorted-IQ analyzer to the
+    // PS-feedback analyzer fed from the radio's loopback ADC, so the
+    // operator sees the actual on-air signal. Default off — preserves the
+    // Thetis-style predistorted view. Hidden / disabled in the UI on
+    // boards that have no PS feedback path (e.g. HermesLite2). NOT
+    // persisted server-side: this is an operator viewing preference,
+    // resets to off each session same as PsEnabled.
+    bool PsMonitorEnabled = false,
     bool PsAuto = true,             // continuous adapt by default once armed
     bool PsSingle = false,          // one-shot SetPSControl(1,1,0,0)
     bool PsPtol = false,            // false = strict 0.4; true = relax 0.8
@@ -299,6 +310,12 @@ public sealed record PsRestoreRequest(string Filename);
 // Sent from the PS settings panel. Affects only the radio-side ALEX bit;
 // the WDSP cal/iqc stages operate on whatever IQ arrives at DDC0/DDC1.
 public sealed record PsFeedbackSourceSetRequest(PsFeedbackSource Source);
+
+// "Monitor PA output" toggle (issue #121). Pure UI/source-routing flag —
+// no WDSP setter, no wire-format change. RadioService just stamps the
+// StateDto, DspPipelineService reads it on Tick to pick which analyzer
+// to drain. Default off; operator opt-in.
+public sealed record PsMonitorSetRequest(bool Enabled);
 
 // Two-tone test generator (used as PS calibration excitation but works
 // standalone too). Protocol-agnostic.

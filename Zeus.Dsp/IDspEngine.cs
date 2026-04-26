@@ -77,6 +77,16 @@ public interface IDspEngine : IDisposable
     /// see issue #81. No-op on Synthetic.</summary>
     bool TryGetTxDisplayPixels(DisplayPixout which, Span<float> dbOut);
 
+    /// <summary>PureSignal-feedback panadapter / waterfall pixels in dBm,
+    /// sourced from a separate WDSP analyzer fed with the post-PA loopback
+    /// IQ pumped through <see cref="FeedPsFeedbackBlock"/>. Returns false
+    /// when PS isn't armed (analyzer slot closed), TXA isn't open, or no
+    /// fresh FFT is ready. Caller is expected to also check that PS has
+    /// converged (info[14]==1) before showing this trace — pre-correction
+    /// the loopback shows the real PA splatter. See issue #121.
+    /// No-op on Synthetic.</summary>
+    bool TryGetPsFeedbackDisplayPixels(DisplayPixout which, Span<float> dbOut);
+
     /// <summary>Open the TXA channel. Idempotent — calling twice returns the existing id.
     /// Must be called after at least one OpenChannel(RXA). For Synthetic, returns -1 and is a no-op.
     /// <paramref name="outputRateHz"/> picks the TXA profile: 48000 for P1 (48k in/out, CFIR off),

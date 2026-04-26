@@ -622,6 +622,17 @@ app.MapPost("/api/tx/ps/feedback-source",
     return Results.Ok(r.SetPsFeedbackSource(req));
 });
 
+// PS-Monitor — operator-facing toggle that swaps the TX panadapter source
+// from the predistorted-IQ analyzer to the PS-feedback (post-PA) analyzer.
+// Pure UI/source-routing flag; no WDSP setter, no wire-format change.
+// Default off; resets each session same as the PS master arm. See issue #121.
+app.MapPost("/api/tx/ps/monitor",
+    (PsMonitorSetRequest req, RadioService r) =>
+{
+    log.LogInformation("api.tx.ps.monitor enabled={Enabled}", req.Enabled);
+    return Results.Ok(r.SetPsMonitor(req));
+});
+
 app.MapPost("/api/tx/ps/reset", (DspPipelineService pipe) =>
 {
     log.LogInformation("api.tx.ps.reset");

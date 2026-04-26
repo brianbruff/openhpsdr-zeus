@@ -177,6 +177,10 @@ public sealed class SyntheticDspEngine : IDspEngine
     // while MOX is on, matching the existing "no new data" semantics.
     public bool TryGetTxDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
 
+    // Synthetic has no PS feedback path either — the PS-Monitor toggle is a
+    // no-op here, same shape as TryGetTxDisplayPixels.
+    public bool TryGetPsFeedbackDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
+
     private const float NoiseFloorDb = -90f;
     private const float SweepPeakDb = -25f;
     private const float StaticPeakDb = -35f;

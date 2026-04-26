@@ -799,6 +799,22 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
+    /// <summary>
+    /// Toggle the "Monitor PA output" view (issue #121). When on, AND PS is
+    /// armed, AND PS has converged, DspPipelineService.Tick reads pixels
+    /// from the PS-feedback analyzer instead of the post-CFIR TX analyzer
+    /// so the operator sees the actual on-air RF rather than the
+    /// predistorted baseband. Operator viewing preference — NOT persisted
+    /// across sessions (same discipline as PsEnabled / MOX).
+    /// </summary>
+    public StateDto SetPsMonitor(PsMonitorSetRequest req)
+    {
+        ArgumentNullException.ThrowIfNull(req);
+        _log.LogInformation("setPsMonitor enabled={Enabled}", req.Enabled);
+        Mutate(s => s with { PsMonitorEnabled = req.Enabled });
+        return Snapshot();
+    }
+
     public StateDto SetTwoTone(TwoToneSetRequest req)
     {
         ArgumentNullException.ThrowIfNull(req);

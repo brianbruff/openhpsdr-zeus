@@ -204,6 +204,30 @@ public sealed class WdspDspEngine : IDspEngine
     private int _txDispRxSampleRateHz;
     private bool _txDispAlive;
 
+    // PureSignal feedback display analyzer (issue #121). Optional second WDSP
+    // disp slot fed from FeedPsFeedbackBlock's rxI/rxQ — i.e. the post-PA
+    // signal observed via the radio's loopback ADC. When the operator turns on
+    // the "Monitor PA output" toggle (StateDto.PsMonitorEnabled) AND PS is
+    // armed AND calcc reports correcting=true, DspPipelineService.Tick reads
+    // pixels from this analyzer instead of the post-CFIR TX analyzer so the
+    // panadapter shows the actual on-air RF rather than the predistorted
+    // baseband. Lifecycle is paired with SetPsEnabled(true/false): we open
+    // the disp slot when PS arms and tear it down when PS disarms so the
+    // WDSP analyzer table doesn't leak.
+    //
+    // Pixel width / zoom / matched RX sample rate are inherited from the TX
+    // analyzer at arm time so display frames slot in with no resize when the
+    // toggle flips. If the TX analyzer isn't alive (no RXA, or rate mismatch)
+    // the PS-FB analyzer is also skipped — Tick will fall through to the TX
+    // analyzer (or RX analyzer) the same as today.
+    private readonly object _psFbDispLock = new();
+    private int? _psFbDispId;
+    private int _psFbDispPixelWidth;
+    private int _psFbDispZoomLevel = 1;
+    private int _psFbDispRxSampleRateHz;
+    private bool _psFbDispAlive;
+    private long _psFbFeedCount;
+
     // PureSignal state. _psLock serializes the WDSP PS setters (which mutate
     // shared state inside calcc.c) and FeedPsFeedbackBlock. _psInfoBuf is
     // pinned once and reused on every GetPSInfo call.
@@ -219,6 +243,11 @@ public sealed class WdspDspEngine : IDspEngine
     private double _psAmpDelayNs = 150.0;
     private bool _psPtol;                // false = strict 0.8 ; true = relax 0.4 (matches pihpsdr/Thetis: ptol ? 0.4 : 0.8)
     private const int PsFeedbackBlockSize = 1024;
+    // PS feedback IQ runs at 192 kHz on G2 / Saturn / ANAN-7000 (P2 paired
+    // DDC0/DDC1 — see SetPSFeedbackRate(id, 192_000) in OpenTxChannel).
+    // Used when configuring the PS-feedback display analyzer so its bin-clip
+    // math matches the data rate it's receiving.
+    private const int PsFeedbackSampleRateHz = 192_000;
     private readonly int[] _psInfoBuf = new int[16];
     // Edge-triggered state-transition log target. 255 is an out-of-range
     // sentinel so the first observed state always logs (LRESET..LTURNON
@@ -480,7 +509,19 @@ public sealed class WdspDspEngine : IDspEngine
             {
                 _txDispZoomLevel = level;
                 txaIdToReconfig = txa;
-                TryConfigureTxAnalyzer(txa, _txaOutputRateHz, _txaOutSize, _txDispRxSampleRateHz, _txDispPixelWidth, level);
+                TryConfigureTxAnalyzer(txa, _txaDspRateHz, _txaDspSize, _txDispRxSampleRateHz, _txDispPixelWidth, level);
+            }
+        }
+
+        // Mirror zoom onto the PS-FB analyzer when it's open, same reasoning
+        // as the TX analyzer: keep the PA-output trace span lock-step with the
+        // RX panadapter so toggling the PS-Monitor view doesn't shift the axis.
+        lock (_psFbDispLock)
+        {
+            if (_psFbDispAlive && _psFbDispId is int psFb)
+            {
+                _psFbDispZoomLevel = level;
+                TryConfigureTxAnalyzer(psFb, PsFeedbackSampleRateHz, PsFeedbackBlockSize, _psFbDispRxSampleRateHz, _psFbDispPixelWidth, level);
             }
         }
 
@@ -743,6 +784,31 @@ public sealed class WdspDspEngine : IDspEngine
         }
     }
 
+    /// <summary>PureSignal feedback panadapter pixels — sourced from the
+    /// post-PA loopback IQ pumped through FeedPsFeedbackBlock. Returns false
+    /// when the PS-FB analyzer is not open (PS disarmed, TX analyzer inactive,
+    /// or engine disposed). Caller is expected to gate this on
+    /// <c>PsEnabled &amp;&amp; PsMonitorEnabled &amp;&amp; PsCorrecting</c> so a
+    /// pre-correction transient doesn't briefly show splatter on the
+    /// panadapter.</summary>
+    public bool TryGetPsFeedbackDisplayPixels(DisplayPixout which, Span<float> dbOut)
+    {
+        if (_disposed != 0) return false;
+        int disp;
+        int expectedWidth;
+        lock (_psFbDispLock)
+        {
+            if (!_psFbDispAlive) return false;
+            if (_psFbDispId is not int id) return false;
+            disp = id;
+            expectedWidth = _psFbDispPixelWidth;
+            if (dbOut.Length != expectedWidth)
+                throw new ArgumentException($"expected span of {expectedWidth}", nameof(dbOut));
+            NativeMethods.GetPixels(disp, (int)which, ref MemoryMarshal.GetReference(dbOut), out int flag);
+            return flag == 1;
+        }
+    }
+
     public int OpenTxChannel(int outputRateHz = 48_000)
     {
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
@@ -965,10 +1031,18 @@ public sealed class WdspDspEngine : IDspEngine
                         _txDispPixelWidth = rxPixelWidth;
                         _txDispZoomLevel = rxZoom;
                         _txDispRxSampleRateHz = rxSampleRateHz;
-                        configured = TryConfigureTxAnalyzer(id, _txaOutputRateHz, _txaOutSize, rxSampleRateHz, rxPixelWidth, rxZoom);
+                        // Configure for the SIPHON tap point (xsiphon position
+                        // in xtxa — BEFORE iqc/cfir/rsmpout). dsp_rate / dsp_size
+                        // describe the IQ at that stage. Pulling pre-iqc samples
+                        // gives the operator's clean voice spectrum on the
+                        // panadapter, matching Thetis (cmaster.cs:544-545,
+                        // TXA.c:586). Pre-fix the analyzer was configured at
+                        // the OUTPUT (post-cfir/rsmpout) rate and got fed the
+                        // predistorted IQ — cosmetically dirty by design.
+                        configured = TryConfigureTxAnalyzer(id, _txaDspRateHz, _txaDspSize, rxSampleRateHz, rxPixelWidth, rxZoom);
                         if (configured)
                         {
-                            ConfigureDisplayAveraging(id);
+                            ConfigureDisplayAveragingTau(id, TxAvgTauSec);
                             _txDispAlive = true;
                         }
                     }
@@ -1359,10 +1433,21 @@ public sealed class WdspDspEngine : IDspEngine
                 // single-cal cycle (which can leave the SM in LSTAYON) starts
                 // a fresh fit (Thetis PSForm.cs:645,661).
                 NativeMethods.SetPSControl(id, 1, mancal, automode, 0);
+                // Open the PS-feedback display analyzer (issue #121). Inherits
+                // pixel width / zoom / matched RX rate from the TX analyzer so
+                // the PS-Monitor pan/wf frames slot into the same widget the
+                // TX analyzer is rendering into. Skipped when TX analyzer is
+                // off (no RXA, or P1 P2 rate-ratio mismatch) — the toggle
+                // becomes a no-op in that case and Tick keeps falling through
+                // to the existing TX/RX trace.
+                OpenPsFeedbackAnalyzer(id);
             }
             else
             {
                 _psEnabled = false;
+                // Tear down the PS-FB analyzer first so a stale GetPixels
+                // call from Tick doesn't race with WDSP cleaning up the slot.
+                ClosePsFeedbackAnalyzer();
                 // pihpsdr shutdown gotcha (transmitter.c:2422-2444): when
                 // disabling PS while NOT keyed, push 7 zero-IQ blocks through
                 // psccF so the calcc state machine advances to LRESET cleanly
@@ -1377,6 +1462,93 @@ public sealed class WdspDspEngine : IDspEngine
             }
         }
         _log.LogInformation("wdsp.setPsEnabled enabled={Enabled}", enabled);
+    }
+
+    // Open / configure the PS-feedback display analyzer. Caller holds
+    // _psLock. Mirrors the TX analyzer's pixel width / zoom / matched RX
+    // sample rate so DspPipelineService.Tick can pick between TX-pixels and
+    // PS-FB-pixels per tick without a buffer resize.
+    private void OpenPsFeedbackAnalyzer(int txaId)
+    {
+        // Snapshot TX-display geometry under its own lock — we need it whether
+        // or not _txDispAlive is true, but the values are only meaningful when
+        // it is.
+        bool txAlive;
+        int pixelWidth;
+        int rxRate;
+        int zoom;
+        lock (_txDispLock)
+        {
+            txAlive = _txDispAlive;
+            pixelWidth = _txDispPixelWidth;
+            rxRate = _txDispRxSampleRateHz;
+            zoom = _txDispZoomLevel;
+        }
+        if (!txAlive || pixelWidth <= 0)
+        {
+            _log.LogInformation("wdsp.psFb.open skip — txDisp not alive (toggle will fall through to TX pixels)");
+            return;
+        }
+
+        lock (_psFbDispLock)
+        {
+            if (_psFbDispAlive) return;
+
+            // Pick a disp slot that doesn't collide with any RX channel id or
+            // the TXA channel id. WDSP's analyzer table is indexed
+            // independently of channel ids (see comment at OpenTxChannel
+            // analyzer creation), but our own bookkeeping needs the int to be
+            // unique so SetZoom / Spectrum0 / GetPixels reach the right slot.
+            int psFbId = 0;
+            while (_channels.ContainsKey(psFbId) || psFbId == txaId) psFbId++;
+
+            NativeMethods.XCreateAnalyzer(psFbId, out int rc, MaxFftSize, 1, 1, null);
+            if (rc != 0)
+            {
+                _log.LogWarning("wdsp.psFb.open XCreateAnalyzer rc={Rc} — PS-Monitor will fall back to TX trace", rc);
+                return;
+            }
+            bool configured = TryConfigureTxAnalyzer(psFbId, PsFeedbackSampleRateHz, PsFeedbackBlockSize, rxRate, pixelWidth, zoom);
+            if (!configured)
+            {
+                NativeMethods.DestroyAnalyzer(psFbId);
+                _log.LogWarning(
+                    "wdsp.psFb.open skipped — rx={RxRate} psFb={PsFbRate} not an integer multiple; PS-Monitor will fall back to TX trace",
+                    rxRate, PsFeedbackSampleRateHz);
+                return;
+            }
+            ConfigureDisplayAveragingTau(psFbId, TxAvgTauSec);
+            _psFbDispId = psFbId;
+            _psFbDispPixelWidth = pixelWidth;
+            _psFbDispRxSampleRateHz = rxRate;
+            _psFbDispZoomLevel = zoom;
+            _psFbDispAlive = true;
+            _log.LogInformation(
+                "wdsp.psFb.open id={Id} pix={Pix} rxRate={RxRate} psFbRate={PsFbRate} zoom={Zoom}",
+                psFbId, pixelWidth, rxRate, PsFeedbackSampleRateHz, zoom);
+        }
+    }
+
+    // Tear down the PS-feedback display analyzer. Caller holds _psLock so
+    // FeedPsFeedbackBlock can't race in mid-Spectrum0; combined with
+    // _psFbDispLock around GetPixels / Spectrum0 this keeps the analyzer slot
+    // safe to destroy.
+    private void ClosePsFeedbackAnalyzer()
+    {
+        lock (_psFbDispLock)
+        {
+            if (!_psFbDispAlive) return;
+            if (_psFbDispId is int id)
+            {
+                NativeMethods.DestroyAnalyzer(id);
+                _log.LogInformation("wdsp.psFb.close id={Id}", id);
+            }
+            _psFbDispId = null;
+            _psFbDispAlive = false;
+            _psFbDispPixelWidth = 0;
+            _psFbDispRxSampleRateHz = 0;
+            _psFbDispZoomLevel = 1;
+        }
     }
 
     public void FeedPsFeedbackBlock(ReadOnlySpan<float> txI, ReadOnlySpan<float> txQ,
@@ -1416,6 +1588,44 @@ public sealed class WdspDspEngine : IDspEngine
                 // line never appears while keyed + PS armed, the wire path
                 // (Protocol2Client paired-packet decode) isn't running.
                 _log.LogInformation("wdsp.pscc fed {N} blocks", n);
+            }
+        }
+
+        // Feed the PS-feedback display analyzer with the same rxI/rxQ block
+        // (post-PA loopback IQ). DspPipelineService.Tick reads from this
+        // analyzer when PsMonitorEnabled is on, surfacing the actual on-air
+        // signal instead of the predistorted TX-modulator IQ. Q is negated
+        // for the same WDSP analyzer convention used on the RX and TX paths
+        // (see ProcessTxBlock: `txSpectrumIq[2*i + 1] = -qout[i]`); without
+        // it the PS-Monitor view would render with sidebands flipped about
+        // the carrier.
+        if (_psFbDispAlive)
+        {
+            int? psFbId = null;
+            lock (_psFbDispLock)
+            {
+                if (_psFbDispAlive) psFbId = _psFbDispId;
+            }
+            if (psFbId is int fbDisp)
+            {
+                Span<double> psSpectrumIq = stackalloc double[2 * PsFeedbackBlockSize];
+                for (int i = 0; i < PsFeedbackBlockSize; i++)
+                {
+                    psSpectrumIq[2 * i] = bufRxI[i];
+                    psSpectrumIq[2 * i + 1] = -bufRxQ[i];
+                }
+                lock (_psFbDispLock)
+                {
+                    if (_psFbDispAlive && _psFbDispId == fbDisp)
+                    {
+                        NativeMethods.Spectrum0(1, fbDisp, 0, 0, ref psSpectrumIq[0]);
+                        long n = ++_psFbFeedCount;
+                        if (n == 1 || n % 200 == 0)
+                        {
+                            _log.LogInformation("wdsp.psFb.fed n={N} blocks", n);
+                        }
+                    }
+                }
             }
         }
     }
@@ -1601,23 +1811,28 @@ public sealed class WdspDspEngine : IDspEngine
         }
 
         // Feed the TX analyzer with the post-CFIR IQ so TryGetTxDisplayPixels
-        // can serve the panadapter during MOX (issue #81). pihpsdr's
-        // transmitter.c:1639 feeds iq_output_buffer — same tap point. We feed
-        // unconditionally here: ProcessTxBlock only runs while TXA is keyed,
-        // and when it isn't called the analyzer's log-recursive average just
-        // coasts. Q is negated (complex conjugate) to match the RX analyzer's
-        // treatment in RunWorker: WDSP's analyzer pipeline renders both
-        // sidebands flipped about the carrier for our IQ convention, so the
-        // same empirical fix is needed on TX. Observed on a G2 MkII: without
-        // the negation, an LSB carrier/modulation rendered on the USB side
-        // and vice-versa even though on-air RF and audio were correct.
+        // Feed the TX analyzer from the WDSP TXA SIPHON (xsiphon position in
+        // xtxa, BEFORE iqc/cfir/rsmpout — see siphon.c, TXA.c:586) so the
+        // panadapter trace shows the operator's pre-distortion voice spectrum.
+        // Pre-fix this used the post-cfir iout/qout output buffer, which is
+        // intentionally shaped with anti-IMD content while PS is correcting
+        // and renders as visible "splatter" even when the antenna is clean
+        // (issue #121). Thetis takes the same tap (cmaster.cs:544-545,
+        // TXASetSipMode + TXASetSipDisplay). Sample rate / size match the
+        // analyzer config: dsp_rate / dsp_size. Q is still negated to match
+        // the WDSP analyzer's sideband convention (same fix as before — the
+        // siphon hands back complex IQ in the same orientation as the post-
+        // CFIR buffer did).
         if (_txDispAlive)
         {
-            Span<double> txSpectrumIq = stackalloc double[2 * outSize];
-            for (int i = 0; i < outSize; i++)
+            int sipSize = _txaDspSize;
+            Span<float> sipBuf = stackalloc float[2 * sipSize];
+            NativeMethods.TXAGetaSipF1(txa, ref sipBuf[0], sipSize);
+            Span<double> txSpectrumIq = stackalloc double[2 * sipSize];
+            for (int i = 0; i < sipSize; i++)
             {
-                txSpectrumIq[2 * i] = iout[i];
-                txSpectrumIq[2 * i + 1] = -qout[i];
+                txSpectrumIq[2 * i] = sipBuf[2 * i];
+                txSpectrumIq[2 * i + 1] = -sipBuf[2 * i + 1];
             }
             lock (_txDispLock)
             {
@@ -1715,6 +1930,10 @@ public sealed class WdspDspEngine : IDspEngine
             if (_channels.TryRemove(key, out var state))
                 StopChannel(state);
         }
+        lock (_psLock)
+        {
+            ClosePsFeedbackAnalyzer();
+        }
         lock (_txaLock)
         {
             if (_txaChannelId is int txa)
@@ -1740,11 +1959,20 @@ public sealed class WdspDspEngine : IDspEngine
     // user called out, light enough that signals still pop.
     private const int PipelineFps = 30;
     private const double DefaultAvgTauSec = 0.100;
+    // Heavier smoothing on TX-side traces. Voice modulation through the
+    // operator's leveler/compressor/ALC has natural envelope dynamics that
+    // a 100 ms tau renders as visible "splatter spreading"; 0.5 s gives the
+    // Thetis-style smoothed envelope so the operator sees signal shape, not
+    // every voiced/unvoiced transition.
+    private const double TxAvgTauSec = 0.175;
     private const int LogRecursiveMode = 3;
 
     private static void ConfigureDisplayAveraging(int disp)
+        => ConfigureDisplayAveragingTau(disp, DefaultAvgTauSec);
+
+    private static void ConfigureDisplayAveragingTau(int disp, double tauSec)
     {
-        double backmult = Math.Exp(-1.0 / (PipelineFps * DefaultAvgTauSec));
+        double backmult = Math.Exp(-1.0 / (PipelineFps * tauSec));
         for (int pixout = 0; pixout < 2; pixout++)
         {
             NativeMethods.SetDisplayAverageMode(disp, pixout, LogRecursiveMode);

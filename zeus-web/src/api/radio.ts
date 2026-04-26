@@ -16,6 +16,7 @@ export type BoardKind =
   | 'Angelia'
   | 'Orion'
   | 'HermesLite2'
+  | 'Brick2Sdr'
   | 'OrionMkII'
   | 'Unknown';
 
@@ -35,6 +36,7 @@ export const BOARD_LABELS: Record<BoardKind, string> = {
   Angelia: 'ANAN-100 / 100B / 8000D',
   Orion: 'ANAN-100D / 200D',
   HermesLite2: 'Hermes Lite 2',
+  Brick2Sdr: 'Brick2SDR (14-bit HL2 clone)',
   OrionMkII: 'ANAN G2 / 7000D / G1',
   Unknown: 'Unknown',
 };
@@ -49,6 +51,7 @@ function normalizeBoard(v: unknown): BoardKind {
     case 'Angelia':
     case 'Orion':
     case 'HermesLite2':
+    case 'Brick2Sdr':
     case 'OrionMkII':
     case 'Unknown':
       return v;

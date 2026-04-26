@@ -49,12 +49,15 @@ public class PsHwPeakResolutionTests
         Assert.Equal(0.2899, RadioService.ResolvePsHwPeak(true, HpsdrBoardKind.Unknown));
     }
 
-    [Fact]
-    public void HermesLite2_Both_Protocols_Use_0_233()
+    [Theory]
+    [InlineData(HpsdrBoardKind.HermesLite2)]
+    [InlineData(HpsdrBoardKind.Brick2Sdr)]
+    public void Hl2Class_Both_Protocols_Use_0_233(HpsdrBoardKind board)
     {
-        // MI0BOT special-case (HL2 only). Same value either protocol —
-        // the HL2 hardware peak is determined by the mod, not the protocol.
-        Assert.Equal(0.233, RadioService.ResolvePsHwPeak(false, HpsdrBoardKind.HermesLite2));
-        Assert.Equal(0.233, RadioService.ResolvePsHwPeak(true, HpsdrBoardKind.HermesLite2));
+        // AD9866-based boards (HL2 and Brick2SDR HL2 clone). Same value
+        // either protocol — the hardware peak is determined by the ADC mod,
+        // not the protocol.
+        Assert.Equal(0.233, RadioService.ResolvePsHwPeak(false, board));
+        Assert.Equal(0.233, RadioService.ResolvePsHwPeak(true, board));
     }
 }

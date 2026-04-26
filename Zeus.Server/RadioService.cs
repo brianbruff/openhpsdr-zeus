@@ -849,9 +849,11 @@ public sealed class RadioService : IDisposable
             // TODO(ps-p1): P1 path is deferred — only P2 is wired through to
             // Protocol2Client.SetPsFeedbackEnabled and the feedback pump.
             (false, HpsdrBoardKind.HermesLite2)              => 0.233,
+            (false, HpsdrBoardKind.Brick2Sdr)                => 0.233,
             (false, _)                                        => 0.4072,
             (true,  HpsdrBoardKind.OrionMkII)                 => 0.6121,
             (true,  HpsdrBoardKind.HermesLite2)               => 0.233,
+            (true,  HpsdrBoardKind.Brick2Sdr)                => 0.233,
             (true,  _)                                        => 0.2899,
         };
 

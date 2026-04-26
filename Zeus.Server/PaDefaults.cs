@@ -105,7 +105,7 @@ internal static class PaDefaults
     // inside the per-board IRadioDriveProfile implementation.
     public static double GetPaGainDb(HpsdrBoardKind board, string band)
     {
-        if (board == HpsdrBoardKind.HermesLite2)
+        if (board == HpsdrBoardKind.HermesLite2 || board == HpsdrBoardKind.Brick2Sdr)
             return Hl2OutputPct.TryGetValue(band, out var pct) ? pct : 100.0;
         return TableFor(board).TryGetValue(band, out var v) ? v : 0.0;
     }
@@ -122,6 +122,7 @@ internal static class PaDefaults
     public static int GetMaxPowerWatts(HpsdrBoardKind board) => board switch
     {
         HpsdrBoardKind.HermesLite2 => 5,      // HL2: class-A 5 W stock
+        HpsdrBoardKind.Brick2Sdr   => 5,      // Brick2SDR: AD9866-based HL2 clone, 5 W class-A
         HpsdrBoardKind.Hermes      => 10,     // Hermes / ANAN-10 / ANAN-10E: 10 W
         HpsdrBoardKind.Metis       => 10,     // Metis boards paired with 10 W PA
         HpsdrBoardKind.Griffin     => 10,

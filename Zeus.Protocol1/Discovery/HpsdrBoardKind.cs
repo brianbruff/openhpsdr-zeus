@@ -45,6 +45,11 @@ public enum HpsdrBoardKind : byte
     Angelia = 0x04,
     Orion = 0x05,
     HermesLite2 = 0x06,
+    // Brick2SDR is an AD9866-based HL2 clone that advertises board ID 0x01
+    // (Hermes emulation mode) over the wire, so it cannot be auto-detected
+    // from discovery. 0x07 is a Zeus-internal identifier used when the
+    // operator manually selects this board in the UI.
+    Brick2Sdr = 0x07,
     OrionMkII = 0x0A,
     Unknown = 0xFF,
 }

@@ -14,6 +14,7 @@ import { useRadioStore } from '../state/radio-store';
 const BOARD_OPTIONS: ReadonlyArray<BoardKind> = [
   'Auto',
   'HermesLite2',
+  'Brick2Sdr',
   'OrionMkII',
   'Orion',
   'Angelia',

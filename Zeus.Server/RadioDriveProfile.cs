@@ -195,6 +195,7 @@ public static class RadioDriveProfiles
     public static IRadioDriveProfile For(HpsdrBoardKind board) => board switch
     {
         HpsdrBoardKind.HermesLite2 => HermesLite2DriveProfile.Instance,
+        HpsdrBoardKind.Brick2Sdr   => HermesLite2DriveProfile.Instance,
         _                          => FullByteDriveProfile.Instance,
     };
 }

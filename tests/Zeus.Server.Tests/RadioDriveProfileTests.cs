@@ -23,10 +23,12 @@ namespace Zeus.Server.Tests;
 // (or accidentally applies one board's model to another) fails loudly.
 public class RadioDriveProfileTests
 {
-    [Fact]
-    public void Dispatch_Hl2_Returns_HermesLite2Profile()
+    [Theory]
+    [InlineData(HpsdrBoardKind.HermesLite2)]
+    [InlineData(HpsdrBoardKind.Brick2Sdr)]
+    public void Dispatch_Hl2Class_Returns_HermesLite2Profile(HpsdrBoardKind board)
     {
-        Assert.IsType<HermesLite2DriveProfile>(RadioDriveProfiles.For(HpsdrBoardKind.HermesLite2));
+        Assert.IsType<HermesLite2DriveProfile>(RadioDriveProfiles.For(board));
     }
 
     [Theory]

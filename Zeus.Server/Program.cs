@@ -42,6 +42,7 @@
 // License for details.
 
 using System.Net;
+using System.Net.Sockets;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Http.Json;
 using Zeus.Contracts;
@@ -69,13 +70,26 @@ builder.Services.Configure<JsonOptions>(o =>
 // ZEUS_PORT overrides the default (used by the /run skill's portOffset).
 var zeusPort = int.TryParse(Environment.GetEnvironmentVariable("ZEUS_PORT"), out var zp) ? zp : 6060;
 
-// Resolve TCI bind settings from configuration before DI builds, because Kestrel's
-// listeners have to be declared now. TCI shares Kestrel (rather than a separate
-// HttpListener) so clone-and-run on Windows doesn't need an http.sys URL ACL — see #30.
-var tciSection = builder.Configuration.GetSection("Tci");
-var tciEnabled = tciSection.GetValue<bool>("Enabled");
-var tciBindAddress = tciSection.GetValue<string?>("BindAddress") ?? "0.0.0.0";
-var tciPort = tciSection.GetValue<int?>("Port") ?? 40001;
+// Read TCI settings from LiteDB before DI builds so Kestrel knows whether
+// to bind the TCI port. LiteDB store settings take precedence over appsettings.json
+// Enabled flag; port defaults to the store value when available.
+var tciDbPath = TciSettingsStore.GetDatabasePath();
+var tciStoreSettings = TciSettingsStore.ReadDirect(tciDbPath);
+
+// Operator's LiteDB preference overrides the appsettings default.
+var tciEnabled = tciStoreSettings.Enabled;
+var tciBindAddress = tciStoreSettings.BindAddress;
+var tciPort = tciStoreSettings.Port;
+
+// Port-availability guard: if the desired port is already taken, skip TCI binding
+// and record the error for the status endpoint.
+string? tciPortError = null;
+if (tciEnabled && !IsTcpPortFree(tciPort))
+{
+    tciPortError = $"Port {tciPort} is already in use — TCI did not start";
+    Console.WriteLine($"[WARN] tci.port_unavailable port={tciPort}");
+    tciEnabled = false;
+}
 
 builder.WebHost.ConfigureKestrel(k =>
 {
@@ -152,8 +166,18 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<RotctldService>())
 
 // TCI (Transceiver Control Interface) — ExpertSDR3-compatible WebSocket server
 // for remote control by loggers (Log4OM, N1MM+), digital-mode apps (JTDX, WSJT-X),
-// and SDR display tools. Disabled by default; enable via appsettings.json Tci:Enabled=true.
-builder.Services.Configure<TciOptions>(builder.Configuration.GetSection("Tci"));
+// and SDR display tools. Off by default; operator enables via Settings → TCI.
+builder.Services.Configure<TciOptions>(o =>
+{
+    // Seed TciOptions from the LiteDB store so TciServer.StartAsync respects
+    // the operator's persisted preference and the startup port-check result.
+    builder.Configuration.GetSection("Tci").Bind(o);
+    o.Enabled = tciEnabled;
+    o.Port = tciPort;
+    o.BindAddress = tciBindAddress;
+});
+builder.Services.AddSingleton(_ => new TciSettingsStore());
+builder.Services.AddSingleton(new TciRuntimeState { PortBound = tciEnabled, PortError = tciPortError });
 builder.Services.AddSingleton<SpotManager>();
 builder.Services.AddSingleton<TciServer>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<TciServer>());
@@ -951,6 +975,37 @@ app.MapPost("/api/rotator/test", async (RotctldTestRequest req, RotctldService r
     return Results.Ok(result);
 });
 
+// TCI settings — operator can enable/disable and set the port. Changes are
+// persisted to LiteDB and take effect on the next server restart (Kestrel
+// binds ports at startup; runtime rebind is not supported).
+app.MapGet("/api/tci/settings", (TciSettingsStore store, TciRuntimeState runtime, TciServer tci) =>
+{
+    var s = store.Get();
+    return Results.Ok(new
+    {
+        s.Enabled,
+        s.Port,
+        s.BindAddress,
+        runtime.PortBound,
+        runtime.PortError,
+        ClientCount = tci.ClientCount,
+        RestartRequired = s.Enabled != runtime.PortBound,
+    });
+});
+
+app.MapPut("/api/tci/settings", (TciSettingsSetRequest req, TciSettingsStore store) =>
+{
+    if (req.Port is int p && (p <= 0 || p >= 65536))
+        return Results.BadRequest(new { error = "port must be 1..65535" });
+    var entry = store.Get();
+    if (req.Enabled.HasValue) entry.Enabled = req.Enabled.Value;
+    if (req.Port.HasValue) entry.Port = req.Port.Value;
+    if (req.BindAddress is { Length: > 0 }) entry.BindAddress = req.BindAddress;
+    store.Upsert(entry);
+    log.LogInformation("api.tci.settings enabled={En} port={Port}", entry.Enabled, entry.Port);
+    return Results.Ok(entry);
+});
+
 app.Map("/ws", async (HttpContext ctx, StreamingHub hub) =>
 {
     if (!ctx.WebSockets.IsWebSocketRequest)
@@ -986,5 +1041,20 @@ static HpsdrSampleRate MapHpsdrSampleRate(int hz) => hz switch
     384_000 => HpsdrSampleRate.Rate384k,
     _ => throw new ArgumentOutOfRangeException(nameof(hz), hz, "validate before calling"),
 };
+
+static bool IsTcpPortFree(int port)
+{
+    try
+    {
+        using var l = new TcpListener(IPAddress.Any, port);
+        l.Start();
+        l.Stop();
+        return true;
+    }
+    catch (SocketException)
+    {
+        return false;
+    }
+}
 
 public partial class Program;

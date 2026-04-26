@@ -53,6 +53,7 @@ import { MoxButton } from './MoxButton';
 import { NrControls } from './NrControls';
 import { PreampButton } from './PreampButton';
 import { QrzStatusPill } from './QrzStatusPill';
+import { TciStatusBadge } from './TciStatusBadge';
 import { TunButton } from './TunButton';
 
 export function TopBar() {
@@ -65,6 +66,7 @@ export function TopBar() {
         <span className="hidden text-xs text-neutral-500 sm:inline">Phase 0</span>
       </div>
       <div className="ml-auto flex items-center gap-2">
+        <TciStatusBadge />
         <QrzStatusPill />
         <span
           className={

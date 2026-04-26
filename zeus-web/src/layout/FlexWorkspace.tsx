@@ -43,7 +43,7 @@
 // License for details.
 
 import { useEffect, useRef, useState } from 'react';
-import { Layout, Model, type IJsonModel, type TabNode } from 'flexlayout-react';
+import { Layout, Model, type IJsonModel, type TabNode, Actions, DockLocation } from 'flexlayout-react';
 import 'flexlayout-react/style/dark.css';
 import '../styles/flex-layout.css';
 import { useWorkspace } from './WorkspaceContext';
@@ -51,6 +51,7 @@ import { useLayoutStore } from '../state/layout-store';
 import { PANELS } from './panels';
 import { DEFAULT_LAYOUT } from './defaultLayout';
 import { TerminatorLines } from '../components/design/TerminatorLines';
+import { AddPanelModal } from './AddPanelModal';
 
 function factory(node: TabNode) {
   const id = node.getComponent();
@@ -67,6 +68,7 @@ export function FlexWorkspace() {
   const { terminatorActive } = useWorkspace();
   const { layout, isLoaded, setLayout, loadFromServer, syncToServerBeforeUnload } = useLayoutStore();
   const [model, setModel] = useState<Model | null>(null);
+  const [showAddPanel, setShowAddPanel] = useState(false);
   const loadedRef = useRef(false);
 
   useEffect(() => {
@@ -90,6 +92,46 @@ export function FlexWorkspace() {
     return () => window.removeEventListener('beforeunload', handler);
   }, [syncToServerBeforeUnload]);
 
+  // Get list of existing panel IDs in the layout
+  const getExistingPanels = (): Set<string> => {
+    if (!model) return new Set();
+    const panelIds = new Set<string>();
+
+    model.visitNodes((node) => {
+      if (node.getType() === 'tab') {
+        const tabNode = node as TabNode;
+        const component = tabNode.getComponent();
+        if (component) panelIds.add(component);
+      }
+    });
+
+    return panelIds;
+  };
+
+  const addPanel = (panelId: string) => {
+    if (!model) return;
+
+    const panel = PANELS[panelId];
+    if (!panel) return;
+
+    // Add to the first tabset we find, or to center if available
+    const firstTabset = model.getFirstTabSet();
+    if (firstTabset) {
+      model.doAction(
+        Actions.addNode(
+          {
+            type: 'tab',
+            name: panel.name,
+            component: panelId,
+          },
+          firstTabset.getId(),
+          DockLocation.CENTER,
+          0, // position at start
+        ),
+      );
+    }
+  };
+
   if (!model) {
     // Brief loading state while server layout fetch resolves.
     return <div className="flex-workspace" />;
@@ -97,6 +139,32 @@ export function FlexWorkspace() {
 
   return (
     <div className={`flex-workspace ${terminatorActive ? 'terminator' : ''}`}>
+      <button
+        type="button"
+        onClick={() => setShowAddPanel(true)}
+        className="add-panel-btn"
+        style={{
+          position: 'absolute',
+          top: 8,
+          right: 8,
+          zIndex: 100,
+          width: 32,
+          height: 32,
+          borderRadius: 'var(--r-sm)',
+          background: 'var(--btn-top)',
+          border: '1px solid var(--line)',
+          color: 'var(--fg-0)',
+          fontSize: 18,
+          fontWeight: 600,
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+        title="Add panel"
+      >
+        +
+      </button>
       <Layout
         model={model}
         factory={factory}
@@ -105,6 +173,13 @@ export function FlexWorkspace() {
         }}
       />
       <TerminatorLines active={terminatorActive} />
+      {showAddPanel && (
+        <AddPanelModal
+          existingPanels={getExistingPanels()}
+          onAdd={addPanel}
+          onClose={() => setShowAddPanel(false)}
+        />
+      )}
     </div>
   );
 }

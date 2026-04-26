@@ -338,7 +338,7 @@ app.MapPost("/api/connect/p2", async (ConnectRequest req, DspPipelineService dsp
         96_000 => 96,
         192_000 => 192,
         384_000 => 384,
-        _ => 48,
+        _ => 192,
     };
 
     try

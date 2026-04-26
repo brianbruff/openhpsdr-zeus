@@ -54,8 +54,9 @@ export default defineConfig({
     react(),
     tailwindcss(),
     VitePWA({
-      registerType: 'autoUpdate',
+      registerType: 'prompt',
       includeAssets: ['mic-uplink-worklet.js'],
+      injectRegister: null, // We handle registration manually
       manifest: {
         name: 'Zeus',
         short_name: 'Zeus',

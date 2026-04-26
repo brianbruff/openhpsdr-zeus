@@ -100,6 +100,8 @@ import { useTxStore } from './state/tx-store';
 import { useLayoutPreferenceStore } from './state/layout-preference-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
 import { SpectrumWheelActionsContext, type SpectrumWheelActions } from './util/use-pan-tune-gesture';
+import { registerServiceWorker } from './service-worker/registerSW';
+import { UpdatePrompt } from './service-worker/UpdatePrompt';
 import type L from 'leaflet';
 import type { QrzStation } from './api/qrz';
 import type { Contact } from './components/design/data';
@@ -111,6 +113,8 @@ const STATE_POLL_MS = 333;
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<'pa' | 'qrz' | 'rotator' | 'about' | undefined>();
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [installUpdate, setInstallUpdate] = useState<(() => Promise<void>) | null>(null);
   const status = useConnectionStore((s) => s.status);
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   const mode = useConnectionStore((s) => s.mode);
@@ -126,6 +130,19 @@ export default function App() {
   useKeyboardShortcuts();
   useMicUplink();
   useFilterRibbonOpenSync();
+
+  // Register service worker and handle updates
+  useEffect(() => {
+    const handleUpdateAvailable = () => {
+      console.log('Service worker update available');
+      setUpdateAvailable(true);
+    };
+
+    const install = registerServiceWorker(handleUpdateAvailable);
+    if (install) {
+      setInstallUpdate(() => install);
+    }
+  }, []);
 
   useEffect(() => {
     const stop = startRealtime();
@@ -985,6 +1002,7 @@ export default function App() {
 
       {disconnectedOverlay}
       <SettingsMenu open={settingsOpen} onClose={() => setSettingsOpen(false)} initialTab={settingsInitialTab} />
+      <UpdatePrompt show={updateAvailable} onUpdate={installUpdate} />
     </div>
     </SpectrumWheelActionsContext.Provider>
     </WorkspaceContext.Provider>

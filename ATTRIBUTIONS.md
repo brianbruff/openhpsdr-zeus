@@ -16,11 +16,13 @@ text is in [`LICENSE`](LICENSE). Every first-party source file in this
 repository carries the `SPDX-License-Identifier: GPL-2.0-or-later` tag
 plus a short-form copyright and attribution block.
 
-This licence was chosen deliberately to align Zeus with its two direct
-upstreams:
+This licence was chosen deliberately to align Zeus with its primary
+upstreams and reference projects:
 
 - **Thetis** — GPL v2 or later
 - **WDSP** — GPL v2 or later
+- **pihpsdr** — GPL v2 or later
+- **DeskHPSDR** — GPL v2 or later
 
 Zeus's "or later" clause preserves forward-compatibility with downstream
 GPL v3 works.
@@ -128,6 +130,37 @@ GPL-2.0-or-later under the Zeus copyright:
 - `native/wdsp/stubs/sbnr_stub.c`
 - `native/wdsp/stubs/specbleach_adenoiser.h`
 
+## Relationship to pihpsdr
+
+Zeus is independent of pihpsdr but **routinely consulted pihpsdr source as
+the authoritative reference for Saturn-class (ANAN G2, G2 MkII, Saturn /
+Saturn-XDMA) Protocol-2 behaviour**, particularly for:
+
+- Hardware-peak values per board class (`transmitter.c`)
+- Wire-format byte semantics on `CmdHighPriority` and `CmdTx` (`new_protocol.c`)
+- PureSignal arm sequence and `tx_ps_reset` / `tx_ps_resume` patterns
+- ALEX antenna routing for the PS feedback DDC pair
+- DDC0 / DDC1 sample-pair convention into `pscc()`
+
+pihpsdr is maintained by **Christoph Wüllen, DL1YCF** at
+[github.com/dl1ycf/pihpsdr](https://github.com/dl1ycf/pihpsdr) and is
+licensed GPL-2.0-or-later, compatible with Zeus.
+
+Zeus acknowledges the following pihpsdr contributors whose work informed
+Zeus's Protocol-2 / PureSignal implementation:
+
+| Callsign |
+| --- |
+| DL1YCF (Christoph Wüllen) |
+| DH1KLM |
+
+## Relationship to DeskHPSDR
+
+Zeus is independent of DeskHPSDR but consulted DeskHPSDR as a
+cross-reference for HPSDR client behaviour. DeskHPSDR is maintained by
+**Heiko, DL1BZ** at [github.com/dl1bz/deskhpsdr](https://github.com/dl1bz/deskhpsdr)
+and is licensed GPL-2.0-or-later, compatible with Zeus.
+
 ## Third-party assets and imagery
 
 Images under `docs/pics/` are original screenshots of the Zeus user
@@ -138,10 +171,10 @@ imagery is reproduced in this repository.
 ## Per-file header format
 
 Every first-party Zeus source file begins with an SPDX identifier,
-the Zeus copyright line, the short GPL notice, and a Thetis /
-WDSP acknowledgement block that names all twelve Thetis
-contributors and points back at this file. See any source file
-for the canonical form.
+the Zeus copyright line, the short GPL notice, and an acknowledgement
+block that names all twelve Thetis contributors, references pihpsdr
+(DL1YCF / DH1KLM) and DeskHPSDR (DL1BZ), and points back at this file.
+See any source file for the canonical form.
 
 ## Reporting attribution concerns
 

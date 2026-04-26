@@ -10,11 +10,11 @@ React + WebGL frontend over WebSocket.
 >
 > - **Hermes Lite 2 (Protocol-1):** RX is solid; TX is operator-verified on FM
 >   and TUNE (v0.1, April 2026).
-> - **ANAN G2 (Protocol-2):** RX verified on OrionMkII / fw 2.7b41 across
->   80m–10m. TX wired for TUNE and MOX — on-air carrier verified clean via an
->   external KiwiSDR. 160m not yet wired.
-> - Other Protocol-1 radios (older ANAN, Hermes, Angelia, etc.) are not yet
->   supported.
+> - **ANAN G2 / G2 MkII (Protocol-2):** RX verified on OrionMkII / fw 2.7b41
+>   across 80m–10m. TX wired for TUNE and MOX — on-air carrier verified clean
+>   via an external KiwiSDR. PureSignal converging on G2 MkII. 160m not yet wired.
+> - **ANAN-100D / Angelia (Protocol-2):** RX verified; S-ATT and PRE wired to radio.
+> - Other Protocol-1 radios (older ANAN, Hermes, etc.) are not yet supported.
 
 ## About the name
 
@@ -26,9 +26,11 @@ long-running project a lot of the DSP heritage traces back to.
 
 - **WebGL panadapter + waterfall** with zoom, click-to-tune, drag-pan gestures
 - **DSP panel**: NB, NR, ANF, SNB, NBP — all driven by WDSP under the hood
-- **Bands / modes / bandwidth / AGC / attenuator / preamp / drive / mic gain**
+- **Bands / modes / bandwidth / AGC / S-ATT step attenuator / PRE preamp / drive / mic gain**
 - **TX**: PTT, TUNE, mic uplink, TX stage meters, SWR-trip and TX-timeout
   protection
+- **PureSignal** (Protocol-2): four-patch convergence with AutoAttenuate loop
+- **TX Audio Tools**: 10-band CFC for voice shaping
 - **S-meter** (live + demo), RX meter frame streaming
 - **Leaflet satellite map** with terminator and QRZ grid-square / beam heading
   — to interact with the map (pan / zoom), **press and hold the `M` key**.

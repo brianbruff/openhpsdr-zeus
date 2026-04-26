@@ -128,6 +128,13 @@ public sealed class RadioService : IDisposable
     // its own CmdHighPriority byte 4.
     public event Action<bool>? MoxChanged;
     public event Action<bool>? TunActiveChanged;
+    // Fires when the operator toggles the Mercury preamp. P1 path is pushed
+    // directly via ActiveClient?.SetPreamp inside SetPreamp; this event lets
+    // DspPipelineService mirror the same change into a live Protocol2Client
+    // (CmdHighPriority byte 1403, bit 0 = RX0 preamp). Issue #126 — the P2
+    // forwarding is the missing link that left the PRE button non-functional
+    // on Angelia / ANAN-100D.
+    public event Action<bool>? PreampChanged;
 
     // Shared TX IQ source threaded through Protocol1Client. TxAudioIngest
     // writes into the same instance; this is the seam between "mic arrived
@@ -261,6 +268,29 @@ public sealed class RadioService : IDisposable
     }
 
     public StateDto Snapshot() { lock (_sync) return _state; }
+
+    /// <summary>Current operator preamp toggle. PreampOn isn't on the
+    /// StateDto wire format, so DspPipelineService reads it directly when
+    /// it needs to push the value into a freshly-opened Protocol2Client
+    /// (issue #126). Lock-safe so a connect-time read can't tear against
+    /// a concurrent SetPreamp.</summary>
+    public bool PreampOn { get { lock (_sync) return _preampOn; } }
+
+    /// <summary>Effective RX step attenuator in dB — operator baseline
+    /// (<see cref="StateDto.AttenDb"/>) plus any auto-ATT overload offset
+    /// (<see cref="StateDto.AttOffsetDb"/>), clamped to 0..31. This is the
+    /// value that lands on the wire (CmdHighPriority byte 1443 on P2;
+    /// CC0=0x14 on P1). Exposed for DspPipelineService.ConnectP2Async so a
+    /// fresh P2 client is initialised with the operator's current effective
+    /// atten before its first CmdHighPriority emission.</summary>
+    public int EffectiveAttenDb
+    {
+        get
+        {
+            lock (_sync)
+                return Math.Clamp(_atten.ClampedDb + _attOffsetDb, HpsdrAtten.MinDb, HpsdrAtten.MaxDb);
+        }
+    }
 
     public async Task<StateDto> ConnectAsync(string endpoint, int sampleRate, CancellationToken ct = default)
     {
@@ -573,8 +603,13 @@ public sealed class RadioService : IDisposable
 
     public StateDto SetPreamp(bool on)
     {
-        _preampOn = on;
+        lock (_sync) _preampOn = on;
+        // P1 path: Protocol1Client owns the bit; SetPreamp pushes the
+        // updated CcState on the next outgoing frame. ActiveClient is
+        // null on a P2 connection, so the PreampChanged event below is
+        // what carries the bit into Protocol2Client (issue #126).
         ActiveClient?.SetPreamp(on);
+        PreampChanged?.Invoke(on);
         return Snapshot();
     }
 

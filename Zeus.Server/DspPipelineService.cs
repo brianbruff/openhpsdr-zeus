@@ -139,6 +139,16 @@ public class DspPipelineService : BackgroundService
     // new WdspDspEngine instance picks up the operator's persisted config.
     private CfcConfig _appliedCfc = CfcConfig.Default;
 
+    // RX front-end (step attenuator + Mercury preamp). Mirrored to a live
+    // Protocol2Client when the value moves; on P1 these go through
+    // RadioService.ActiveClient directly. Issue #126 — without this
+    // forwarding the S-ATT slider and PRE button were inert on Angelia /
+    // ANAN-100D. Effective atten = StateDto.AttenDb + AttOffsetDb (auto-ATT
+    // offset), so the existing overload control loop continues to drive the
+    // radio on P2. Sentinel -1 forces the first push regardless of value.
+    private int _appliedEffectiveAttDb = -1;
+    private bool _appliedPreampOn;
+
     private uint _seq;
     private uint _audioSeq;
     // Latched from MoxChanged so Tick can route the panadapter to the TX
@@ -170,6 +180,7 @@ public class DspPipelineService : BackgroundService
         _radio.PaSnapshotChanged += OnPaSnapshotChanged;
         _radio.MoxChanged += OnRadioMoxChanged;
         _radio.TunActiveChanged += OnRadioTunActiveChanged;
+        _radio.PreampChanged += OnRadioPreampChanged;
 
         var panBuf = new float[Width];
         var wfBuf = new float[Width];
@@ -192,6 +203,7 @@ public class DspPipelineService : BackgroundService
             _radio.PaSnapshotChanged -= OnPaSnapshotChanged;
             _radio.MoxChanged -= OnRadioMoxChanged;
             _radio.TunActiveChanged -= OnRadioTunActiveChanged;
+            _radio.PreampChanged -= OnRadioPreampChanged;
             await StopIqPumpAsync().ConfigureAwait(false);
             CloseCurrentEngine();
         }
@@ -468,6 +480,24 @@ public class DspPipelineService : BackgroundService
             _appliedCfc = cfc;
         }
 
+        // ---- RX step attenuator (operator + auto-ATT offset) -----------
+        // Issue #126. Mirror RadioService's effective-atten composition
+        // (operator baseline AttenDb + auto-ATT overload offset AttOffsetDb,
+        // clamped 0..31) onto a live Protocol2Client. RadioService already
+        // pushes the same value to the P1 client directly via
+        // ActiveClient?.SetAttenuator on every operator change AND every
+        // auto-ATT tick — but on a P2 connection ActiveClient is null, so
+        // without this forward the S-ATT slider and the auto-ATT overload
+        // ramp both fail silently on Angelia / ANAN-100D. RadioService
+        // raises StateChanged whenever AttOffsetDb moves, so the auto-ATT
+        // control loop reaches the wire through this block too.
+        int effectiveAttDb = Math.Clamp(s.AttenDb + s.AttOffsetDb, 0, 31);
+        if (resync || effectiveAttDb != _appliedEffectiveAttDb)
+        {
+            _p2Client?.SetAttenuator(effectiveAttDb);
+            _appliedEffectiveAttDb = effectiveAttDb;
+        }
+
         // PS-Monitor (issue #121) — pure UI source routing. No engine call,
         // no wire write; Tick reads _psMonitorEnabled and prefers the
         // PS-feedback analyzer when on + PS armed + correcting. Latched
@@ -670,6 +700,18 @@ public class DspPipelineService : BackgroundService
             _loggerFactory.CreateLogger<Zeus.Protocol2.Protocol2Client>());
         client.SetNumAdc(numAdc);
         await client.ConnectAsync(radioEndpoint, ct).ConfigureAwait(false);
+        // Seed the operator's RX front-end (preamp + step attenuator) BEFORE
+        // StartAsync so the very first CmdHighPriority emitted inside the
+        // start sequence carries the correct values. SetPreamp/SetAttenuator
+        // pre-StartAsync only stash into private fields (the early-return on
+        // _rxTask==null path), so no wire packets fly here — they ride the
+        // CmdHighPriority(run=1) inside StartAsync below. Without this seed
+        // a P2 reconnect would leave the radio at preamp=off / atten=0
+        // until the operator nudged either control. Issue #126.
+        bool initialPreamp = _radio.PreampOn;
+        int initialAttDb = _radio.EffectiveAttenDb;
+        client.SetPreamp(initialPreamp);
+        client.SetAttenuator(initialAttDb);
         await client.StartAsync(sampleRateKhz, ct).ConfigureAwait(false);
 
         int rateHz = sampleRateKhz * 1000;
@@ -720,6 +762,27 @@ public class DspPipelineService : BackgroundService
         _log.LogInformation("dsp.pipeline p2 engine={Engine} rate={Rate}", newEngine.GetType().Name, rateHz);
 
         _p2Client = client;
+        // Sync the change-detect cache with the values we just seeded so the
+        // first OnRadioStateChanged after connect doesn't redundantly re-push
+        // (which would emit a duplicate CmdHighPriority). Re-read in case the
+        // operator changed either control during the connect window — the
+        // PreampChanged / StateChanged handlers would have early-returned on
+        // _p2Client==null. Comparing here recovers any drift before the cache
+        // settles.
+        _appliedPreampOn = initialPreamp;
+        _appliedEffectiveAttDb = initialAttDb;
+        bool nowPreamp = _radio.PreampOn;
+        int nowAttDb = _radio.EffectiveAttenDb;
+        if (nowPreamp != initialPreamp)
+        {
+            client.SetPreamp(nowPreamp);
+            _appliedPreampOn = nowPreamp;
+        }
+        if (nowAttDb != initialAttDb)
+        {
+            client.SetAttenuator(nowAttDb);
+            _appliedEffectiveAttDb = nowAttDb;
+        }
         StartIqPumpP2(client);
         StartPsFeedbackPumpP2(client);
         // Force the next OnRadioStateChanged to re-push every PS field into
@@ -761,6 +824,19 @@ public class DspPipelineService : BackgroundService
     private void OnRadioTunActiveChanged(bool on)
     {
         _p2Client?.SetTune(on);
+    }
+
+    // Mirror operator preamp toggles into a live Protocol2Client. P1 is
+    // pushed by RadioService.SetPreamp directly via ActiveClient. PreampOn
+    // isn't on the StateDto wire format, so this event-driven path is the
+    // only way the bit reaches CmdHighPriority byte 1403 on P2 (issue #126).
+    private void OnRadioPreampChanged(bool on)
+    {
+        var p2 = _p2Client;
+        if (p2 is null) return;
+        if (on == _appliedPreampOn) return;
+        p2.SetPreamp(on);
+        _appliedPreampOn = on;
     }
 
     /// <summary>

@@ -389,6 +389,7 @@ Zeus gratefully acknowledges the Thetis contributors:
 - **Joe Torrey** (WD5Y)
 - **Andrew Mansfield** (M0YGG)
 - **Reid Campbell** (MI0BOT)
+- **Sigi Jetzlsperger** (DH1KLM) — Red Pitaya implementation in Thetis, RX2 CAT/MIDI commands
 - **FlexRadio Systems**
 
 Zeus contributors to date: **Brian Keating (EI6LF)** — project lead, and

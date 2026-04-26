@@ -22,7 +22,8 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
@@ -31,7 +32,7 @@
 //
 // Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
 // by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
-// Wüllen (DL1YCF), with contributions from (DH1KLM); and by DeskHPSDR
+// Wüllen (DL1YCF); and by DeskHPSDR
 // (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
 // Both are GPL-2.0-or-later.
 //
@@ -205,7 +206,7 @@ export function ConnectPanel() {
       setError(null);
       try {
         if (isP2) {
-          await apiConnectP2({ endpoint: ep, sampleRate: 48_000 });
+          await apiConnectP2({ endpoint: ep, sampleRate: DEFAULT_SAMPLE_RATE });
           const fresh = await fetchState();
           applyState(fresh);
           hydrateTxFromState(fresh);
@@ -237,7 +238,7 @@ export function ConnectPanel() {
       const port = override?.port ?? manualPort;
       const protocol: ProtocolChoice = override?.protocol ?? manualProtocol;
       const sampleRate: SampleRate = (override?.sampleRate as SampleRate | undefined)
-        ?? (protocol === 'P2' ? 48_000 : manualSampleRate);
+        ?? manualSampleRate;
       const label = override?.label;
 
       if (!IPV4_RE.test(ip)) {
@@ -254,7 +255,7 @@ export function ConnectPanel() {
       setManualError(null);
       try {
         if (protocol === 'P2') {
-          await apiConnectP2({ endpoint: ep, sampleRate: 48_000 });
+          await apiConnectP2({ endpoint: ep, sampleRate });
           const fresh = await fetchState();
           applyState(fresh);
           hydrateTxFromState(fresh);
@@ -665,7 +666,6 @@ const fieldLabelStyle: React.CSSProperties = {
 };
 
 function ManualMode(p: ManualModeProps) {
-  const p2Disabled = p.protocol === 'P2';
   const canConnect = !p.inflight && !(p.dspPreparing && p.protocol === 'P1');
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -732,13 +732,12 @@ function ManualMode(p: ManualModeProps) {
         </div>
         <label style={fieldLabelStyle}>
           <span className="label-xs" style={{ color: 'var(--fg-2)' }}>
-            Sample rate {p2Disabled && <span style={{ color: 'var(--fg-3)' }}>· forced 48k on P2</span>}
+            Sample rate
           </span>
           <select
-            value={p2Disabled ? 48_000 : p.sampleRate}
-            disabled={p2Disabled}
+            value={p.sampleRate}
             onChange={(e) => p.setSampleRate(Number(e.target.value) as SampleRate)}
-            style={{ ...inputStyle, opacity: p2Disabled ? 0.5 : 1, cursor: p2Disabled ? 'not-allowed' : 'pointer' }}
+            style={inputStyle}
           >
             {SAMPLE_RATES.map((r) => (
               <option key={r} value={r}>{r / 1000} kHz</option>

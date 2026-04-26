@@ -22,7 +22,8 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
@@ -31,7 +32,7 @@
 //
 // Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
 // by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
-// Wüllen (DL1YCF), with contributions from (DH1KLM); and by DeskHPSDR
+// Wüllen (DL1YCF); and by DeskHPSDR
 // (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
 // Both are GPL-2.0-or-later.
 //

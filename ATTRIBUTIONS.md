@@ -99,6 +99,7 @@ forward through the lineage above — made this project possible:
 | Joe Torrey | WD5Y |
 | Andrew Mansfield | M0YGG |
 | Reid Campbell | MI0BOT |
+| Sigi Jetzlsperger | DH1KLM |
 | **FlexRadio Systems** | *(corporate)* |
 
 Some Thetis contributions carry dual-licensing statements in addition
@@ -152,7 +153,6 @@ Zeus's Protocol-2 / PureSignal implementation:
 | Callsign |
 | --- |
 | DL1YCF (Christoph Wüllen) |
-| DH1KLM |
 
 ## Relationship to DeskHPSDR
 
@@ -172,8 +172,8 @@ imagery is reproduced in this repository.
 
 Every first-party Zeus source file begins with an SPDX identifier,
 the Zeus copyright line, the short GPL notice, and an acknowledgement
-block that names all twelve Thetis contributors, references pihpsdr
-(DL1YCF / DH1KLM) and DeskHPSDR (DL1BZ), and points back at this file.
+block that names all thirteen Thetis contributors, references pihpsdr
+(DL1YCF) and DeskHPSDR (DL1BZ), and points back at this file.
 See any source file for the canonical form.
 
 ## Reporting attribution concerns

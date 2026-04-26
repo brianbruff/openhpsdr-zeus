@@ -19,9 +19,7 @@
 import { useState } from 'react';
 import {
   NR2_POST2_DEFAULTS,
-  NR4_DEFAULTS,
   setNr2Post2,
-  setNr4,
   type RadioStateDto,
 } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
@@ -33,16 +31,19 @@ export type NrSettingsSectionProps = {
 };
 
 export function NrSettingsSection({ mode }: NrSettingsSectionProps) {
+  // NR4 (Sbnr) panel is intentionally not rendered here — bundled libwdsp
+  // doesn't export the SetRXASBNR* symbols (Phase 1 of issue #79), so any
+  // adjustment is silently inert. Nr4Panel is preserved below; re-enable
+  // its case in this switch once Phase 1 binaries land.
+  if (mode === 'Sbnr') return null;
   return (
     <div className="nr-settings" role="region" aria-label={`NR ${mode} settings`}>
       <h3 className="nr-settings__title">
         {mode === 'Anr' && 'NR1 — ANR'}
         {mode === 'Emnr' && 'NR2 — EMNR post2'}
-        {mode === 'Sbnr' && 'NR4 — SBNR'}
       </h3>
       {mode === 'Anr' && <AnrPanel />}
       {mode === 'Emnr' && <Nr2Panel />}
-      {mode === 'Sbnr' && <Nr4Panel />}
     </div>
   );
 }
@@ -113,90 +114,6 @@ function Nr2Panel() {
       <p className="nr-settings__hint">
         Comfort-noise injection masking residual EMNR warble. Defaults: factor 0.15,
         nlevel 0.15, rate 5.0, taper 12. See emnr.c:981–1056.
-      </p>
-
-      <div className="nr-settings__buttons">
-        <button type="submit" className="nr-settings__button nr-settings__button--primary">
-          Save
-        </button>
-      </div>
-    </form>
-  );
-}
-
-// ---------- NR4 (SBNR) tunables. ----------
-
-function Nr4Panel() {
-  const nr = useConnectionStore((s) => s.nr);
-  const applyState = useConnectionStore((s) => s.applyState);
-
-  const [reduction, setReduction] = useState<number>(nr.nr4ReductionAmount ?? NR4_DEFAULTS.reductionAmount);
-  const [smoothing, setSmoothing] = useState<number>(nr.nr4SmoothingFactor ?? NR4_DEFAULTS.smoothingFactor);
-  const [whitening, setWhitening] = useState<number>(nr.nr4WhiteningFactor ?? NR4_DEFAULTS.whiteningFactor);
-  const [noiseRescale, setNoiseRescale] = useState<number>(nr.nr4NoiseRescale ?? NR4_DEFAULTS.noiseRescale);
-  const [postThr, setPostThr] = useState<number>(nr.nr4PostFilterThreshold ?? NR4_DEFAULTS.postFilterThreshold);
-  const [scalingType, setScalingType] = useState<number>(nr.nr4NoiseScalingType ?? NR4_DEFAULTS.noiseScalingType);
-  const [position, setPosition] = useState<number>(nr.nr4Position ?? NR4_DEFAULTS.position);
-
-  function commit() {
-    setNr4({
-      reductionAmount: reduction,
-      smoothingFactor: smoothing,
-      whiteningFactor: whitening,
-      noiseRescale: noiseRescale,
-      postFilterThreshold: postThr,
-      noiseScalingType: Math.round(scalingType),
-      position: Math.round(position),
-    })
-      .then((s: RadioStateDto) => applyState(s))
-      .catch(() => {
-        /* state poll will reconcile */
-      });
-  }
-
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        commit();
-      }}
-    >
-      <NumericRow id="nr4-reduction" label="Reduction" value={reduction} step={0.5} min={0} max={40} onChange={setReduction} />
-      <NumericRow id="nr4-smoothing" label="Smoothing" value={smoothing} step={0.05} min={0} max={1} onChange={setSmoothing} />
-      <NumericRow id="nr4-whitening" label="Whitening" value={whitening} step={0.05} min={0} max={1} onChange={setWhitening} />
-      <NumericRow id="nr4-rescale" label="Noise Rescale" value={noiseRescale} step={0.5} min={0} max={10} onChange={setNoiseRescale} />
-      <NumericRow id="nr4-postthr" label="Post Filter Thr" value={postThr} step={0.5} onChange={setPostThr} />
-
-      <div className="nr-settings__row">
-        <label className="nr-settings__label" htmlFor="nr4-scaling">Noise Scaling</label>
-        <select
-          id="nr4-scaling"
-          className="nr-settings__select"
-          value={scalingType}
-          onChange={(e) => setScalingType(Number(e.target.value))}
-        >
-          <option value={0}>0 — None</option>
-          <option value={1}>1 — Type 1</option>
-          <option value={2}>2 — Type 2</option>
-        </select>
-      </div>
-
-      <div className="nr-settings__row">
-        <label className="nr-settings__label" htmlFor="nr4-position">Position</label>
-        <select
-          id="nr4-position"
-          className="nr-settings__select"
-          value={position}
-          onChange={(e) => setPosition(Number(e.target.value))}
-        >
-          <option value={0}>0 — Pre-AGC</option>
-          <option value={1}>1 — Post-AGC</option>
-        </select>
-      </div>
-
-      <p className="nr-settings__hint">
-        libspecbleach (sbnr.c). Defaults: reduction 10, others 0, noise rescale 2,
-        position 1. Requires Phase 1 libwdsp rebuild — issue #79.
       </p>
 
       <div className="nr-settings__buttons">

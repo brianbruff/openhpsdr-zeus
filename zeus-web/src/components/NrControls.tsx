@@ -77,12 +77,16 @@ function nrButtonTitle(mode: NrMode): string {
   }
 }
 
-// When the operator opens settings while NR is Off there's no current
-// mode to configure; default to NR4 so the panel is reachable without
-// first cycling the button through.
+// Only NR1 and NR2 have a tunables panel today (NR4 is silently inert until
+// the Phase 1 libwdsp rebuild ships, so its panel is suppressed). The ⚙
+// button is hidden for modes that have no panel — see hasNrSettings below.
 function settingsModeFor(nrMode: NrMode): NrSettingsMode {
-  if (nrMode === 'Anr' || nrMode === 'Emnr' || nrMode === 'Sbnr') return nrMode;
-  return 'Sbnr';
+  if (nrMode === 'Anr' || nrMode === 'Emnr') return nrMode;
+  return 'Emnr';
+}
+
+function hasNrSettings(nrMode: NrMode): boolean {
+  return nrMode === 'Anr' || nrMode === 'Emnr';
 }
 
 export function NrControls() {
@@ -171,15 +175,17 @@ export function NrControls() {
       >
         {NR_LABEL[nr.nrMode]}
       </button>
-      <button
-        type="button"
-        onClick={toggleSettings}
-        className={`${IDLE_BTN} nr-settings-toggle`}
-        title="Show NR tunables"
-        aria-expanded={showSettings}
-      >
-        ⚙
-      </button>
+      {hasNrSettings(nr.nrMode) && (
+        <button
+          type="button"
+          onClick={toggleSettings}
+          className={`${IDLE_BTN} nr-settings-toggle`}
+          title="Show NR tunables"
+          aria-expanded={showSettings}
+        >
+          ⚙
+        </button>
+      )}
       <button
         type="button"
         disabled={!connected}
@@ -208,7 +214,7 @@ export function NrControls() {
         NBP
       </button>
     </div>
-    {showSettings && (
+    {showSettings && hasNrSettings(nr.nrMode) && (
       <NrSettingsSection mode={settingsModeFor(nr.nrMode)} />
     )}
     </>

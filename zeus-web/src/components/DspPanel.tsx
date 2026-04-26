@@ -82,11 +82,16 @@ function nrButtonTitle(mode: NrMode): string {
   }
 }
 
-// When NR is Off there's no current mode to configure; default to NR4 so
-// the panel is reachable without first cycling. Mirrors NrControls.tsx.
+// Only NR1 and NR2 have a tunables panel today (NR4 is silently inert
+// until the Phase 1 libwdsp rebuild ships, so its panel is suppressed).
+// Mirrors NrControls.tsx.
 function settingsModeFor(nrMode: NrMode): NrSettingsMode {
-  if (nrMode === 'Anr' || nrMode === 'Emnr' || nrMode === 'Sbnr') return nrMode;
-  return 'Sbnr';
+  if (nrMode === 'Anr' || nrMode === 'Emnr') return nrMode;
+  return 'Emnr';
+}
+
+function hasNrSettings(nrMode: NrMode): boolean {
+  return nrMode === 'Anr' || nrMode === 'Emnr';
 }
 
 const NB_CYCLE: readonly NbMode[] = ['Off', 'Nb1', 'Nb2'];
@@ -286,7 +291,7 @@ export function DspPanel() {
           disabled={!connected}
         />
       </div>
-      {nr.nrMode !== 'Off' && (
+      {hasNrSettings(nr.nrMode) && (
         <NrSettingsSection mode={settingsModeFor(nr.nrMode)} />
       )}
     </div>

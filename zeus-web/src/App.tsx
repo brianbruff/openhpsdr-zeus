@@ -223,7 +223,7 @@ export default function App() {
   }, []);
 
   // --- Design-mock state (QRZ, DSP grid toggles, CW WPM, memories) ---
-  const [callsign, setCallsign] = useState('EI6LF');
+  const [callsign, setCallsign] = useState('');
   const [terminatorActive, setTerminatorActive] = useState(true);
   // While 'M' is held and QRZ is engaged, the spectrum canvas stack goes
   // pointer-events:none and the Leaflet map underneath takes drag/zoom input.

@@ -83,6 +83,9 @@ public sealed class Protocol1Client : IProtocol1Client
     private int _driveByteOverride = -1;
     private int _ocTxMask;      // user OC pin mask for TX (low 7 bits)
     private int _ocRxMask;      // user OC pin mask for RX (low 7 bits)
+    private int _psEnabled;     // PureSignal enable (0/1)
+    private int _psSubindex;    // Predistortion subindex (0..255)
+    private int _psPredistortion; // Predistortion value (0..15)
     private long _droppedFrames;
     private long _totalFrames;
 
@@ -235,6 +238,15 @@ public sealed class Protocol1Client : IProtocol1Client
         Interlocked.Exchange(ref _ocRxMask, rxMask & 0x7F);
     }
 
+    public void SetPsEnabled(bool enabled) =>
+        Interlocked.Exchange(ref _psEnabled, enabled ? 1 : 0);
+
+    public void SetPsPredistortion(byte subindex, byte value)
+    {
+        Interlocked.Exchange(ref _psSubindex, subindex);
+        Interlocked.Exchange(ref _psPredistortion, value & 0x0F);
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -264,7 +276,10 @@ public sealed class Protocol1Client : IProtocol1Client
             HasN2adr: Volatile.Read(ref _hasN2adr) != 0,
             DriveLevel: drive,
             UserOcTxMask: (byte)Volatile.Read(ref _ocTxMask),
-            UserOcRxMask: (byte)Volatile.Read(ref _ocRxMask));
+            UserOcRxMask: (byte)Volatile.Read(ref _ocRxMask),
+            PsEnabled: Volatile.Read(ref _psEnabled) != 0,
+            PsSubindex: (byte)Volatile.Read(ref _psSubindex),
+            PsPredistortion: (byte)Volatile.Read(ref _psPredistortion));
     }
 
     private void RxLoop()
@@ -410,9 +425,43 @@ public sealed class Protocol1Client : IProtocol1Client
     // while keyed takes effect within a couple of ms. The RX VFO is reused for
     // TxFreq when Split/RIT are off, which matches what we do here since Zeus
     // has no separate TX VFO yet.
-    internal static (ControlFrame.CcRegister first, ControlFrame.CcRegister second) PhaseRegisters(int phase, bool mox)
+    internal static (ControlFrame.CcRegister first, ControlFrame.CcRegister second) PhaseRegisters(int phase, bool mox, bool psEnabled)
     {
-        int p = phase & 0x3;
+        int p = phase & 0x7;  // 8-phase rotation when PS enabled, else 4-phase
+
+        // When PureSignal is enabled, we need to include PsEnableLna and Predistortion
+        // in the rotation. We'll use an 8-phase rotation to give PS registers enough airtime.
+        if (psEnabled)
+        {
+            if (mox)
+            {
+                return p switch
+                {
+                    0 => (ControlFrame.CcRegister.TxFreq,        ControlFrame.CcRegister.RxFreq),
+                    1 => (ControlFrame.CcRegister.TxFreq,        ControlFrame.CcRegister.DriveFilter),
+                    2 => (ControlFrame.CcRegister.Attenuator,    ControlFrame.CcRegister.TxFreq),
+                    3 => (ControlFrame.CcRegister.TxFreq,        ControlFrame.CcRegister.Config),
+                    4 => (ControlFrame.CcRegister.PsEnableLna,   ControlFrame.CcRegister.TxFreq),
+                    5 => (ControlFrame.CcRegister.TxFreq,        ControlFrame.CcRegister.Predistortion),
+                    6 => (ControlFrame.CcRegister.Attenuator,    ControlFrame.CcRegister.TxFreq),
+                    _ => (ControlFrame.CcRegister.TxFreq,        ControlFrame.CcRegister.RxFreq),
+                };
+            }
+            return p switch
+            {
+                0 => (ControlFrame.CcRegister.Config,        ControlFrame.CcRegister.RxFreq),
+                1 => (ControlFrame.CcRegister.RxFreq,        ControlFrame.CcRegister.DriveFilter),
+                2 => (ControlFrame.CcRegister.Attenuator,    ControlFrame.CcRegister.RxFreq),
+                3 => (ControlFrame.CcRegister.RxFreq,        ControlFrame.CcRegister.Config),
+                4 => (ControlFrame.CcRegister.PsEnableLna,   ControlFrame.CcRegister.RxFreq),
+                5 => (ControlFrame.CcRegister.RxFreq,        ControlFrame.CcRegister.Predistortion),
+                6 => (ControlFrame.CcRegister.Attenuator,    ControlFrame.CcRegister.RxFreq),
+                _ => (ControlFrame.CcRegister.RxFreq,        ControlFrame.CcRegister.Config),
+            };
+        }
+
+        // Original 4-phase rotation when PS not enabled
+        p = phase & 0x3;
         if (mox)
         {
             return p switch
@@ -451,8 +500,9 @@ public sealed class Protocol1Client : IProtocol1Client
             {
                 await _txSignal.WaitAsync(ct).ConfigureAwait(false);
                 var state = SnapshotState();
-                var (first, second) = PhaseRegisters(phase, state.Mox);
-                phase = (phase + 1) & 0x3;
+                var (first, second) = PhaseRegisters(phase, state.Mox, state.PsEnabled);
+                // Use 8-phase rotation when PS enabled, 4-phase otherwise
+                phase = (phase + 1) & (state.PsEnabled ? 0x7 : 0x3);
                 ControlFrame.BuildDataPacket(buf, sendSeq++, first, second, in state, _txIqSource);
                 rateWindowPkts++;
                 var nowUtc = DateTime.UtcNow;

@@ -35,19 +35,75 @@ long-running project a lot of the DSP heritage traces back to.
   The experience isn't ideal yet and will improve over time.
 - **Radio discovery** on the LAN (Protocol-1 + Protocol-2 broadcast, in parallel)
 
+## At a glance
+
+![Zeus on 20 m — advanced filter ribbon, QRZ-engaged great-circle map, operator pin (KB2UKA, FN30iv) and live panadapter / waterfall](docs/pics/screenshots/zeus-filter-panel-open.png)
+
+> **The full user guide lives in the [Zeus Wiki](https://github.com/brianbruff/openhpsdr-zeus/wiki).**
+> Every panel, control, and gesture is documented there with screenshots — this
+> README only covers what you need to install and run Zeus. If you have a
+> question that starts with "what does that button do…", the wiki is the
+> authoritative answer.
+
+Wiki jump-off points for the most-asked things:
+
+- [Installation](https://github.com/brianbruff/openhpsdr-zeus/wiki/Installation) — installers, PWA install, macOS xattr step
+- [Getting Started](https://github.com/brianbruff/openhpsdr-zeus/wiki/Getting-Started) — first-minute walkthrough
+- [Panadapter and Waterfall](https://github.com/brianbruff/openhpsdr-zeus/wiki/Panadapter-and-Waterfall) — click-to-tune, zoom, palettes
+- [Modes and Bands](https://github.com/brianbruff/openhpsdr-zeus/wiki/Modes-and-Bands) and [Bandwidth and Filters](https://github.com/brianbruff/openhpsdr-zeus/wiki/Bandwidth-and-Filters)
+- [Frequency and VFO](https://github.com/brianbruff/openhpsdr-zeus/wiki/Frequency-and-VFO) and [Front-End and Gain](https://github.com/brianbruff/openhpsdr-zeus/wiki/Front-End-and-Gain)
+- [DSP Noise Controls](https://github.com/brianbruff/openhpsdr-zeus/wiki/DSP), [Meters](https://github.com/brianbruff/openhpsdr-zeus/wiki/Meters), [TX Controls](https://github.com/brianbruff/openhpsdr-zeus/wiki/TX-Controls), [CW Keyer](https://github.com/brianbruff/openhpsdr-zeus/wiki/CW-Keyer)
+- [QRZ and World Map](https://github.com/brianbruff/openhpsdr-zeus/wiki/QRZ-and-World-Map), [Logbook](https://github.com/brianbruff/openhpsdr-zeus/wiki/Logbook), [Keyboard & Mouse Shortcuts](https://github.com/brianbruff/openhpsdr-zeus/wiki/Shortcuts)
+
 ## Download
 
 Grab the latest installer from the **[Releases page](https://github.com/brianbruff/openhpsdr-zeus/releases/latest)**.
 
-| Platform              | File                                | Notes                       |
-| --------------------- | ----------------------------------- | --------------------------- |
-| Windows (x64)         | `Zeus-X.Y.Z-win-x64-setup.exe`      | Inno Setup installer        |
-| macOS (Apple Silicon) | `Zeus-X.Y.Z-macos-arm64.dmg`        | drag-to-install, see below  |
-| Linux (x64)           | `zeus-X.Y.Z-linux-x64.tar.gz`       | extract and run `./zeus`    |
+| Platform              | File                                | Notes                                  |
+| --------------------- | ----------------------------------- | -------------------------------------- |
+| Windows (x64)         | `Zeus-X.Y.Z-win-x64-setup.exe`      | Inno Setup; opens browser on launch    |
+| macOS (Apple Silicon) | `Zeus-X.Y.Z-macos-arm64.dmg`        | drag to Applications, see xattr below  |
+| Linux (x64)           | `zeus-X.Y.Z-linux-x64.tar.gz`       | extract and run `./zeus`               |
 
-Zeus is also a Progressive Web App. If you'd rather not install a desktop
-package, run `Zeus.Server` from source and use your browser's **Install** icon
-on `http://localhost:6060` to add Zeus to the dock / start menu directly.
+Each installer ships **`Zeus.Server`** (a self-contained .NET 10 publish that
+serves the React UI, the SignalR hub, and the WDSP native library on
+`http://localhost:6060`) wrapped in a tiny per-platform launcher:
+
+- **Windows** — Start Menu, Desktop, and post-install shortcuts run `zeus.cmd`,
+  which boots `Zeus.Server.exe` in a small console window and opens your
+  default browser at `http://localhost:6060` once port 6060 is listening.
+  Closing the console stops the server.
+- **macOS** — `Zeus.app/Contents/MacOS/launch.sh` is the bundle's main
+  executable. It starts `Zeus.Server`, waits for the port, opens the default
+  browser, and propagates Cmd-Q (`SIGTERM`) to the backend.
+- **Linux** — `./zeus` from the extracted tarball does the same as the macOS
+  launcher: backgrounds `Zeus.Server`, opens the URL via `xdg-open`, and
+  forwards termination to the backend.
+
+![Zeus first launch — discover panel and chrome](docs/pics/screenshots/zeus-first-launch.png)
+
+That's what the first launch looks like — Zeus comes up with the **Discover**
+panel centred on screen. Click it, pick your radio, and the panadapter,
+waterfall, and meters go live. The first run also builds an FFTW "wisdom"
+cache (1–3 minutes); see [First run — wait for WDSP wisdom](#first-run--wait-for-wdsp-wisdom-before-connecting)
+below.
+
+### Install Zeus as a Progressive Web App
+
+Zeus is a fully-featured PWA, so the cleanest "feels like a native app"
+experience does not actually need any of the desktop installers:
+
+1. Open `http://localhost:6060` in Chrome, Edge, or Safari.
+2. Click the **Install** icon in the address bar (Chrome / Edge) or
+   **File → Add to Dock…** (Safari 17+).
+3. Zeus now lives in the Dock / Start Menu / Application Launcher with its
+   own window, no browser chrome, and works offline for the static shell.
+
+The PWA path keeps a real browser engine underneath, so devtools and "open
+in tab" remain available — useful while Zeus is still in heavy active
+development. The PWA route also works against a `Zeus.Server` running on a
+different machine (e.g. a headless Pi), which the desktop installers can't
+do.
 
 ### macOS — Removing Gatekeeper Warning
 
@@ -60,6 +116,24 @@ xattr -cr /Applications/Zeus.app
 
 If you still see a security warning, go to **System Settings → Privacy &
 Security** and click **Open Anyway**.
+
+### Phase 2 — true single-window native shell (ETA TBD)
+
+The current installers are deliberately minimal: a self-contained .NET app
+plus a launcher that opens your default browser. This is the same shipping
+pattern used by Jellyfin, Sonarr, and Plex — it's not "wrong", but it does
+flash a console / shell window on launch and relies on the OS browser.
+
+A **Phase 2** packaging pass will replace the launcher with a native-window
+host (the most likely candidate is [Photino](https://www.tryphotino.io/),
+which wraps WebView2 / WKWebView / WebKitGTK from C# and reuses the same
+self-contained .NET publish we ship today). That gets us a single
+double-click app with no console pop-up and a real OS window.
+
+It is **not** a current priority. The focus until then is on radio
+functionality — protocol coverage, TX behaviour, and DSP correctness. There
+is no ETA. If you want a windowed, dock-friendly experience right now, use
+the [PWA install](#install-zeus-as-a-progressive-web-app) path above.
 
 ## Layout
 
@@ -250,8 +324,14 @@ Shipping surfaces are being added one at a time, slowly:
 - **PWA (installable web app)** — available now. Precached shell, works
   offline for the static assets, installs from any browser that supports PWAs.
 - **Native installers (Windows `.exe`, macOS `.dmg`, Linux `.tar.gz`)** —
-  available now. Self-contained .NET 10 publish + WDSP native libraries.
+  available now. Self-contained .NET 10 publish, WDSP native library, and a
+  per-platform launcher that opens the default browser at `localhost:6060`.
   See the [Download](#download) section above.
+- **Photino native-window shell** — Phase 2, ETA TBD. Replaces the
+  launcher-plus-browser pattern with a single double-click app (WebView2 /
+  WKWebView / WebKitGTK from .NET, no console window). Deferred until
+  radio / protocol functionality lands; the [PWA install](#install-zeus-as-a-progressive-web-app)
+  path covers most of the gap in the meantime.
 - **Mobile apps (iOS / Android) via Capacitor** — planned. Cadence: TBD.
 
 ## Requirements
@@ -309,6 +389,7 @@ Zeus gratefully acknowledges the Thetis contributors:
 - **Joe Torrey** (WD5Y)
 - **Andrew Mansfield** (M0YGG)
 - **Reid Campbell** (MI0BOT)
+- **Sigi Jetzlsperger** (DH1KLM) — Red Pitaya implementation in Thetis, RX2 CAT/MIDI commands
 - **FlexRadio Systems**
 
 Zeus contributors to date: **Brian Keating (EI6LF)** — project lead, and

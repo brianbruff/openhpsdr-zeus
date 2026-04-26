@@ -1,0 +1,93 @@
+name: Bug report
+description: Something Zeus does wrong on a real radio (RX, TX, panadapter, meters, hub, etc.)
+labels: ["bug", "needs-repro"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Zeus runs against several different HPSDR
+        boards and a lot of issues turn out to be board-specific, so the questions below
+        exist to save a round-trip.
+
+        If you want the in-repo agent (`@claude`) to look at this issue, you can mention it
+        in the body or in a follow-up comment.
+
+  - type: dropdown
+    id: board
+    attributes:
+      label: Radio / board
+      description: Which HPSDR board are you running Zeus against?
+      options:
+        - Hermes Lite 2 (HL2)
+        - Hermes
+        - ANAN-10
+        - ANAN-100
+        - ANAN-100D
+        - ANAN-200D
+        - Orion
+        - ANAN G2 / G2 MkII
+        - Other (please describe in "What happened")
+        - Not connected to a radio (synthetic / web-only)
+    validations:
+      required: true
+
+  - type: input
+    id: zeus-version
+    attributes:
+      label: Zeus version / commit
+      description: Output of "About" in the UI, the installer filename, or a git SHA if you built from source.
+      placeholder: e.g. v0.4.2  or  commit 7329284
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: OS and browser
+      description: Operating system + browser (Zeus uses your browser as the frontend).
+      placeholder: e.g. macOS 14.5, Chrome 124  /  Windows 11, Edge 125
+    validations:
+      required: true
+
+  - type: dropdown
+    id: connection
+    attributes:
+      label: How is Zeus reaching the radio?
+      options:
+        - Auto-discovery (UDP broadcast)
+        - Static IP / manual address
+        - N/A (no radio)
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you do, what did you expect, and what did Zeus actually do?
+      placeholder: |
+        Steps:
+        1. ...
+        2. ...
+
+        Expected: ...
+        Actual: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: backend-log
+    attributes:
+      label: Zeus.Server log excerpt (if relevant)
+      description: |
+        For TX / power / drive issues, the `p1.tx.rate pkts=... drv=... peak=...` lines from
+        Zeus.Server during MOX/TUN are usually the whole answer — please include a few seconds
+        of them if you can. For RX / panadapter / meter issues, anything around the time of
+        the bug helps.
+      render: text
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, browser-console errors, related issues, etc.

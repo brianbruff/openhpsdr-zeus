@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -94,9 +101,14 @@ export function ConnectPanel() {
   const status = useConnectionStore((s) => s.status);
   const endpoint = useConnectionStore((s) => s.endpoint);
   const applyState = useConnectionStore((s) => s.applyState);
+  // tx-store hydration runs alongside applyState on every fresh
+  // RadioStateDto so PS / TwoTone tunings persisted server-side reach the
+  // UI even when localStorage is empty (cleared cache, new browser, etc.).
+  const hydrateTxFromState = useTxStore((s) => s.hydrateFromState);
   const inflight = useConnectionStore((s) => s.inflight);
   const setInflight = useConnectionStore((s) => s.setInflight);
   const setBoardId = useConnectionStore((s) => s.setBoardId);
+  const setConnectedProtocol = useConnectionStore((s) => s.setConnectedProtocol);
   const lastConnectedEndpoint = useConnectionStore(
     (s) => s.lastConnectedEndpoint,
   );
@@ -137,14 +149,17 @@ export function ConnectPanel() {
   useEffect(() => {
     const ctrl = new AbortController();
     fetchState(ctrl.signal)
-      .then(applyState)
+      .then((s) => {
+        applyState(s);
+        hydrateTxFromState(s);
+      })
       .catch((err) => {
         if (ctrl.signal.aborted) return;
         setError(errorMessage(err));
         setFailureCount((n) => n + 1);
       });
     return () => ctrl.abort();
-  }, [applyState]);
+  }, [applyState, hydrateTxFromState]);
 
   // Discovery polling keeps running while Manual mode is active (PRD §6.2
   // proposal): toggling back to Discover shows fresh results immediately.
@@ -194,14 +209,17 @@ export function ConnectPanel() {
           await apiConnectP2({ endpoint: ep, sampleRate: DEFAULT_SAMPLE_RATE });
           const fresh = await fetchState();
           applyState(fresh);
+          hydrateTxFromState(fresh);
         } else {
           const next = await apiConnect({
             endpoint: ep,
             sampleRate: DEFAULT_SAMPLE_RATE,
           });
           applyState(next);
+          hydrateTxFromState(next);
         }
         setBoardId(r.boardId || null);
+        setConnectedProtocol(isP2 ? 'P2' : 'P1');
         setLastConnectedEndpoint(ep || null);
         applyPostConnectEffects();
       } catch (err) {
@@ -210,7 +228,7 @@ export function ConnectPanel() {
         setInflight(false);
       }
     },
-    [applyState, setBoardId, setInflight, setLastConnectedEndpoint],
+    [applyState, hydrateTxFromState, setBoardId, setConnectedProtocol, setInflight, setLastConnectedEndpoint],
   );
 
   const handleManualConnect = useCallback(
@@ -240,11 +258,14 @@ export function ConnectPanel() {
           await apiConnectP2({ endpoint: ep, sampleRate });
           const fresh = await fetchState();
           applyState(fresh);
+          hydrateTxFromState(fresh);
         } else {
           const next = await apiConnect({ endpoint: ep, sampleRate });
           applyState(next);
+          hydrateTxFromState(next);
         }
         setBoardId(null);
+        setConnectedProtocol(protocol);
         setLastConnectedEndpoint(ep);
         applyPostConnectEffects();
         if (manualSave || override) {
@@ -259,8 +280,8 @@ export function ConnectPanel() {
     },
     [
       manualIp, manualPort, manualProtocol, manualSampleRate,
-      manualSave, applyState, setBoardId, setInflight, setLastConnectedEndpoint,
-      saveEndpoint, setManualFormDefaults,
+      manualSave, applyState, hydrateTxFromState, setBoardId, setConnectedProtocol, setInflight,
+      setLastConnectedEndpoint, saveEndpoint, setManualFormDefaults,
     ],
   );
 
@@ -273,14 +294,16 @@ export function ConnectPanel() {
       try { await apiDisconnectP2(); } catch { /* may have been P1 */ }
       const fresh = await fetchState();
       applyState(fresh);
+      hydrateTxFromState(fresh);
       setBoardId(null);
+      setConnectedProtocol(null);
       setRadios(null);
     } catch (err) {
       setError(errorMessage(err));
     } finally {
       setInflight(false);
     }
-  }, [applyState, setBoardId, setInflight]);
+  }, [applyState, hydrateTxFromState, setBoardId, setConnectedProtocol, setInflight]);
 
   const handleRetry = useCallback(() => {
     setError(null);

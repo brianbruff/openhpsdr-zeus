@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -118,6 +125,11 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<TxMetersService>()
 // TxTuneDriver pumps silent mic blocks through WDSP TXA while TUN is on so
 // the post-gen tone actually reaches the ring (no mic uplink during TUN).
 builder.Services.AddHostedService<TxTuneDriver>();
+// PS auto-attenuate timer2code-equivalent: ramps the radio's TX step
+// attenuator (Protocol2 only today) when calcc feedback level lands outside
+// the 128..181 ideal window, so PS has a recovery path on first arm. Idle
+// when PS is off or AutoAttenuate is off — no wire, no engine pokes.
+builder.Services.AddHostedService<PsAutoAttenuateService>();
 
 // QRZ.com XML client. HttpClient default timeout is 100 s — cap at 10 s so a
 // hung login surfaces quickly in the UI.
@@ -128,6 +140,7 @@ builder.Services.AddSingleton<LayoutStore>();
 builder.Services.AddSingleton<DspSettingsStore>();
 builder.Services.AddSingleton<PaSettingsStore>();
 builder.Services.AddSingleton<PreferredRadioStore>();
+builder.Services.AddSingleton<PsSettingsStore>();
 builder.Services.AddSingleton<FilterPresetStore>();
 builder.Services.AddSingleton<QrzService>();
 builder.Services.AddSingleton<LogService>();
@@ -431,6 +444,26 @@ app.MapPost("/api/filter/advanced-pane", (FilterAdvancedPaneRequest req, RadioSe
     return r.SetFilterAdvancedPaneOpen(req.Open);
 });
 
+// Get favorite filter slots for a mode.
+app.MapGet("/api/filter/favorites", (string? mode, RadioService r) =>
+{
+    if (mode is null || !Enum.TryParse<RxMode>(mode, ignoreCase: true, out var rxMode))
+        return Results.BadRequest(new { error = $"Unknown mode '{mode}'. Expected one of: {string.Join(", ", Enum.GetNames<RxMode>())}" });
+    var slotNames = r.GetFavoriteFilterSlots(rxMode);
+    return Results.Ok(new FilterFavoriteSlotsResponse(slotNames));
+});
+
+// Set favorite filter slots for a mode (up to 3).
+app.MapPost("/api/filter/favorites", (FilterFavoriteSlotsRequest req, RadioService r) =>
+{
+    log.LogInformation("api.filter.favorites mode={M} slots={S}", req.Mode, string.Join(",", req.SlotNames));
+    if (!Enum.IsDefined(req.Mode))
+        return Results.BadRequest(new { error = $"Unknown mode '{req.Mode}'." });
+    if (req.SlotNames.Length > 3)
+        return Results.BadRequest(new { error = "Maximum 3 favorite slots allowed." });
+    return Results.Ok(r.SetFavoriteFilterSlots(req.Mode, req.SlotNames));
+});
+
 app.MapPost("/api/sampleRate", (SampleRateSetRequest req, RadioService r) =>
 {
     log.LogInformation("api.sampleRate rate={Rate}", req.Rate);
@@ -534,6 +567,91 @@ app.MapPost("/api/tx/tune-drive", (TuneDriveSetRequest req, RadioService r) =>
         return Results.BadRequest(new { error = "percent must be 0..100" });
     r.SetTuneDrive(req.Percent);
     return Results.Ok(new { tunePercent = req.Percent });
+});
+
+// Two-tone test generator (TXA PostGen mode=1). Protocol-agnostic — works
+// on both P1 and P2 because it only touches WDSP TXA, not the wire format.
+app.MapPost("/api/tx/twotone", (TwoToneSetRequest req, RadioService r, TxService tx) =>
+{
+    log.LogInformation(
+        "api.tx.twotone enabled={On} f1={F1} f2={F2} mag={Mag}",
+        req.Enabled, req.Freq1, req.Freq2, req.Mag);
+    if (req.Mag is double m && (m < 0.0 || m > 1.0 || double.IsNaN(m)))
+        return Results.BadRequest(new { error = "mag must be 0..1" });
+    if (req.Freq1 is double f1 && (f1 < 50.0 || f1 > 5000.0 || double.IsNaN(f1)))
+        return Results.BadRequest(new { error = "freq1 must be 50..5000 Hz" });
+    if (req.Freq2 is double f2 && (f2 < 50.0 || f2 > 5000.0 || double.IsNaN(f2)))
+        return Results.BadRequest(new { error = "freq2 must be 50..5000 Hz" });
+    // TrySetTwoTone owns both the engine state (RadioService.SetTwoTone) and
+    // the MOX side-effect — Thetis parity, setup.cs:11162-11165. Returns the
+    // post-mutate snapshot via Snapshot(); on a connect-interlock failure
+    // the request is rejected with 400.
+    if (!tx.TrySetTwoTone(req, out var err))
+        return Results.BadRequest(new { error = err });
+    return Results.Ok(r.Snapshot());
+});
+
+// PureSignal master arm + cal-mode. P1 is gated off in the frontend in v1
+// because the Protocol1Client wire-format work for PS isn't done yet, but
+// the server endpoint stays open — RadioService.SetPs sets the StateDto bit
+// and the engine receives SetPsEnabled either way; only the radio-side
+// feedback path is P2-only. See hermes.md / TODO(ps-p1).
+app.MapPost("/api/tx/ps", (PsControlSetRequest req, RadioService r) =>
+{
+    log.LogInformation(
+        "api.tx.ps enabled={On} auto={Auto} single={Single}",
+        req.Enabled, req.Auto, req.Single);
+    return Results.Ok(r.SetPs(req));
+});
+
+app.MapPost("/api/tx/ps/advanced", (PsAdvancedSetRequest req, RadioService r) =>
+{
+    if (req.HwPeak is double p && (p <= 0.0 || p > 2.0 || double.IsNaN(p)))
+        return Results.BadRequest(new { error = "hwPeak must be in (0, 2]" });
+    if (req.MoxDelaySec is double mox && (mox < 0.0 || mox > 10.0 || double.IsNaN(mox)))
+        return Results.BadRequest(new { error = "moxDelaySec must be 0..10" });
+    if (req.LoopDelaySec is double loop && (loop < 0.0 || loop > 100.0 || double.IsNaN(loop)))
+        return Results.BadRequest(new { error = "loopDelaySec must be 0..100" });
+    if (req.AmpDelayNs is double amp && (amp < 0.0 || amp > 25e6 || double.IsNaN(amp)))
+        return Results.BadRequest(new { error = "ampDelayNs must be 0..25e6" });
+    log.LogInformation("api.tx.ps.advanced");
+    return Results.Ok(r.SetPsAdvanced(req));
+});
+
+// PS feedback antenna selector. Internal coupler vs External (Bypass).
+// On G2/MkII this flips ALEX_RX_ANTENNA_BYPASS in alex0 during xmit + PS
+// armed. WDSP cal/iqc are unaffected — same DDC0/DDC1 paired feed either
+// way; only the radio routes a different physical signal into DDC0.
+app.MapPost("/api/tx/ps/feedback-source",
+    (PsFeedbackSourceSetRequest req, RadioService r) =>
+{
+    log.LogInformation("api.tx.ps.feedbackSource source={Source}", req.Source);
+    return Results.Ok(r.SetPsFeedbackSource(req));
+});
+
+app.MapPost("/api/tx/ps/reset", (DspPipelineService pipe) =>
+{
+    log.LogInformation("api.tx.ps.reset");
+    pipe.CurrentEngine?.ResetPs();
+    return Results.Ok(new { reset = true });
+});
+
+app.MapPost("/api/tx/ps/save", (PsSaveRequest req, DspPipelineService pipe) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Filename))
+        return Results.BadRequest(new { error = "filename required" });
+    log.LogInformation("api.tx.ps.save filename={Filename}", req.Filename);
+    pipe.CurrentEngine?.SavePsCorrection(req.Filename);
+    return Results.Ok(new { saved = req.Filename });
+});
+
+app.MapPost("/api/tx/ps/restore", (PsRestoreRequest req, DspPipelineService pipe) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Filename))
+        return Results.BadRequest(new { error = "filename required" });
+    log.LogInformation("api.tx.ps.restore filename={Filename}", req.Filename);
+    pipe.CurrentEngine?.RestorePsCorrection(req.Filename);
+    return Results.Ok(new { restored = req.Filename });
 });
 
 app.MapPost("/api/rx/nr", (NrSetRequest req, RadioService r) =>

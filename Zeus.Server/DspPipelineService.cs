@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -66,6 +73,15 @@ public class DspPipelineService : BackgroundService
     private Task? _iqPumpTask;
     private CancellationTokenSource? _iqPumpCts;
 
+    // PureSignal feedback pump. Reads paired DDC0+DDC1 IQ from the active
+    // protocol client and feeds the WDSP psccF entry once per 1024-sample
+    // block. Lifecycle is tied to the connection (started on connect,
+    // stopped on disconnect) — not to PsEnabled, because the radio sends
+    // paired frames whenever the PS wire bit is set even before the WDSP
+    // calcc state machine is armed.
+    private Task? _psFeedbackPumpTask;
+    private CancellationTokenSource? _psFeedbackPumpCts;
+
     // Protocol 2 path (parallel to the RadioService-owned P1 path). Held
     // directly here because RadioService is Protocol1Client-shaped and
     // growing a P2 variant there would require a larger refactor; for now
@@ -81,9 +97,38 @@ public class DspPipelineService : BackgroundService
     private double _appliedRxAfGainDb;
     private NrConfig _appliedNr = new();
     private int _appliedZoomLevel = 1;
+    // PureSignal latched values — same change-detect pattern as the others
+    // so OnRadioStateChanged only fires the (possibly heavy)
+    // SetPsIntsAndSpi / SetPsRunCal calls when the value actually moves.
+    private bool _appliedPsEnabled;
+    private bool _appliedPsAuto = true;
+    private bool _appliedPsSingle;
+    private bool _appliedPsPtol;
+    private double _appliedPsMoxDelaySec = 0.2;
+    private double _appliedPsLoopDelaySec;
+    private double _appliedPsAmpDelayNs = 150.0;
+    private double _appliedPsHwPeak = 0.4072;
+    private string _appliedPsIntsSpiPreset = "16/256";
+    private PsFeedbackSource _appliedPsFeedbackSource = PsFeedbackSource.Internal;
+    // Set by DisconnectP2Async so the next OnRadioStateChanged after a
+    // fresh ConnectP2Async re-pushes every PS field regardless of equality
+    // — necessary because the new WdspDspEngine instance starts with field
+    // defaults that don't match the cached `_appliedPs*` state.
+    private bool _psResyncRequired;
+    // TwoTone latched fields (protocol-agnostic, drives PostGen mode=1).
+    private bool _appliedTwoToneEnabled;
+    private double _appliedTwoToneFreq1 = 700.0;
+    private double _appliedTwoToneFreq2 = 1900.0;
+    private double _appliedTwoToneMag = 0.49;
 
     private uint _seq;
     private uint _audioSeq;
+    // Latched from MoxChanged so Tick can route the panadapter to the TX
+    // analyzer during keying without snapshotting RadioService. TUN also flips
+    // MOX on (TxService.cs:153-155), so this single flag covers both paths —
+    // see issue #81. volatile because MoxChanged fires on the caller's thread
+    // and Tick reads from the pipeline thread.
+    private volatile bool _keyed;
     // RX S-meter broadcast throttle. Pipeline ticks at 30 Hz; broadcasting
     // every 6 ticks = 5 Hz gives a smoother meter than Thetis's 4 Hz baseline
     // without spamming the WS (30 Hz dBm readouts add nothing a UI can use).
@@ -159,6 +204,13 @@ public class DspPipelineService : BackgroundService
     {
         get { lock (_engineLock) return _engine; }
     }
+
+    /// <summary>Snapshot of the active Protocol2 client, or null on P1 / no
+    /// connection. Exposed for the PS auto-attenuate service which needs to
+    /// call <c>SetTxAttenuationDb</c> on the same client this pipeline is
+    /// driving. Non-virtual — auto-attenuate is hard-gated on a P2 connection
+    /// and tests don't exercise it.</summary>
+    public Zeus.Protocol2.Protocol2Client? CurrentP2Client => _p2Client;
 
     private void OpenSynthetic()
     {
@@ -282,6 +334,122 @@ public class DspPipelineService : BackgroundService
             engine.SetZoom(channel, s.ZoomLevel);
             _appliedZoomLevel = s.ZoomLevel;
         }
+
+        // ---- TwoTone (protocol-agnostic; PostGen mode=1 inside TXA) ----
+        // TwoTone is safe on P1 even though PS itself is P2-only in v1
+        // because it touches only the TXA stage, not the wire format.
+        if (s.TwoToneEnabled != _appliedTwoToneEnabled
+            || s.TwoToneFreq1 != _appliedTwoToneFreq1
+            || s.TwoToneFreq2 != _appliedTwoToneFreq2
+            || s.TwoToneMag != _appliedTwoToneMag)
+        {
+            engine.SetTwoTone(s.TwoToneEnabled, s.TwoToneFreq1, s.TwoToneFreq2, s.TwoToneMag);
+            _appliedTwoToneEnabled = s.TwoToneEnabled;
+            _appliedTwoToneFreq1 = s.TwoToneFreq1;
+            _appliedTwoToneFreq2 = s.TwoToneFreq2;
+            _appliedTwoToneMag = s.TwoToneMag;
+        }
+
+        // ---- PureSignal ----
+        // Apply HW-peak first because SetPsAdvanced may also touch it; then
+        // advanced timing/preset; then control mode; then master arm last so
+        // the engine is fully configured before the cal state machine starts.
+        // _psResyncRequired (set by DisconnectP2Async) forces every push on
+        // the first state-change after a P2 reconnect so the new engine
+        // instance picks up the canonical state instead of running on its
+        // field defaults.
+        bool resync = _psResyncRequired;
+        if (resync || s.PsHwPeak != _appliedPsHwPeak)
+        {
+            engine.SetPsHwPeak(s.PsHwPeak);
+            _appliedPsHwPeak = s.PsHwPeak;
+        }
+        if (resync
+            || s.PsPtol != _appliedPsPtol
+            || s.PsMoxDelaySec != _appliedPsMoxDelaySec
+            || s.PsLoopDelaySec != _appliedPsLoopDelaySec
+            || s.PsAmpDelayNs != _appliedPsAmpDelayNs
+            || s.PsIntsSpiPreset != _appliedPsIntsSpiPreset)
+        {
+            (int ints, int spi) = ParseIntsSpi(s.PsIntsSpiPreset);
+            engine.SetPsAdvanced(
+                s.PsPtol,
+                s.PsMoxDelaySec,
+                s.PsLoopDelaySec,
+                s.PsAmpDelayNs,
+                s.PsHwPeak,
+                ints,
+                spi);
+            _appliedPsPtol = s.PsPtol;
+            _appliedPsMoxDelaySec = s.PsMoxDelaySec;
+            _appliedPsLoopDelaySec = s.PsLoopDelaySec;
+            _appliedPsAmpDelayNs = s.PsAmpDelayNs;
+            _appliedPsIntsSpiPreset = s.PsIntsSpiPreset;
+        }
+        if (resync || s.PsAuto != _appliedPsAuto || s.PsSingle != _appliedPsSingle)
+        {
+            engine.SetPsControl(s.PsAuto, s.PsSingle);
+            _appliedPsAuto = s.PsAuto;
+            _appliedPsSingle = s.PsSingle;
+        }
+        if (resync || s.PsEnabled != _appliedPsEnabled)
+        {
+            // pihpsdr transmitter.c:2467-2473 inverts the order: write the
+            // wire (RxSpec / HighPriority with PS bits set) FIRST, then sleep
+            // 100 ms to let the radio firmware spin up DDC0/DDC1 sync, then
+            // arm the engine. Without the settle window, the first 5-20
+            // pscc calls receive partial / glitched samples, scheck flags
+            // binfo[6], bs_count climbs to 2, calcc resets to LRESET — and
+            // the loop sometimes thrashes instead of converging.
+            //
+            // Disarm path stays engine-first: drop the engine run flag, then
+            // close the wire, then drain any in-flight paired frames so they
+            // don't arrive after PS has shut down.
+            //
+            // Task.Delay(100).Wait() is acceptable here — OnRadioStateChanged
+            // runs on a state-change handler thread, not the request path.
+            // TODO(ps-p1): when P1 PS lands, dispatch to _radio.ActiveClient
+            // here too (the P1 client gains a SetPuresignal(bool) sibling
+            // — see hermes.md item 4b). Today the P1 ActiveClient receives
+            // no PS bit and the frontend gates the PS toggle off on P1.
+            if (s.PsEnabled)
+            {
+                _p2Client?.SetPsFeedbackEnabled(true);
+                try { Task.Delay(100).Wait(); } catch { /* ignore */ }
+                engine.SetPsEnabled(true);
+            }
+            else
+            {
+                engine.SetPsEnabled(false);
+                _p2Client?.SetPsFeedbackEnabled(false);
+                DrainPsFeedback();
+            }
+            _appliedPsEnabled = s.PsEnabled;
+        }
+        if (resync || s.PsFeedbackSource != _appliedPsFeedbackSource)
+        {
+            // Wire-only change — flips ALEX_RX_ANTENNA_BYPASS in alex0 on
+            // the next CmdHighPriority emission. WDSP is unaffected.
+            _p2Client?.SetPsFeedbackSource(s.PsFeedbackSource == PsFeedbackSource.External);
+            _appliedPsFeedbackSource = s.PsFeedbackSource;
+        }
+        // Resync done — clear the flag so subsequent state changes use
+        // normal change-detect (no spurious wire writes on each tick).
+        _psResyncRequired = false;
+    }
+
+    // "16/256" → (16, 256). Falls back to (16, 256) on any parse failure
+    // because that's the only ints/spi pair WDSP allows save/restore on
+    // (Thetis PSForm.cs:865) — a safe default.
+    private static (int Ints, int Spi) ParseIntsSpi(string preset)
+    {
+        if (string.IsNullOrWhiteSpace(preset)) return (16, 256);
+        var slash = preset.IndexOf('/');
+        if (slash <= 0) return (16, 256);
+        if (!int.TryParse(preset.AsSpan(0, slash), out int ints)) return (16, 256);
+        if (!int.TryParse(preset.AsSpan(slash + 1), out int spi)) return (16, 256);
+        if (ints <= 0 || spi <= 0) return (16, 256);
+        return (ints, spi);
     }
 
     private void ApplyStateToNewChannel(IDspEngine engine, int channelId)
@@ -361,6 +529,62 @@ public class DspPipelineService : BackgroundService
         }, cts.Token);
     }
 
+    // PureSignal feedback pump (P2). Reads 1024-sample paired blocks from the
+    // Protocol2Client and hands them to the WDSP `psccF` entry. Runs whether
+    // or not PS is armed — the engine drops blocks internally when SetPsRunCal
+    // is 0, so steady-state cost is one P/Invoke per 5.3 ms (1024 / 192 kHz).
+    private void StartPsFeedbackPumpP2(Zeus.Protocol2.Protocol2Client client)
+    {
+        var cts = new CancellationTokenSource();
+        _psFeedbackPumpCts = cts;
+        _psFeedbackPumpTask = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var frame in client.PsFeedbackFrames.ReadAllAsync(cts.Token).ConfigureAwait(false))
+                {
+                    IDspEngine? engine;
+                    lock (_engineLock) { engine = _engine; }
+                    engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (ChannelClosedException) { }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "dsp.pipeline p2 ps-feedback-pump exited with error");
+            }
+        }, cts.Token);
+    }
+
+    private async Task StopPsFeedbackPumpAsync()
+    {
+        var cts = _psFeedbackPumpCts;
+        var task = _psFeedbackPumpTask;
+        _psFeedbackPumpCts = null;
+        _psFeedbackPumpTask = null;
+        if (cts is null) return;
+        try { cts.Cancel(); } catch { }
+        if (task is not null)
+        {
+            try { await task.ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+        }
+        cts.Dispose();
+    }
+
+    // Best-effort drain of in-flight paired frames after PS disarm. Called
+    // synchronously from OnRadioStateChanged so by the time the next state
+    // change tries to re-arm, the channel is empty. The pump task itself is
+    // not stopped — only the buffered backlog is drained.
+    private void DrainPsFeedback()
+    {
+        var client = _p2Client;
+        if (client is null) return;
+        var reader = client.PsFeedbackFrames;
+        while (reader.TryRead(out _)) { }
+    }
+
     /// <summary>
     /// Connect to a Protocol 2 radio and start streaming RX IQ into the DSP
     /// engine. Parallel path to RadioService.ConnectAsync (which is Protocol 1
@@ -429,7 +653,22 @@ public class DspPipelineService : BackgroundService
 
         _p2Client = client;
         StartIqPumpP2(client);
+        StartPsFeedbackPumpP2(client);
+        // Force the next OnRadioStateChanged to re-push every PS field into
+        // the freshly-opened WdspDspEngine instance, regardless of whether
+        // the canonical state in StateDto has changed since the prior
+        // session. The new engine starts with field defaults (hwPeak=0.4072,
+        // ptol=0.8, etc.) and the change-detect cache `_appliedPs*` doesn't
+        // know that — without this flag the engine never gets the operator's
+        // settings back, calcc runs on wrong hw_scale, and PS doesn't
+        // converge after a reconnect. See `project_ps_reconnect_state_loss.md`.
+        _psResyncRequired = true;
         _radio.MarkProtocol2Connected(radioEndpoint.ToString(), rateHz);
+        // P2 G2/MkII default HW peak = 0.6121; ANAN-7000/8000 = 0.2899. The
+        // RadioService switch covers both so we don't bake a value in here.
+        // ConnectedBoardKind returns OrionMkII when _p2Active is true; future
+        // P2 discovery work can refine it.
+        _radio.ApplyPsHwPeakForConnection(isProtocol2: true, _radio.ConnectedBoardKind);
         // Push current PA snapshot into the brand-new client so byte 345 /
         // byte 1401 / CmdGeneral[58] reflect PaSettingsStore from frame 1.
         _radio.ReplayPaSnapshot();
@@ -447,6 +686,7 @@ public class DspPipelineService : BackgroundService
 
     private void OnRadioMoxChanged(bool on)
     {
+        _keyed = on;
         _p2Client?.SetMox(on);
     }
 
@@ -472,6 +712,7 @@ public class DspPipelineService : BackgroundService
         if (client is null) return;
 
         await StopIqPumpAsync().ConfigureAwait(false);
+        await StopPsFeedbackPumpAsync().ConfigureAwait(false);
         try { await client.StopAsync(ct).ConfigureAwait(false); } catch { }
         await client.DisposeAsync().ConfigureAwait(false);
 
@@ -490,6 +731,16 @@ public class DspPipelineService : BackgroundService
             _sampleRateHz = SyntheticSampleRateHz;
         }
         TeardownEngine(old, oldChannel);
+        // Mark PS state for forced re-push on the next ConnectP2Async. The
+        // change-detect cache (`_appliedPs*`) is preserved across disconnect
+        // — by design, so a reconnect with unchanged operator state doesn't
+        // generate spurious wire writes — but a fresh WdspDspEngine starts
+        // with field defaults (hwPeak=0.4072, ptol=0.8, etc.) that don't
+        // match the canonical state. Without this flag, OnRadioStateChanged
+        // skips every PS push because s.PsX == _appliedPsX, and the new
+        // engine never gets the operator's settings. See
+        // `project_ps_reconnect_state_loss.md` for the rack reproduction.
+        _psResyncRequired = true;
         _radio.MarkProtocol2Disconnected();
         _log.LogInformation("dsp.pipeline p2 disconnected, engine=synthetic");
     }
@@ -561,8 +812,22 @@ public class DspPipelineService : BackgroundService
 
         engine.SetVfoHz(channel, state.VfoHz);
 
-        bool pan = engine.TryGetDisplayPixels(channel, DisplayPixout.Panadapter, panBuf);
-        bool wf = engine.TryGetDisplayPixels(channel, DisplayPixout.Waterfall, wfBuf);
+        // While keyed (MOX or TUN — see _keyed comment) pull from the TX
+        // analyzer so the panadapter shows the transmitted signal instead of
+        // the RX front end's TX bleed (issue #81). If the TX analyzer isn't
+        // ready (not yet produced an FFT, or engine doesn't have a TX
+        // analyzer — e.g. Synthetic), TryGetTxDisplayPixels returns false and
+        // we fall through to the RX analyzer, matching the pre-issue-#81
+        // behaviour. This fallback also covers the first ~1 tick after
+        // keying before the analyzer averaging has settled.
+        bool pan = false, wf = false;
+        if (_keyed)
+        {
+            pan = engine.TryGetTxDisplayPixels(DisplayPixout.Panadapter, panBuf);
+            wf = engine.TryGetTxDisplayPixels(DisplayPixout.Waterfall, wfBuf);
+        }
+        if (!pan) pan = engine.TryGetDisplayPixels(channel, DisplayPixout.Panadapter, panBuf);
+        if (!wf) wf = engine.TryGetDisplayPixels(channel, DisplayPixout.Waterfall, wfBuf);
 
         // Flip to display order (low freq left, high freq right). WDSP emits
         // pixel 0 = highest positive frequency — see doc 03 §10 and

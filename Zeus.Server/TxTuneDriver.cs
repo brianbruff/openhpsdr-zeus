@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -43,16 +50,21 @@ using Zeus.Protocol1;
 namespace Zeus.Server;
 
 /// <summary>
-/// Keeps WDSP TXA's sample pump running when TUN is on but the mic uplink
-/// isn't. TUN's post-generator tone lives inside the TXA chain
-/// (<see cref="Zeus.Dsp.Wdsp.WdspDspEngine.SetTxTune"/>), so it only emits
-/// IQ when <c>fexchange2</c> is called at the block rate. During MOX that
-/// call is driven by <see cref="TxAudioIngest"/> as mic frames arrive; during
-/// TUN we have no mic, so this service synthesises silent mic input at the
-/// WDSP block cadence (1024 samples @ 48 kHz ≈ 21 ms).
+/// Keeps WDSP TXA's sample pump running when TUN or TwoTone is armed but
+/// the mic uplink isn't. Both PostGen modes (mode=0 TUN carrier, mode=1
+/// TwoTone) live inside the TXA chain
+/// (<see cref="Zeus.Dsp.Wdsp.WdspDspEngine.SetTxTune"/> /
+/// <see cref="Zeus.Dsp.Wdsp.WdspDspEngine.SetTwoTone"/>), so they only
+/// emit IQ when <c>fexchange2</c> is called at the block rate. During MOX
+/// that call is driven by <see cref="TxAudioIngest"/> as mic frames arrive;
+/// during TUN/TwoTone there's no mic, so this service synthesises silent
+/// mic input at the WDSP block cadence (1024 samples @ 48 kHz ≈ 21 ms).
+/// PostGen overwrites the silent midbuff regardless of mic content, so the
+/// same pump path works for both modes — we just gate on either flag.
 ///
-/// Starts and stops via <see cref="TxService.IsTunOn"/> polling; not worth
-/// building a subscription pattern for a feature that toggles at click rate.
+/// Starts and stops via <see cref="TxService.IsTunOn"/> /
+/// <see cref="TxService.IsTwoToneOn"/> polling; not worth building a
+/// subscription pattern for a feature that toggles at click rate.
 /// </summary>
 internal sealed class TxTuneDriver : BackgroundService
 {
@@ -84,7 +96,7 @@ internal sealed class TxTuneDriver : BackgroundService
         {
             try
             {
-                if (!_tx.IsTunOn)
+                if (!_tx.IsTunOn && !_tx.IsTwoToneOn)
                 {
                     await Task.Delay(PollIdle, ct).ConfigureAwait(false);
                     continue;

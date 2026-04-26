@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -85,6 +92,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // needed via the UI. Attenuator 0 dB so the front-end isn't knocked down.
     private bool _preampOn;
     private byte _rxStepAttnDb;
+    // TX step attenuator (0..31 dB) — Thetis network.c:1238-1242 writes the
+    // same value to bytes 57/58/59 of CmdTx (one per ADC tap). The PS
+    // auto-attenuate loop adjusts this when info[4] feedback level lands
+    // outside the 128..181 ideal window so calcc has a chance to converge.
+    // Default 0 matches the radio's power-on state and pihpsdr's untouched
+    // baseline.
+    private byte _txStepAttnDb;
     // PA settings — pushed from RadioService when PaSettingsStore changes or
     // the VFO crosses a band edge. _paEnabled is the global toggle that lands
     // in CmdGeneral[58]; _driveByte is the pre-calibrated drive level for
@@ -132,6 +146,32 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private readonly Channel<byte[]> _txIqQueue = Channel.CreateUnbounded<byte[]>(
         new UnboundedChannelOptions { SingleReader = true });
     private Task? _txIqSenderTask;
+
+    // ---- PureSignal feedback (DDC0 + DDC1 paired on UDP 1035) ----
+    // PS feedback decoder: when armed, packets on port 1035 carry interleaved
+    // (DDC0=PS_RX_FEEDBACK=post-PA coupler IQ, DDC1=PS_TX_FEEDBACK=TX-DAC
+    // loopback IQ) sample pairs (pihpsdr new_protocol.c:1615-1616, 2463-2510;
+    // transmitter.c:2015-2030, 2066). DDC0 feeds pscc's "rx" arg; DDC1 feeds
+    // pscc's "tx" arg. The accumulator collects 1024 complex pairs across
+    // packets before emitting a frame. When PS is disarmed the radio reverts
+    // to single-DDC packets and the standard RX demuxer takes over.
+    // Volatile because RxLoop reads it across threads.
+    private volatile bool _psFeedbackEnabled;
+    // PS feedback source — false=Internal coupler (default), true=External
+    // (Bypass). When externally bypassing, alex0 gains ALEX_RX_ANTENNA_BYPASS
+    // (bit 11) during xmit + PS armed. RxSpecific/TxSpecific are byte-
+    // identical between sources — only this one alex0 bit differs.
+    // Reference: pihpsdr new_protocol.c:1284-1296 alex0 bypass selection.
+    private volatile bool _psFeedbackExternal;
+    private const int PsFeedbackBlockSize = 1024;
+    private readonly Channel<PsFeedbackFrame> _psFeedbackFrames = Channel.CreateUnbounded<PsFeedbackFrame>(
+        new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
+    private readonly float[] _psTxI = new float[PsFeedbackBlockSize];
+    private readonly float[] _psTxQ = new float[PsFeedbackBlockSize];
+    private readonly float[] _psRxI = new float[PsFeedbackBlockSize];
+    private readonly float[] _psRxQ = new float[PsFeedbackBlockSize];
+    private int _psBlockFill;
+    private ulong _psBlockStartSeq;
 
     public Protocol2Client(ILogger<Protocol2Client> log)
     {
@@ -291,6 +331,50 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         if (!on) ResetTxIq();
         if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
+
+    /// <summary>
+    /// Arm or disarm PureSignal feedback streaming. When on:
+    ///   - <c>SendCmdRx</c> enables DDC0 alongside the user-visible DDC2 and
+    ///     synchronises DDC1→DDC0 (byte 1363 = 0x02) so the radio sends
+    ///     paired DDC0/DDC1 IQ on port 1035.
+    ///   - <c>SendCmdHighPriority</c> sets <c>ALEX_PS_BIT (0x00040000)</c>
+    ///     in alex0/alex1 and, during xmit, mirrors DDC0+DDC1 phase words
+    ///     to the TX DUC frequency.
+    ///   - The packet decoder switches to the paired format (6B DDC0 + 6B
+    ///     DDC1 per sample, repeating).
+    /// When off the radio reverts to the standard non-PS RX layout and any
+    /// in-flight paired packets are discarded by the decoder.
+    /// </summary>
+    public void SetPsFeedbackEnabled(bool on)
+    {
+        if (_psFeedbackEnabled == on) return;
+        _psFeedbackEnabled = on;
+        // Reset accumulator so we don't mix old samples with new on a re-arm.
+        _psBlockFill = 0;
+        if (_rxTask is not null)
+        {
+            // Re-emit RX-spec (DDC enables / sync bit) and HighPriority (PS
+            // bit / DDC0/1 phase) so the radio honours the new state on the
+            // very next sample window.
+            SendCmdRx();
+            SendCmdHighPriority(run: true);
+        }
+    }
+
+    /// <summary>
+    /// Choose between Internal feedback coupler and External (Bypass)
+    /// feedback antenna. Drives <c>ALEX_RX_ANTENNA_BYPASS</c> in alex0
+    /// during xmit + PS armed (pihpsdr new_protocol.c:1284-1296). No
+    /// effect on RxSpecific / TxSpecific buffers.
+    /// </summary>
+    public void SetPsFeedbackSource(bool external)
+    {
+        if (_psFeedbackExternal == external) return;
+        _psFeedbackExternal = external;
+        if (_rxTask is not null) SendCmdHighPriority(run: true);
+    }
+
+    public ChannelReader<PsFeedbackFrame> PsFeedbackFrames => _psFeedbackFrames.Reader;
 
     /// <summary>
     /// Push a block of interleaved float IQ (−1..+1) into the TX-DUC stream.
@@ -468,33 +552,124 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1024));
     }
 
-    private void SendCmdRx()
+    // Static byte composer — pure function over (seq, numAdc, sampleRateKhz,
+    // psEnabled). Exposed internal so wire-format tests don't need a live
+    // socket. SendCmdRx constructs the same bytes and pushes to UDP.
+    internal static byte[] ComposeCmdRxBuffer(uint seq, byte numAdc, ushort sampleRateKhz, bool psEnabled)
     {
         var p = new byte[BufLen];
-        WriteBeU32(p, 0, _seqCmdRx++);
-        // Mirrors pihpsdr new_protocol_receive_specific for the MkII:
-        //   n_adc = 2 (G2 has two physical ADCs), DDC2 enabled by bit 2 in
-        //   the enable mask, and the DDC config block sits at 17 + 2*6 = 29.
-        //   DDC0/1 stay disabled — those slots are reserved by the radio for
-        //   the PureSignal/Diversity hardware pair.
-        p[4] = 2;
+        WriteBeU32(p, 0, seq);
+        p[4] = numAdc;
         p[5] = 0;
         p[6] = 0;
-        p[7] = (byte)(1 << G2RxDdc);  // = 0x04
+        byte ddcEnable = (byte)(1 << G2RxDdc);
+
+        if (psEnabled)
+        {
+            ddcEnable |= 0x01;
+            p[17] = 0x00;
+            WriteBeU16(p, 18, 192);
+            p[22] = 24;
+            p[23] = numAdc;
+            WriteBeU16(p, 24, 192);
+            p[28] = 24;
+            p[1363] = 0x02;
+        }
+
+        p[7] = ddcEnable;
         int off = 17 + G2RxDdc * 6;
-        p[off + 0] = 0x00;            // DDC2 <- ADC0
-        WriteBeU16(p, off + 1, _sampleRateKhz);
-        p[off + 5] = 24;              // bit depth
+        p[off + 0] = 0x00;
+        WriteBeU16(p, off + 1, sampleRateKhz);
+        p[off + 5] = 24;
+        return p;
+    }
+
+    private void SendCmdRx()
+    {
+        // Mirrors pihpsdr new_protocol_receive_specific for the MkII:
+        //   n_adc = G2 has two physical ADCs; DDC2 enabled by bit 2 in the
+        //   enable mask; the DDC config block sits at 17 + 2*6 = 29. DDC0/1
+        //   stay disabled by default — those slots are reserved by the radio
+        //   for the PureSignal / Diversity hardware pair. When PS is armed,
+        //   ComposeCmdRxBuffer also enables DDC0, configures DDC0/1 at
+        //   192 kHz / 24-bit, and sets byte 1363 = 0x02 to sync DDC1→DDC0
+        //   (pihpsdr new_protocol.c:1611-1630).
+        var p = ComposeCmdRxBuffer(_seqCmdRx++, _numAdc, (ushort)_sampleRateKhz, _psFeedbackEnabled);
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1025));
     }
 
     private void SendCmdTx()
     {
-        var p = new byte[60];
-        WriteBeU32(p, 0, _seqCmdTx++);
-        p[4] = 1;                 // num_dac
-        WriteBeU16(p, 14, _sampleRateKhz);
+        var p = ComposeCmdTxBuffer(_seqCmdTx++, (ushort)_sampleRateKhz, _txStepAttnDb, _paEnabled, _psFeedbackEnabled);
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1026));
+    }
+
+    // Test-seamed Compose for the CmdTx (TxSpecific) packet. Layout per
+    // pihpsdr new_protocol.c new_protocol_tx_specific (1502-1594) and
+    // saturnmain.c::saturn_handle_duc_specific:
+    //   bytes 0..3   : sequence (BE)
+    //   byte  4      : num_dac (1 on G2)
+    //   bytes 14..15 : DAC sample rate kHz (BE) — Zeus-only; Saturn ignores
+    //   byte  57     : reserved on Saturn (FPGA does not read)
+    //   byte  58     : ADC1 TX step attenuator (TX-DAC reference loopback)
+    //   byte  59     : ADC0 TX step attenuator (PA-coupler feedback)
+    //
+    // pihpsdr's PA-protection / PS asymmetry (new_protocol.c:1540-1547):
+    //   if (xmit && pa_enabled) { p[58]=31; p[59]=31; }   // protect both ADCs
+    //   if (puresignal)         { p[59]=tx->attenuation; } // ONLY byte 59
+    //
+    // Byte 58 is NEVER overridden by PS — the TX-DAC reference ADC needs
+    // its own protection independent of where AutoAttenuate parks the
+    // PA-feedback ADC. If we let PS write to byte 58 too, the first
+    // attenuator step drops the loopback reference in lockstep with the
+    // feedback, leaving the gain ratio uncorrected and starving calcc.
+    //
+    // When PS is OFF we keep the historical Zeus shape (value across
+    // 57/58/59) — operator's normal voice TX has been validated working
+    // with that wire form on G2 MkII, so we don't ship a wire change
+    // beyond the PS-armed window in this patch.
+    internal static byte[] ComposeCmdTxBuffer(uint seq, ushort sampleRateKhz, byte txStepAttnDb, bool paEnabled, bool psEnabled)
+    {
+        var p = new byte[60];
+        WriteBeU32(p, 0, seq);
+        p[4] = 1;                 // num_dac
+        WriteBeU16(p, 14, sampleRateKhz);
+
+        if (psEnabled)
+        {
+            // PS-armed canonical pihpsdr shape: byte 58 holds PA-protection
+            // for the TX-DAC reference; byte 59 takes the dynamic step-att
+            // so calcc can read the post-PA envelope.
+            p[57] = 0;
+            p[58] = paEnabled ? (byte)31 : (byte)0;
+            p[59] = txStepAttnDb;
+        }
+        else
+        {
+            // Historical Zeus shape — preserved so normal voice TX wire
+            // form is unchanged. Revisit when bringing the full pihpsdr
+            // PA-protection invariant to non-PS TX.
+            p[57] = txStepAttnDb;
+            p[58] = txStepAttnDb;
+            p[59] = txStepAttnDb;
+        }
+        return p;
+    }
+
+    /// <summary>
+    /// Set the TX step attenuator (0..31 dB) and re-emit the CmdTx packet
+    /// so the radio honours the new value on the next transmit cycle. Bytes
+    /// 57/58/59 — Thetis network.c:1238-1242. Used by the PS auto-attenuate
+    /// loop to ramp feedback level into the 128..181 window when calcc
+    /// rejects fits because the loopback is too hot or too quiet.
+    /// </summary>
+    public void SetTxAttenuationDb(byte db)
+    {
+        if (db > 31) db = 31;
+        if (_txStepAttnDb == db) return;
+        _txStepAttnDb = db;
+        if (_rxTask is not null) SendCmdTx();
+        _log.LogInformation("p2.txAttn db={Db}", db);
     }
 
     private void SendCmdHighPriority(bool run)
@@ -511,12 +686,24 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // reads a 32-bit phase increment, not Hz. pihpsdr computes this as
         //   phase = freq_hz * 2^32 / 122_880_000
         // The G2 MkII puts the user-visible RX0 at DDC slot 2, so the phase
-        // goes to bytes 9 + 2*4 = 17..20. Bytes 9..16 (DDC0/1) are left as
-        // zero per pihpsdr's non-PS non-diversity code path. TX DUC phase is
-        // written to 329..332 as the same value for out-of-band gating.
+        // goes to bytes 9 + 2*4 = 17..20. Bytes 9..16 (DDC0/1) are normally
+        // left as zero (non-PS path). TX DUC phase is written to 329..332.
         uint rxPhase = (uint)(_rxFreqHz * HzToPhase);
         WriteBeU32(p, 9 + G2RxDdc * 4, rxPhase);
         WriteBeU32(p, 329, rxPhase);
+
+        // PureSignal — when armed, DDC0 + DDC1 phase words also need to
+        // track the TX frequency during xmit so the feedback DDC samples
+        // the actual TX coupler signal. pihpsdr new_protocol.c:827-839.
+        if (_psFeedbackEnabled && _moxOn)
+        {
+            // For now mirror the RX freq onto the TX side — the radio's
+            // single-VFO assumption today means TX = RX. Multi-VFO support
+            // is a follow-up.
+            uint txPhase = rxPhase;
+            WriteBeU32(p, 9, txPhase);     // DDC0 = TX freq
+            WriteBeU32(p, 13, txPhase);    // DDC1 = TX freq
+        }
 
         // Drive level (0..255) at byte 345. Set by RadioService after applying
         // per-band PA gain calibration. Honored by the radio only while run=1
@@ -553,6 +740,23 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         uint alexCommon = ComputeAlexWord(_rxFreqHz, _rxFreqHz, txAnt: 1);
         uint alex0 = alexCommon | (xmit ? ALEX_TX_RELAY : 0u);
         uint alex1 = alexCommon | (xmit ? ALEX_TX_RELAY | ALEX1_ANAN7000_RX_GNDonTX : 0u);
+        // ALEX_PS_BIT (0x00040000): pihpsdr new_protocol.c:994-998 ORs this
+        // into alex0 (during xmit) and alex1 (always-on while PS armed). The
+        // BPF board uses it to swap to the feedback-coupler tap on the TX
+        // path so DDC0/DDC1 see the post-PA signal.
+        if (_psFeedbackEnabled)
+        {
+            alex1 |= AlexPsBit;
+            if (xmit) alex0 |= AlexPsBit;
+        }
+        // External (Bypass) feedback antenna — pihpsdr new_protocol.c:1284-
+        // 1296 ORs ALEX_RX_ANTENNA_BYPASS into alex0 only during xmit when
+        // PS is armed and the operator selected the external path. Internal
+        // coupler leaves this bit clear.
+        if (_psFeedbackEnabled && _psFeedbackExternal && xmit)
+        {
+            alex0 |= AlexRxAntennaBypass;
+        }
         WriteBeU32(p, 1428, alex1);
         WriteBeU32(p, 1432, alex0);
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1027));
@@ -591,9 +795,36 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // through the selected TX LPF instead of through the RX BPF path. OR'd
     // into both alex0 and alex1 during TX (pihpsdr new_protocol.c:989-992).
     private const uint ALEX_TX_RELAY       = 0x08000000;
+    // PureSignal feedback-coupler enable. OR'd into alex1 always when PS is
+    // armed and into alex0 during xmit (pihpsdr new_protocol.c:994-998).
+    internal const uint AlexPsBit          = 0x00040000;
+    // PS External (Bypass) antenna select — pihpsdr new_protocol.c:1284-1296
+    // ORs ALEX_RX_ANTENNA_BYPASS into alex0 during xmit + PS armed when the
+    // operator picks the external feedback path. Internal coupler leaves
+    // this bit clear.
+    internal const uint AlexRxAntennaBypass = 0x00000800;
     // Alex1-only: grounds the RX input while keyed so the hot TX field doesn't
     // back-feed into the Mercury ADC (pihpsdr alex.h ANAN7000_RX_GNDonTX).
     private const uint ALEX1_ANAN7000_RX_GNDonTX = 0x00000100;
+
+    /// <summary>
+    /// Compose the alex0 word the way <see cref="SendCmdHighPriority"/>
+    /// does, exposed internal so wire-format tests can assert the
+    /// PureSignal-related bits without standing up a socket. Mirrors the
+    /// in-line logic at SendCmdHighPriority &gt; alex0 calculation.
+    /// </summary>
+    internal static uint ComposeAlex0ForTest(
+        uint rxFreqHz,
+        bool moxOn,
+        bool psEnabled,
+        bool psExternal)
+    {
+        uint alexCommon = ComputeAlexWord(rxFreqHz, rxFreqHz, txAnt: 1);
+        uint alex0 = alexCommon | (moxOn ? ALEX_TX_RELAY : 0u);
+        if (psEnabled && moxOn) alex0 |= AlexPsBit;
+        if (psEnabled && psExternal && moxOn) alex0 |= AlexRxAntennaBypass;
+        return alex0;
+    }
 
     internal static uint ComputeAlexWord(uint rxFreqHz, uint txFreqHz, int txAnt)
     {
@@ -704,7 +935,18 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 var srcPort = ((IPEndPoint)from).Port;
                 if (srcPort >= 1035 && srcPort <= 1041 && n == BufLen)
                 {
-                    HandleDdcPacket(buf, srcPort - 1035);
+                    int ddcIndex = srcPort - 1035;
+                    if (_psFeedbackEnabled && ddcIndex == 0)
+                    {
+                        // PS-armed paired-DDC packet: 6B DDC0 (TX-mod-IQ) + 6B
+                        // DDC1 (feedback) interleaved per sample. pihpsdr
+                        // process_ps_iq_data, new_protocol.c:2463-2510.
+                        HandlePsPairedPacket(buf);
+                    }
+                    else
+                    {
+                        HandleDdcPacket(buf, ddcIndex);
+                    }
                 }
                 // other ports (hi-pri status, mic, wideband) intentionally ignored for now
             }
@@ -755,6 +997,95 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
         Interlocked.Increment(ref _totalFrames);
         _iqFrames.Writer.TryWrite(frame);
+    }
+
+    // PS-armed packet shape on UDP 1035: 16-byte header (4 seq, 8 timestamp,
+    // 4 reserved) followed by 119 sample pairs at 12 bytes each (6B DDC0 +
+    // 6B DDC1). 16 + 119*12 = 1444 = BufLen. We accumulate into the 1024-
+    // sample paired buffers and emit a PsFeedbackFrame per full block.
+    //
+    // Sample layout per pair (big-endian, signed 24-bit), per pihpsdr
+    // new_protocol.c:1615-1616:
+    //   off+0..2 : DDC0 I  (PS_RX_FEEDBACK — post-PA coupler — pscc's "rx")
+    //   off+3..5 : DDC0 Q
+    //   off+6..8 : DDC1 I  (PS_TX_FEEDBACK — TX-DAC loopback — pscc's "tx")
+    //   off+9..11: DDC1 Q
+    private void HandlePsPairedPacket(byte[] buf)
+    {
+        var seq = BinaryPrimitives.ReadUInt32BigEndian(buf);
+        // Read samplesperframe from the packet header (pihpsdr
+        // new_protocol.c:2475). G2 at 192 kHz emits 238 samples/frame
+        // = 119 pairs/packet — the prior hardcoded literal happened to
+        // match. Defensive bounds check + fallback to 119 on any garbage
+        // value keeps the decoder working if the radio reports something
+        // unexpected (older firmware, future variants).
+        int samplesPerFrame = (buf[14] << 8) | buf[15];
+        int samplesPerPacket = samplesPerFrame / 2;
+        if (samplesPerPacket <= 0 || samplesPerPacket > 200)
+        {
+            _log.LogWarning(
+                "p2.psPaired bad samplesPerFrame={N}, falling back to 119",
+                samplesPerFrame);
+            samplesPerPacket = 119;
+        }
+
+        for (int i = 0; i < samplesPerPacket; i++)
+        {
+            int off = 16 + i * 12;
+            // DecodePsPairForTest is the canonical mapping (DDC0=rx, DDC1=tx).
+            // Reusing it here keeps the test-asserted contract identical to
+            // the live decode path so the regression guard is real.
+            var (sampleRxI, sampleRxQ, sampleTxI, sampleTxQ) =
+                DecodePsPairForTest(new ReadOnlySpan<byte>(buf, off, 12));
+            _psRxI[_psBlockFill] = sampleRxI;
+            _psRxQ[_psBlockFill] = sampleRxQ;
+            _psTxI[_psBlockFill] = sampleTxI;
+            _psTxQ[_psBlockFill] = sampleTxQ;
+
+            if (_psBlockFill == 0) _psBlockStartSeq = seq;
+            _psBlockFill++;
+
+            if (_psBlockFill >= PsFeedbackBlockSize)
+            {
+                // Copy out — caller may reuse the buffers immediately.
+                var txI = new float[PsFeedbackBlockSize];
+                var txQ = new float[PsFeedbackBlockSize];
+                var rxI = new float[PsFeedbackBlockSize];
+                var rxQ = new float[PsFeedbackBlockSize];
+                Array.Copy(_psTxI, txI, PsFeedbackBlockSize);
+                Array.Copy(_psTxQ, txQ, PsFeedbackBlockSize);
+                Array.Copy(_psRxI, rxI, PsFeedbackBlockSize);
+                Array.Copy(_psRxQ, rxQ, PsFeedbackBlockSize);
+                _psFeedbackFrames.Writer.TryWrite(new PsFeedbackFrame(
+                    txI, txQ, rxI, rxQ, _psBlockStartSeq));
+                _psBlockFill = 0;
+            }
+        }
+    }
+
+    private static int SignExtend24(int raw)
+    {
+        if ((raw & 0x800000) != 0) raw |= unchecked((int)0xFF000000);
+        return raw;
+    }
+
+    /// <summary>
+    /// Test seam — decode a single sample-pair from a PS paired packet and
+    /// return the (rxI, rxQ, txI, txQ) destination assignments per the
+    /// pihpsdr DDC0=RX_FEEDBACK / DDC1=TX_FEEDBACK contract. Used by tests
+    /// to guard against re-introducing the round-1 swap bug.
+    /// </summary>
+    internal static (float rxI, float rxQ, float txI, float txQ)
+        DecodePsPairForTest(ReadOnlySpan<byte> pair)
+    {
+        if (pair.Length < 12) throw new ArgumentException("pair must be 12 bytes", nameof(pair));
+        const float scale = 1f / 8388608f;
+        int d0i = SignExtend24((pair[0]  << 16) | (pair[1]  << 8) | pair[2]);
+        int d0q = SignExtend24((pair[3]  << 16) | (pair[4]  << 8) | pair[5]);
+        int d1i = SignExtend24((pair[6]  << 16) | (pair[7]  << 8) | pair[8]);
+        int d1q = SignExtend24((pair[9]  << 16) | (pair[10] << 8) | pair[11]);
+        // DDC0 -> rx, DDC1 -> tx.
+        return (d0i * scale, d0q * scale, d1i * scale, d1q * scale);
     }
 
     public void Dispose()

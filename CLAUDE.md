@@ -63,7 +63,7 @@ Backend + frontend run independently during dev:
 dotnet run --project Zeus.Server
 
 # frontend (Vite dev server on :5173, proxies /api and /hub to :6060)
-npm --prefix Zeus.Web run dev
+npm --prefix zeus-web run dev
 ```
 
 Full details, dependency list, and native WDSP build in `README.md` and `native/`. Do not duplicate them here.
@@ -79,8 +79,9 @@ Full details, dependency list, and native WDSP build in `README.md` and `native/
 
 - **`Zeus.Contracts`** — wire format shared between server and web (frames, DTOs, enums). Changes here are red-light.
 - **`Zeus.Protocol1`** — HPSDR original-protocol UDP client, discovery, packet parsing, TX IQ ring.
+- **`Zeus.Protocol2`** — HPSDR Protocol 2 (ANAN-class / Orion) UDP client: discovery, DDC RX streaming, TX IQ/mic path.
 - **`Zeus.Dsp`** — DSP engine abstraction (`IDspEngine`), synthetic and WDSP implementations, TX-stage meters.
 - **`Zeus.Server`** — ASP.NET host, SignalR `StreamingHub`, radio / DSP / TX pipeline services, discovery.
-- **`Zeus.Web`** (frontend) — Vite + React, connects to the hub, renders panadapter/waterfall/VFO/meters.
+- **`zeus-web`** (frontend) — Vite + React, connects to the hub, renders panadapter/waterfall/VFO/meters.
 
 When in doubt about where code belongs, match the existing project's single responsibility rather than introducing a new one.

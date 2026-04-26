@@ -181,6 +181,60 @@ public sealed class FilterPresetStore : IDisposable
         }
     }
 
+    // Get favorite filter slots for a mode. Returns up to 3 slot names (e.g., ["F6", "F5", "F4"]).
+    // Returns default favorites if not set: F6 (2.7k), F5 (2.9k), F4 (3.3k) for USB/LSB.
+    public string[] GetFavoriteSlots(RxMode mode)
+    {
+        lock (_sync)
+        {
+            var existing = FindByMode(mode.ToString());
+            if (existing?.FavoriteSlots is not null)
+            {
+                return existing.FavoriteSlots.Split(',', StringSplitOptions.RemoveEmptyEntries);
+            }
+            // Default favorites: 2.7k (F6), 2.9k (F5), 3.3k (F4) for USB/LSB
+            return mode switch
+            {
+                RxMode.USB or RxMode.LSB => new[] { "F6", "F5", "F4" },
+                RxMode.CWU or RxMode.CWL => new[] { "F4", "F5", "F6" }, // 500, 400, 250 Hz
+                RxMode.AM or RxMode.SAM => new[] { "F7", "F8", "F9" }, // 8.0k, 7.0k, 6.0k
+                RxMode.DSB => new[] { "F6", "F7", "F8" }, // 5.2k, 4.0k, 3.1k
+                RxMode.DIGL or RxMode.DIGU => new[] { "F6", "F5", "F4" }, // 800, 1.0k, 1.5k
+                _ => new[] { "F6", "F5", "F4" }
+            };
+        }
+    }
+
+    // Set favorite filter slots for a mode. Up to 3 slot names allowed.
+    public void SetFavoriteSlots(RxMode mode, string[] slotNames)
+    {
+        if (slotNames.Length > 3)
+            throw new ArgumentException("Maximum 3 favorite slots allowed", nameof(slotNames));
+
+        var key = mode.ToString();
+        var csv = string.Join(',', slotNames.Take(3));
+
+        lock (_sync)
+        {
+            var existing = FindByMode(key);
+            if (existing is null)
+            {
+                _entries.Insert(new FilterPresetStoreEntry
+                {
+                    ModeKey = key,
+                    FavoriteSlots = csv,
+                    UpdatedUtc = DateTime.UtcNow,
+                });
+            }
+            else
+            {
+                existing.FavoriteSlots = csv;
+                existing.UpdatedUtc = DateTime.UtcNow;
+                _entries.Update(existing);
+            }
+        }
+    }
+
     // Seed USB and LSB VAR1 with Zeus's 150/2850 default on first run so the
     // operator sees a familiar starting point (PRD §9 decision).
     private void SeedDefaults()
@@ -248,5 +302,8 @@ public sealed class FilterPresetStoreEntry
     public string? LastPreset { get; set; }
     // Ribbon-scope flag, only meaningful on the sentinel "__SETTINGS__" row.
     public bool AdvancedPaneOpen { get; set; }
+    // Favorite filter slots (up to 3), stored as comma-separated preset names.
+    // e.g., "F6,F5,F4" for 2.7k, 2.9k, 3.3k in USB/LSB.
+    public string? FavoriteSlots { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

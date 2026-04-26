@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -61,6 +68,13 @@ public sealed class TxService
 
     public bool IsMoxOn { get { lock (_sync) return _moxOn; } }
     public bool IsTunOn { get { lock (_sync) return _tunOn; } }
+
+    // TwoTone latch — independent of MOX/TUN. Set by RadioService.SetTwoTone
+    // on every state mutation. TxTuneDriver polls it so the WDSP TXA pump
+    // runs even when no mic uplink is feeding fexchange2 (PostGen mode=1
+    // injects the two-tone excitation regardless of mic input).
+    public bool IsTwoToneOn { get; private set; }
+    internal void SetTwoToneOn(bool on) { IsTwoToneOn = on; }
 
     public DateTime? MoxStartedAt { get { lock (_sync) return _moxStartedAt; } }
     public DateTime? TunStartedAt { get { lock (_sync) return _tunStartedAt; } }
@@ -110,6 +124,82 @@ public sealed class TxService
         // pointing at _drivePct for the next half-key.
         _radio.NotifyTunActive(false);
         _log.LogInformation("tx.mox on={On}", on);
+        error = null;
+        return true;
+    }
+
+    /// <summary>
+    /// Arm or disarm the TwoTone test generator AND key MOX. Mirrors the Thetis
+    /// chkTestIMD_CheckedChanged path (setup.cs:11162-11165, 11189-11216):
+    /// TwoTone owns the MOX state while armed and unconditionally drops it on
+    /// disarm. This matches the operator expectation "press 2-Tone → radio is
+    /// transmitting two tones" without a separate MOX press.
+    ///
+    /// Order on arm: configure PostGen via RadioService.SetTwoTone (which arms
+    /// xgen mode=1 with the sideband-correct signed freqs from Group A), THEN
+    /// flip MOX on so TXA is alive when the generator starts running. On disarm
+    /// the order is reversed — MOX off first so the radio stops emitting RF
+    /// before the engine drops the generator run flag.
+    /// </summary>
+    public bool TrySetTwoTone(TwoToneSetRequest req, out string? error)
+    {
+        ArgumentNullException.ThrowIfNull(req);
+        // Connect interlock — same as TrySetMox / TrySetTun. No TX of any kind
+        // before the radio is up.
+        if (req.Enabled && !_radio.IsConnected) { error = "not connected"; return false; }
+
+        bool wasMoxOn, wasTunOn;
+        lock (_sync)
+        {
+            wasMoxOn = _moxOn;
+            wasTunOn = _tunOn;
+            if (req.Enabled)
+            {
+                // TwoTone-on preempts TUN and OWNS MOX while armed (PRD FR-7
+                // mutual-exclusion + Thetis setup.cs:11162-11165). _moxOn
+                // tracks "TX is keyed", whether by mic-MOX or TwoTone — the
+                // operator's MOX button reflects the same flag, so a TwoTone
+                // arm reads as "transmitting" in the UI.
+                _tunOn = false;
+                _tunStartedAt = null;
+                _moxOn = true;
+                _moxStartedAt = DateTime.UtcNow;
+            }
+            else
+            {
+                _moxOn = false;
+                _moxStartedAt = null;
+            }
+        }
+
+        if (req.Enabled)
+        {
+            if (wasTunOn) _pipeline.SetTxTune(false);
+            // Arm PostGen + cache state (signed freqs for USB family, mag,
+            // run=1) BEFORE flipping MOX so TXA pump sees a configured
+            // generator on the very first sample window.
+            _radio.SetTwoTone(req);
+            IsTwoToneOn = true;
+            _pipeline.SetMox(true);
+            _radio.SetMox(true);
+            // Drive recompute for the next half-key — TwoTone is mic-path-free
+            // so any TUN drive % left over should be reset.
+            _radio.NotifyTunActive(false);
+            _log.LogInformation(
+                "tx.twoTone on=true f1={F1} f2={F2} mag={Mag}",
+                req.Freq1, req.Freq2, req.Mag);
+        }
+        else
+        {
+            // Disarm: flip MOX off first so RF stops, then drop the generator
+            // run flag in the engine. Order matches Thetis (setup.cs:11189-11216
+            // — MOX off, then TXPostGenRun=0).
+            IsTwoToneOn = false;
+            _pipeline.SetMox(false);
+            _radio.SetMox(false);
+            _radio.SetTwoTone(req);
+            _log.LogInformation("tx.twoTone on=false");
+        }
         error = null;
         return true;
     }

@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -68,6 +75,14 @@ public interface IDspEngine : IDisposable
     int ReadAudio(int channelId, Span<float> output);
 
     bool TryGetDisplayPixels(int channelId, DisplayPixout which, Span<float> dbOut);
+
+    /// <summary>TX panadapter / waterfall pixels in dBm, sourced from a
+    /// dedicated WDSP analyzer fed with the post-CFIR TX IQ. Returns false
+    /// when TXA is not open or no fresh FFT is ready. The TX analyzer is
+    /// configured to display the same frequency span as the RXA analyzer
+    /// (via bin clipping) so the panadapter axis does not move on MOX —
+    /// see issue #81. No-op on Synthetic.</summary>
+    bool TryGetTxDisplayPixels(DisplayPixout which, Span<float> dbOut);
 
     /// <summary>Open the TXA channel. Idempotent — calling twice returns the existing id.
     /// Must be called after at least one OpenChannel(RXA). For Synthetic, returns -1 and is a no-op.
@@ -141,4 +156,70 @@ public interface IDspEngine : IDisposable
     /// concurrently with ProcessTxBlock — the engine publishes via an
     /// atomic snapshot so the reader sees a consistent set.</summary>
     TxStageMeters GetTxStageMeters();
+
+    /// <summary>Two-tone test generator. Replaces mic input with summed tones
+    /// at <paramref name="freq1"/>/<paramref name="freq2"/> while armed.
+    /// Standard PureSignal calibration excitation but useful standalone.
+    /// Mutually exclusive with TUN (both share the WDSP PostGen stage).
+    /// Protocol-agnostic. No-op on Synthetic.</summary>
+    void SetTwoTone(bool on, double freq1, double freq2, double mag);
+
+    // ----------------- PureSignal predistortion (TXA-side) -----------------
+    // PS lives inside the TXA channel (txa[ch].calcc.p, txa[ch].iqc.p0/p1
+    // allocated by create_txa). The setters here drive the WDSP state
+    // machine; FeedPsFeedbackBlock pumps paired TX-modulator + RX-coupler
+    // IQ into pscc. Synthetic implements all of these as no-ops; meters
+    // return PsStageMeters.Silent.
+
+    /// <summary>Master arm. true → SetPSRunCal(1) and SetPSControl mode-on
+    /// (auto vs single is set via <see cref="SetPsControl"/>). false →
+    /// pihpsdr's "7× zero-pscc → SetPSRunCal(0) → SetPSControl reset"
+    /// shutdown sequence so the iqc stage doesn't latch a stale curve.
+    /// </summary>
+    void SetPsEnabled(bool enabled);
+
+    /// <summary>Cal-mode select. <paramref name="autoCal"/> = continuous
+    /// adaptation; <paramref name="singleCal"/> = one-shot collect-then-stay.
+    /// At most one of the two should be true; if both, single takes
+    /// precedence (one-shot then auto). Calls <c>SetPSControl</c> directly.
+    /// </summary>
+    void SetPsControl(bool autoCal, bool singleCal);
+
+    /// <summary>Apply timing + hardware-peak + ints/spi settings as a batch
+    /// (each call internally guards against the heavy
+    /// <c>SetPSIntsAndSpi</c> path firing when the values haven't changed).
+    /// </summary>
+    void SetPsAdvanced(bool ptol, double moxDelaySec, double loopDelaySec,
+                      double ampDelayNs, double hwPeak, int ints, int spi);
+
+    /// <summary>Set just the hardware-peak. Called from RadioService at
+    /// connect time once the protocol/board is known so the right value
+    /// (P1=0.4072, P2 G2=0.6121, P2 ANAN-7000=0.2899) lands before the
+    /// operator arms PS.</summary>
+    void SetPsHwPeak(double hwPeak);
+
+    /// <summary>Push one paired TX-mod-IQ + RX-feedback-IQ block into the
+    /// WDSP <c>psccF</c> entry. Block size must match the value pihpsdr
+    /// uses (1024 complex samples at 192 kHz). Caller owns the buffers; the
+    /// engine copies internally before handing to the native side.</summary>
+    void FeedPsFeedbackBlock(ReadOnlySpan<float> txI, ReadOnlySpan<float> txQ,
+                             ReadOnlySpan<float> rxI, ReadOnlySpan<float> rxQ);
+
+    /// <summary>Latest PureSignal stage readings (GetPSInfo + GetPSMaxTX).
+    /// Returns <see cref="PsStageMeters.Silent"/> when PS isn't armed or
+    /// the engine has no TXA. Safe to poll concurrently.</summary>
+    PsStageMeters GetPsStageMeters();
+
+    /// <summary>Reset PS state — calls <c>SetPSControl(1,0,0,0)</c>. Useful
+    /// after an aborted calibration or when changing radios.</summary>
+    void ResetPs();
+
+    /// <summary>Save the current PS correction curve to disk (ints/spi must
+    /// be 16/256 — WDSP refuses other shapes per Thetis PSForm.cs:865).
+    /// </summary>
+    void SavePsCorrection(string path);
+
+    /// <summary>Restore a previously-saved correction curve. Equivalent to
+    /// PSForm's "Restore-and-go" with <c>SetPSControl(0,0,0,1)</c>.</summary>
+    void RestorePsCorrection(string path);
 }

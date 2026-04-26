@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -107,6 +114,21 @@ export type RadioStateDto = {
   zoomLevel: ZoomLevel;
   // Master RX AF gain in dB — 0 = unity (WDSP SetRXAPanelGain1(1.0) default).
   rxAfGainDb: number;
+  // PureSignal persisted tunings — server is the source of truth, hydrated
+  // into tx-store on connect so a fresh browser (no localStorage) sees the
+  // operator's last dial-in. PsEnabled, PsSingle, TwoToneEnabled (master-arm
+  // flags) are intentionally session-only and left out.
+  psAuto: boolean;
+  psPtol: boolean;
+  psAutoAttenuate: boolean;
+  psMoxDelaySec: number;
+  psLoopDelaySec: number;
+  psAmpDelayNs: number;
+  psIntsSpiPreset: string;
+  psFeedbackSource: 'internal' | 'external';
+  twoToneFreq1: number;
+  twoToneFreq2: number;
+  twoToneMag: number;
 };
 
 export type FilterPresetDto = {
@@ -258,6 +280,20 @@ export function normalizeState(raw: unknown): RadioStateDto {
     // 0 dB matches the pre-#77 unity-gain default — older servers without
     // the field behave identically to a fresh-install slider at centre.
     rxAfGainDb: typeof r.rxAfGainDb === 'number' ? r.rxAfGainDb : 0,
+    // PureSignal persisted tunings. Defaults match RadioService.cs init and
+    // PsSettingsEntry — older servers without the fields fall back cleanly.
+    psAuto: typeof r.psAuto === 'boolean' ? r.psAuto : true,
+    psPtol: typeof r.psPtol === 'boolean' ? r.psPtol : false,
+    psAutoAttenuate: typeof r.psAutoAttenuate === 'boolean' ? r.psAutoAttenuate : true,
+    psMoxDelaySec: typeof r.psMoxDelaySec === 'number' ? r.psMoxDelaySec : 0.2,
+    psLoopDelaySec: typeof r.psLoopDelaySec === 'number' ? r.psLoopDelaySec : 0,
+    psAmpDelayNs: typeof r.psAmpDelayNs === 'number' ? r.psAmpDelayNs : 150,
+    psIntsSpiPreset: typeof r.psIntsSpiPreset === 'string' ? r.psIntsSpiPreset : '16/256',
+    psFeedbackSource:
+      r.psFeedbackSource === 'External' || r.psFeedbackSource === 'external' ? 'external' : 'internal',
+    twoToneFreq1: typeof r.twoToneFreq1 === 'number' ? r.twoToneFreq1 : 700,
+    twoToneFreq2: typeof r.twoToneFreq2 === 'number' ? r.twoToneFreq2 : 1900,
+    twoToneMag: typeof r.twoToneMag === 'number' ? r.twoToneMag : 0.49,
   };
 }
 
@@ -542,6 +578,42 @@ export function setFilterPresetOverride(
         return p ? [p] : [];
       });
     },
+  );
+}
+
+export function getFavoriteFilterSlots(
+  mode: RxMode,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  return jsonFetch(
+    `/api/filter/favorites?mode=${mode}`,
+    { method: 'GET', signal },
+    (raw) => {
+      if (typeof raw === 'object' && raw !== null && 'slotNames' in raw) {
+        const slotNames = raw.slotNames;
+        if (Array.isArray(slotNames)) {
+          return slotNames.filter((s): s is string => typeof s === 'string');
+        }
+      }
+      return ['F6', 'F5', 'F4']; // Default fallback
+    },
+  );
+}
+
+export function setFavoriteFilterSlots(
+  mode: RxMode,
+  slotNames: string[],
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/filter/favorites',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode, slotNames }),
+      signal,
+    },
+    normalizeState,
   );
 }
 
@@ -858,6 +930,120 @@ export async function setLevelerMaxGain(
     }
     throw err;
   }
+}
+
+// PureSignal master arm + cal-mode. POST /api/tx/ps. Backend swaps the engine
+// state machine (SetPSRunCal, SetPSControl) and toggles the radio-side
+// feedback wire bits. Returns the updated StateDto.
+export async function setPs(
+  req: { enabled: boolean; auto: boolean; single: boolean },
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/ps',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(req),
+      signal,
+    },
+    (raw) => raw as RadioStateDto,
+  );
+}
+
+// PureSignal advanced settings. Nullable fields = partial update so the
+// settings panel doesn't have to round-trip every value.
+export async function setPsAdvanced(
+  req: {
+    ptol?: boolean;
+    autoAttenuate?: boolean;
+    moxDelaySec?: number;
+    loopDelaySec?: number;
+    ampDelayNs?: number;
+    hwPeak?: number;
+    intsSpiPreset?: string;
+  },
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/ps/advanced',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(req),
+      signal,
+    },
+    (raw) => raw as RadioStateDto,
+  );
+}
+
+// PureSignal feedback antenna source. Internal coupler vs External
+// (Bypass). Server enum is 0 (Internal) / 1 (External); the wire DTO
+// uses 'Internal' / 'External' string serialization through System.Text.Json
+// default StringEnumConverter setup.
+export async function setPsFeedbackSource(
+  source: 'internal' | 'external',
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/ps/feedback-source',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        source: source === 'external' ? 'External' : 'Internal',
+      }),
+      signal,
+    },
+    (raw) => raw as RadioStateDto,
+  );
+}
+
+export async function resetPs(signal?: AbortSignal): Promise<void> {
+  await jsonFetch('/api/tx/ps/reset', { method: 'POST', signal }, () => null);
+}
+
+export async function savePs(filename: string, signal?: AbortSignal): Promise<void> {
+  await jsonFetch(
+    '/api/tx/ps/save',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ filename }),
+      signal,
+    },
+    () => null,
+  );
+}
+
+export async function restorePs(filename: string, signal?: AbortSignal): Promise<void> {
+  await jsonFetch(
+    '/api/tx/ps/restore',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ filename }),
+      signal,
+    },
+    () => null,
+  );
+}
+
+// Two-tone test generator. Protocol-agnostic — works on both P1 and P2.
+export async function setTwoTone(
+  req: { enabled: boolean; freq1?: number; freq2?: number; mag?: number },
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/twotone',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(req),
+      signal,
+    },
+    (raw) => raw as RadioStateDto,
+  );
 }
 
 // Mic-gain endpoint: POST /api/mic-gain { db }. Returns { micGainDb }.

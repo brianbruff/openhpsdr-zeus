@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -74,6 +81,13 @@ export const MSG_TYPE_ALERT = 0x13;
 // Operator-visible in the transport bar chip with 50/55 °C warning zones.
 export const MSG_TYPE_PA_TEMP = 0x17;
 const PA_TEMP_BYTES = 1 + 4;
+
+// PureSignal stage telemetry. 1 type byte + 4 (feedback) + 4 (correctionDb)
+// + 1 (calState) + 1 (correcting bool) + 4 (maxTxEnvelope) = 15 bytes.
+// Broadcast at 10 Hz only while PsEnabled is armed — keeps the wire quiet
+// when PS is off. Server-side bare-payload like TxMetersV2 (no header).
+export const MSG_TYPE_PS_METERS = 0x18;
+const PS_METERS_BYTES = 1 + 4 + 4 + 1 + 1 + 4;
 
 // WDSP wisdom status: 1 type byte + 1 phase byte (0=idle, 1=building, 2=ready).
 // Pushed once on WS attach and again on every transition. The UI disables the
@@ -225,6 +239,24 @@ export function startRealtime(path = '/ws'): () => void {
           }
           const tempC = new DataView(ev.data).getFloat32(1, true);
           useTxStore.getState().setPaTempC(tempC);
+          return;
+        }
+        if (peekType === MSG_TYPE_PS_METERS) {
+          if (ev.data.byteLength < PS_METERS_BYTES) {
+            warnOnce(
+              'ws-ps-meters-short',
+              `PS meters frame too short: ${ev.data.byteLength}`,
+            );
+            return;
+          }
+          const dv = new DataView(ev.data);
+          useTxStore.getState().setPsMeters({
+            feedbackLevel: dv.getFloat32(1, true),
+            correctionDb: dv.getFloat32(5, true),
+            calState: dv.getUint8(9),
+            correcting: dv.getUint8(10) !== 0,
+            maxTxEnvelope: dv.getFloat32(11, true),
+          });
           return;
         }
         if (peekType === MSG_TYPE_RX_METER) {

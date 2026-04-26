@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -41,6 +48,13 @@ public enum RxMode : byte
 {
     LSB, USB, CWL, CWU, AM, FM, SAM, DSB, DIGL, DIGU,
 }
+
+// PureSignal feedback antenna source. On G2/MkII the wire-format diff
+// between Internal coupler and External (Bypass) is exactly one bit
+// (ALEX_RX_ANTENNA_BYPASS = 0x00000800) in alex0 when xmit && PS armed.
+// pihpsdr's three-way Internal/Ext1/Bypass collapses to two on the wire
+// for this hardware, so Zeus exposes a two-way selector.
+public enum PsFeedbackSource : byte { Internal = 0, External = 1 }
 
 public enum ConnectionStatus { Disconnected, Connecting, Connected, Error }
 
@@ -108,7 +122,39 @@ public sealed record StateDto(
     // is −50..+20 dB (see RadioService.SetRxAfGain). Per-RX not supported
     // yet; when multi-RX lands this becomes the master and the per-RX
     // values layer on top.
-    double RxAfGainDb = 0.0);
+    double RxAfGainDb = 0.0,
+
+    // ---- PureSignal predistortion (TXA-side; WDSP calcc/iqc stages) ----
+    // PsEnabled is the master arm bit. Deliberately NOT persisted server-side
+    // — operator must re-arm each session (parity with MOX). The other PS
+    // fields ARE persisted via PsSettingsStore so the operator's calibration
+    // tuning survives restarts.
+    bool PsEnabled = false,
+    bool PsAuto = true,             // continuous adapt by default once armed
+    bool PsSingle = false,          // one-shot SetPSControl(1,1,0,0)
+    bool PsPtol = false,            // false = strict 0.4; true = relax 0.8
+    bool PsAutoAttenuate = true,
+    double PsMoxDelaySec = 0.2,
+    double PsLoopDelaySec = 0.0,
+    double PsAmpDelayNs = 150.0,
+    // PS hardware peak — set per protocol/hardware by RadioService at connect
+    // time. P1 = 0.4072 (Hermes/ANAN-10/100); P2 OrionMkII/Saturn = 0.6121;
+    // P2 ANAN-7000/8000 = 0.2899. Default here (P1) is a safe neutral; the
+    // RadioService HW-peak switch overrides on the first ConnectAsync /
+    // ConnectP2Async. See PLAN section 7 / hermes.md §7.1.
+    double PsHwPeak = 0.4072,
+    PsFeedbackSource PsFeedbackSource = PsFeedbackSource.Internal,
+    string PsIntsSpiPreset = "16/256",
+    double PsFeedbackLevel = 0.0,   // info[4] read-back, 0..256
+    byte PsCalState = 0,            // info[15] enum
+    bool PsCorrecting = false,      // info[14]
+    // ---- TwoTone test generator (TXA PostGen mode=1; protocol-agnostic) ----
+    // Standard PureSignal calibration excitation. Defaults match pihpsdr's
+    // TwoTone defaults — 700/1900 Hz, 0.49 linear amplitude per tone.
+    bool TwoToneEnabled = false,
+    double TwoToneFreq1 = 700.0,
+    double TwoToneFreq2 = 1900.0,
+    double TwoToneMag = 0.49);
 
 public sealed record RadioInfo(
     string MacAddress,
@@ -234,3 +280,37 @@ public sealed record RadioSelectionDto(
     string Effective);
 
 public sealed record RadioSelectionSetRequest(string Preferred);
+
+// ---- PureSignal request records ----
+// PsControlSetRequest = master arm (Enabled) + mode (Auto vs Single).
+// PsAdvancedSetRequest = nullable so partial updates from the settings
+// panel don't reset other fields.
+public sealed record PsControlSetRequest(bool Enabled, bool Auto, bool Single);
+
+public sealed record PsAdvancedSetRequest(
+    bool? Ptol = null,
+    bool? AutoAttenuate = null,
+    double? MoxDelaySec = null,
+    double? LoopDelaySec = null,
+    double? AmpDelayNs = null,
+    double? HwPeak = null,
+    string? IntsSpiPreset = null);
+
+public sealed record PsResetRequest();
+
+public sealed record PsSaveRequest(string Filename);
+
+public sealed record PsRestoreRequest(string Filename);
+
+// Feedback antenna selector — Internal coupler vs External (Bypass).
+// Sent from the PS settings panel. Affects only the radio-side ALEX bit;
+// the WDSP cal/iqc stages operate on whatever IQ arrives at DDC0/DDC1.
+public sealed record PsFeedbackSourceSetRequest(PsFeedbackSource Source);
+
+// Two-tone test generator (used as PS calibration excitation but works
+// standalone too). Protocol-agnostic.
+public sealed record TwoToneSetRequest(
+    bool Enabled,
+    double? Freq1 = null,
+    double? Freq2 = null,
+    double? Mag = null);

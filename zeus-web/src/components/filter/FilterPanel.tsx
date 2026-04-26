@@ -4,64 +4,50 @@
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 //
-// Filter visualization PRD §3.1 Phase 1 — compact filter panel.
-// Renders a width readout and a chip row (F1..F10 + VAR1/VAR2) for the
-// current mode. Clicking a chip calls POST /api/filter with the slot's
-// Lo/Hi and preset name. Phase 1: no drag handles, no Lo/Hi nudge
-// controls, no advanced toggle button, no out-of-band colouring.
+// Unified filter panel with favorites. Shows 3 favorite filter presets plus
+// a "..." button that drops down the existing FilterRibbon (full presets +
+// mini-pan + readouts) for the operator to pick from or edit favorites.
 
 import { useCallback, useEffect, useState } from 'react';
 import { useConnectionStore } from '../../state/connection-store';
-import { setFilter, getFilterPresets, setFilterAdvancedPaneOpen, type FilterPresetDto } from '../../api/client';
-import { getPresetsForMode, formatFilterWidth, formatCutOffset, type FilterPresetSlot } from './filterPresets';
+import {
+  setFilter,
+  setFilterAdvancedPaneOpen,
+  getFilterPresets,
+  type FilterPresetDto,
+} from '../../api/client';
+import { useFilterFavoritesStore, useFavoritesForMode } from '../../state/filter-favorites-store';
 
-const LOCAL_STORAGE_KEY = 'zeus.filter.advancedPaneOpen';
+const RIBBON_OPEN_KEY = 'zeus.filter.advancedPaneOpen';
 
 export function FilterPanel() {
   const mode = useConnectionStore((s) => s.mode);
-  const filterLow = useConnectionStore((s) => s.filterLowHz);
-  const filterHigh = useConnectionStore((s) => s.filterHighHz);
   const filterPresetName = useConnectionStore((s) => s.filterPresetName);
-  const advancedOpen = useConnectionStore((s) => s.filterAdvancedPaneOpen);
+  const ribbonOpen = useConnectionStore((s) => s.filterAdvancedPaneOpen);
   const applyState = useConnectionStore((s) => s.applyState);
+  const loadFavorites = useFilterFavoritesStore((s) => s.load);
+  const favoriteSlotNames = useFavoritesForMode(mode);
 
-  const toggleAdvanced = useCallback(() => {
-    const next = !advancedOpen;
-    useConnectionStore.setState({ filterAdvancedPaneOpen: next });
-    try { window.localStorage.setItem(LOCAL_STORAGE_KEY, next ? '1' : '0'); } catch { /* ok */ }
-    setFilterAdvancedPaneOpen(next).catch(() => {});
-  }, [advancedOpen]);
+  const [presets, setPresets] = useState<FilterPresetDto[]>([]);
 
-  // Per-mode VAR1/VAR2 overrides fetched from the server. Seeded on mount
-  // and after any VAR* write. Falls back to the local Thetis-default table
-  // while the fetch is in flight or when the server is unreachable.
-  const [serverPresets, setServerPresets] = useState<FilterPresetDto[] | null>(null);
+  useEffect(() => { void loadFavorites(mode); }, [mode, loadFavorites]);
 
   useEffect(() => {
     let cancelled = false;
     getFilterPresets(mode)
-      .then((presets) => { if (!cancelled) setServerPresets(presets); })
-      .catch(() => { /* server presets unavailable; fall back to local defaults */ });
+      .then((list) => { if (!cancelled) setPresets(list); })
+      .catch(() => { if (!cancelled) setPresets([]); });
     return () => { cancelled = true; };
   }, [mode]);
 
-  // Merge server overrides for VAR slots into the local preset table. Server
-  // VAR* overrides take precedence; fixed slots are always from the local table.
-  const presets: readonly FilterPresetSlot[] = (() => {
-    const local = getPresetsForMode(mode);
-    if (!serverPresets) return local;
-    return local.map((slot) => {
-      if (!slot.isVar) return slot;
-      const srv = serverPresets.find((s) => s.slotName === slot.slotName);
-      return srv ? { ...slot, lowHz: srv.lowHz, highHz: srv.highHz } : slot;
-    });
-  })();
+  const favoritePresets: FilterPresetDto[] = favoriteSlotNames
+    .map((name) => presets.find((p) => p.slotName === name))
+    .filter((p): p is FilterPresetDto => Boolean(p));
 
   const activeSlot = filterPresetName ?? null;
-  const widthLabel = formatFilterWidth(filterLow, filterHigh);
 
   const selectPreset = useCallback(
-    (slot: FilterPresetSlot) => {
+    (slot: FilterPresetDto) => {
       useConnectionStore.setState({
         filterLowHz: slot.lowHz,
         filterHighHz: slot.highHz,
@@ -74,49 +60,39 @@ export function FilterPanel() {
     [applyState],
   );
 
-  // FM has no presets — hide chip row.
-  if (presets.length === 0) return null;
+  const toggleRibbon = useCallback(() => {
+    const next = !ribbonOpen;
+    useConnectionStore.setState({ filterAdvancedPaneOpen: next });
+    try { window.localStorage.setItem(RIBBON_OPEN_KEY, next ? '1' : '0'); } catch { /* ok */ }
+    setFilterAdvancedPaneOpen(next).catch(() => { /* next state poll reconciles */ });
+  }, [ribbonOpen]);
+
+  if (mode === 'FM') return null;
 
   return (
-    <div className="ctrl-group filter-bar" style={{ minWidth: 400 }}>
+    <div className="ctrl-group filter-bar" style={{ minWidth: 220 }}>
       <div className="label-xs ctrl-lbl">FILTER</div>
-      <div className="filter-bar__readout" role="group" aria-label="Filter edges and width">
-        <div className="filter-bar__cell filter-bar__cell--lo">
-          <div className="filter-bar__key">LOW CUT</div>
-          <div className="filter-bar__val mono">{formatCutOffset(filterLow)}</div>
-        </div>
-        <div className="filter-bar__cell filter-bar__cell--width">
-          <div className="filter-bar__key">WIDTH</div>
-          <div className="filter-bar__val filter-bar__val--accent mono">{widthLabel}</div>
-        </div>
-        <div className="filter-bar__cell filter-bar__cell--hi">
-          <div className="filter-bar__key">HIGH CUT</div>
-          <div className="filter-bar__val mono">{formatCutOffset(filterHigh)}</div>
-        </div>
-      </div>
-      <div className="btn-row wrap" style={{ gap: 3, width: 400 }}>
-        {presets.map((slot) => (
+      <div className="btn-row wrap" style={{ gap: 3 }}>
+        {favoritePresets.map((slot) => (
           <button
             key={slot.slotName}
             type="button"
             onClick={() => selectPreset(slot)}
             className={`btn sm ${activeSlot === slot.slotName ? 'active' : ''}`}
-            title={`${slot.slotName}: ${slot.lowHz >= 0 ? '+' : ''}${slot.lowHz} / +${slot.highHz} Hz`}
+            title={`${slot.slotName}: ${slot.lowHz >= 0 ? '+' : ''}${slot.lowHz} / ${slot.highHz >= 0 ? '+' : ''}${slot.highHz} Hz`}
           >
-            {slot.slotName === 'VAR1' || slot.slotName === 'VAR2'
-              ? slot.slotName
-              : slot.label}
+            {slot.label}
           </button>
         ))}
         <button
           type="button"
-          onClick={toggleAdvanced}
-          className={`btn sm hide-mobile ${advancedOpen ? 'active' : ''}`}
-          title={advancedOpen ? 'Close advanced filter ribbon' : 'Open advanced filter ribbon'}
-          aria-pressed={advancedOpen}
+          onClick={toggleRibbon}
+          className={`btn sm ${ribbonOpen ? 'active' : ''}`}
+          title="Open filter panel"
+          aria-expanded={ribbonOpen}
           style={{ marginLeft: 4 }}
         >
-          {advancedOpen ? '≡ ×' : '≡'}
+          ⋯
         </button>
       </div>
     </div>

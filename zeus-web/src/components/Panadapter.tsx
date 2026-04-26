@@ -22,12 +22,19 @@
 //   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
 //   Doug Wigley (W5WC),        FlexRadio Systems,
 //   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT).
+//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
+//   Sigi Jetzlsperger (DH1KLM).
 //
 // Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
 // and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
 // here. See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
+//
+// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
+// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
+// Wüllen (DL1YCF); and by DeskHPSDR
+// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
+// Both are GPL-2.0-or-later.
 //
 // WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
 // (NR0V), distributed under GPL v2 or later.
@@ -40,6 +47,7 @@ import { createPanRenderer } from '../gl/panadapter';
 import { planWaterfallUpdate } from '../gl/wf-shift';
 import { useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
+import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
 import { FreqAxis } from './FreqAxis';
 import { PassbandOverlay } from './PassbandOverlay';
@@ -77,7 +85,15 @@ export function Panadapter() {
     const redraw = () => {
       rafHandle = 0;
       if (!drawPan) return;
-      const { dbMin, dbMax } = useDisplaySettingsStore.getState();
+      const s = useDisplaySettingsStore.getState();
+      // While keyed (MOX or TUN — server already feeds TX pixels via
+      // DspPipelineService.Tick) use the TX-specific dB range so the
+      // operator's RX noise-floor view is untouched. Thetis parity, see
+      // TX_FIXED_DB_MIN/MAX in display-settings-store.
+      const { moxOn, tunOn } = useTxStore.getState();
+      const keyed = moxOn || tunOn;
+      const dbMin = keyed ? s.txDbMin : s.dbMin;
+      const dbMax = keyed ? s.txDbMax : s.dbMax;
       renderer.draw(drawPan, dbMin, dbMax, drawOffsetPx);
     };
     const requestRedraw = () => {
@@ -150,9 +166,16 @@ export function Panadapter() {
       requestRedraw();
     });
 
+    // Repaint when MOX / TUN flips so the RX-vs-TX dB range swap is
+    // reflected immediately, even if no fresh pan frame arrived yet.
+    const unsubTx = useTxStore.subscribe(() => {
+      requestRedraw();
+    });
+
     return () => {
       unsub();
       unsubSettings();
+      unsubTx();
       ro.disconnect();
       if (rafHandle !== 0) cancelAnimationFrame(rafHandle);
       renderer.dispose();

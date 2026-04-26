@@ -41,6 +41,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
+using Zeus.Contracts;  // For PsFeedbackFrame
 
 namespace Zeus.Protocol2;
 

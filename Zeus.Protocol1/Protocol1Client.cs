@@ -42,6 +42,7 @@ using System.Net.Sockets;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Zeus.Contracts;  // For PsFeedbackFrame
 using Zeus.Protocol1.Discovery;
 
 namespace Zeus.Protocol1;
@@ -64,6 +65,7 @@ public sealed class Protocol1Client : IProtocol1Client
 
     private readonly ILogger<Protocol1Client> _log;
     private readonly Channel<IqFrame> _channel;
+    private readonly Channel<PsFeedbackFrame> _psFeedbackChannel;
 
     // Mutation state written from any thread, read from the TX thread.
     // 64-bit fields are written atomically on 64-bit .NET (Interlocked.Exchange used for safety).
@@ -111,9 +113,15 @@ public sealed class Protocol1Client : IProtocol1Client
             SingleReader = true,
             SingleWriter = true,
         });
+        _psFeedbackChannel = Channel.CreateUnbounded<PsFeedbackFrame>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = true,
+        });
     }
 
     public ChannelReader<IqFrame> IqFrames => _channel.Reader;
+    public ChannelReader<PsFeedbackFrame> PsFeedbackFrames => _psFeedbackChannel.Reader;
     public long DroppedFrames => Interlocked.Read(ref _droppedFrames);
     public long TotalFrames => Interlocked.Read(ref _totalFrames);
 

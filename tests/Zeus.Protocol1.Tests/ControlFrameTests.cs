@@ -352,7 +352,7 @@ public class ControlFrameTests
         int txFreqSlots = 0;
         for (int phase = 0; phase < 4; phase++)
         {
-            var (first, second) = Protocol1Client.PhaseRegisters(phase, mox: true);
+            var (first, second) = Protocol1Client.PhaseRegisters(phase, mox: true, psEnabled: false);
             if (first == ControlFrame.CcRegister.TxFreq) txFreqSlots++;
             if (second == ControlFrame.CcRegister.TxFreq) txFreqSlots++;
         }
@@ -367,7 +367,7 @@ public class ControlFrameTests
         // start carrying TxFreq unnecessarily.
         for (int phase = 0; phase < 4; phase++)
         {
-            var (first, second) = Protocol1Client.PhaseRegisters(phase, mox: false);
+            var (first, second) = Protocol1Client.PhaseRegisters(phase, mox: false, psEnabled: false);
             Assert.NotEqual(ControlFrame.CcRegister.TxFreq, first);
             Assert.NotEqual(ControlFrame.CcRegister.TxFreq, second);
         }
@@ -383,7 +383,7 @@ public class ControlFrameTests
         bool sawRxFreq = false;
         for (int phase = 0; phase < 4; phase++)
         {
-            var (first, second) = Protocol1Client.PhaseRegisters(phase, mox: true);
+            var (first, second) = Protocol1Client.PhaseRegisters(phase, mox: true, psEnabled: false);
             if (first == ControlFrame.CcRegister.RxFreq || second == ControlFrame.CcRegister.RxFreq)
             {
                 sawRxFreq = true;

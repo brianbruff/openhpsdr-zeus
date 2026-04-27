@@ -218,9 +218,35 @@ jobs:
 
       - name: Stage all libraries
         run: |
-          # Copy all artifacts to their proper locations
-          for artifact in artifacts/wdsp-*; do
-            cp -r "$artifact"/* .
+          # actions/upload-artifact@v4 strips the directory prefix when the
+          # `path:` is a single file, so each artifact arrives as a flat
+          # `<filename>` at the artifact root. Place each one explicitly
+          # under Zeus.Dsp/runtimes/<rid>/native/ — the previous
+          # `cp -r "$artifact"/* .` left them at the repo root, where the
+          # commit step's `git add Zeus.Dsp/runtimes/` could never see them.
+          set -eux
+          for artifact_dir in artifacts/wdsp-*; do
+            artifact_name=$(basename "$artifact_dir")  # e.g. wdsp-windows-x64
+            case "$artifact_name" in
+              wdsp-windows-x64)
+                dest=Zeus.Dsp/runtimes/win-x64/native/wdsp.dll
+                src=$artifact_dir/wdsp.dll
+                ;;
+              wdsp-linux-x64)
+                dest=Zeus.Dsp/runtimes/linux-x64/native/libwdsp.so
+                src=$artifact_dir/libwdsp.so
+                ;;
+              wdsp-linux-arm64)
+                dest=Zeus.Dsp/runtimes/linux-arm64/native/libwdsp.so
+                src=$artifact_dir/libwdsp.so
+                ;;
+              *)
+                echo "Unrecognised artifact $artifact_name — refusing to guess destination" >&2
+                exit 1
+                ;;
+            esac
+            mkdir -p "$(dirname "$dest")"
+            cp "$src" "$dest"
           done
 
       - name: Commit and push

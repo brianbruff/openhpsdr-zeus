@@ -205,6 +205,16 @@ app.MapGet("/api/version", () =>
     return Results.Ok(new { version });
 });
 
+// Health probe — always responds (never 503 for warmup) so the browser can
+// distinguish "server not yet started" from "server up but DSP warming up".
+// The frontend polls this before the WebSocket attaches to seed wisdomPhase.
+app.MapGet("/api/health", (WdspWisdomInitializer wisdom) =>
+    Results.Ok(new
+    {
+        status = wisdom.Phase == WisdomPhase.Ready ? "ready" : "warming-up",
+        wisdom = wisdom.Phase.ToString().ToLowerInvariant(),
+    }));
+
 app.MapGet("/api/state", (RadioService r) => r.Snapshot());
 
 // TX diagnostic — exposes the producer/consumer counts for the mic-to-IQ ring

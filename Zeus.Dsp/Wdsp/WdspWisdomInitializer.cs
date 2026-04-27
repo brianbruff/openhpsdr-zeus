@@ -124,6 +124,15 @@ public sealed class WdspWisdomInitializer
     private void SetPhase(WisdomPhase next)
     {
         var prev = (WisdomPhase)Interlocked.Exchange(ref _phase, (int)next);
-        if (prev != next) PhaseChanged?.Invoke(next);
+        if (prev == next) return;
+        if (next == WisdomPhase.Building)
+        {
+            Console.WriteLine();
+            Console.WriteLine("  Zeus — first-run optimisation in progress");
+            Console.WriteLine("  Optimising signal-processing routines for your CPU (up to 2 min, once only).");
+            Console.WriteLine("  Do not close this window. Your browser will show a progress panel.");
+            Console.WriteLine();
+        }
+        PhaseChanged?.Invoke(next);
     }
 }

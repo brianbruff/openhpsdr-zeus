@@ -1290,6 +1290,17 @@ export async function setTwoTone(
   );
 }
 
+export type HealthDto = {
+  status: 'warming-up' | 'ready';
+  wisdom: 'idle' | 'building' | 'ready';
+};
+
+export async function fetchHealth(signal?: AbortSignal): Promise<HealthDto> {
+  const r = await fetch('/api/health', { signal });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json() as Promise<HealthDto>;
+}
+
 // Mic-gain endpoint: POST /api/mic-gain { db }. Returns { micGainDb }.
 // Backend may not have landed the handler yet — a 404 is downgraded to a
 // silent warnOnce so the console doesn't fill with noise during the

@@ -89,8 +89,9 @@ import { LeafletMapErrorBoundary } from './components/design/LeafletMapErrorBoun
 import { startRealtime } from './realtime/ws-client';
 import { getAudioClient } from './audio/audio-client';
 import { useMicUplink } from './audio/use-mic-uplink';
-import { fetchState } from './api/client';
+import { fetchState, fetchHealth } from './api/client';
 import { useConnectionStore } from './state/connection-store';
+import { useDisplayStore } from './state/display-store';
 import { useQrzStore } from './state/qrz-store';
 import { useRotatorStore } from './state/rotator-store';
 import { useLoggerStore } from './state/logger-store';
@@ -115,6 +116,7 @@ export default function App() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [installUpdate, setInstallUpdate] = useState<(() => Promise<void>) | null>(null);
   const status = useConnectionStore((s) => s.status);
+  const wisdomPhase = useConnectionStore((s) => s.wisdomPhase);
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   const mode = useConnectionStore((s) => s.mode);
   const agcTop = useConnectionStore((s) => s.agcTopDb);
@@ -147,6 +149,38 @@ export default function App() {
     const stop = startRealtime();
     return () => {
       stop();
+    };
+  }, []);
+
+  // Seed wisdomPhase via HTTP before the WS first attaches. Covers the ~1–2s
+  // race window after page load where the WS hasn't pushed the phase yet. Once
+  // the WS connects it becomes the authoritative source and this probe stops.
+  useEffect(() => {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let ctrl: AbortController | null = null;
+
+    const probe = async () => {
+      if (useDisplayStore.getState().connected) return;
+      ctrl = new AbortController();
+      try {
+        const h = await fetchHealth(ctrl.signal);
+        if (!stopped) {
+          useConnectionStore.getState().setWisdomPhase(h.wisdom);
+        }
+      } catch {
+        // Server not yet up; keep retrying.
+      }
+      if (!stopped && !useDisplayStore.getState().connected) {
+        timer = setTimeout(probe, 2000);
+      }
+    };
+
+    probe();
+    return () => {
+      stopped = true;
+      if (timer != null) clearTimeout(timer);
+      ctrl?.abort();
     };
   }, []);
 
@@ -491,11 +525,9 @@ export default function App() {
     <>Panadapter · {(vfoHz / 1e6).toFixed(3)} MHz · {bandLabel}</>
   );
 
-  // When no radio is connected, dim the workspace and centre the full
-  // ConnectPanel on top so the eye lands on it. The backdrop is
-  // pointer-events:none so the topbar stays interactive (QRZ sign-in,
-  // Tweaks, etc.); the ConnectPanel itself re-enables pointer events so
-  // Discover / Connect buttons still click through.
+  // When no radio is connected, dim the workspace and centre the panel on top.
+  // While the DSP is warming up (first-run FFTW build) show a dedicated
+  // WarmingUpPanel instead of ConnectPanel so new users understand the delay.
   const disconnectedOverlay = useMemo(() => {
     if (connected) return null;
     return (
@@ -513,11 +545,11 @@ export default function App() {
         }}
       >
         <div style={{ pointerEvents: 'auto' }}>
-          <ConnectPanel />
+          {wisdomPhase === 'building' ? <WarmingUpPanel /> : <ConnectPanel />}
         </div>
       </div>
     );
-  }, [connected]);
+  }, [connected, wisdomPhase]);
 
   // Feature flag: layout preference store determines whether to use the
   // flexlayout-react dockable panel layout. Mobile viewports (≤900px) always
@@ -1006,7 +1038,6 @@ export default function App() {
 // Isolated child component so the hzPerPixel store subscription is scoped to
 // this chip rather than the whole App tree — bin-width changes re-render only
 // the chip, not the panadapter / waterfall / VFO siblings.
-import { useDisplayStore } from './state/display-store';
 function HzPerPixelChip() {
   const v = useDisplayStore((s) => s.hzPerPixel);
   const text = !Number.isFinite(v) || v <= 0
@@ -1017,6 +1048,95 @@ function HzPerPixelChip() {
       <span className="k">HZ/PX</span>
       <span className="v">{text}</span>
     </span>
+  );
+}
+
+// Full-screen panel shown in the disconnected overlay while FFTW wisdom is
+// building on first launch. Replaces ConnectPanel for that window so the user
+// understands the delay and doesn't think Zeus is broken.
+function WarmingUpPanel() {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const mins = Math.floor(elapsed / 60);
+  const secs = elapsed % 60;
+  const elapsedStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+  return (
+    <div className="panel" style={{ padding: 0, minWidth: 460, maxWidth: 580, position: 'relative', overflow: 'hidden' }}>
+      <div
+        aria-hidden
+        style={{
+          position: 'absolute', top: 0, left: 0, right: 0, height: 360,
+          backgroundImage: 'url(/zeus-clouds.jpg)',
+          backgroundSize: 'cover', backgroundPosition: 'center 18%',
+          zIndex: 0, pointerEvents: 'none',
+        }}
+      />
+      <div
+        aria-hidden
+        style={{
+          position: 'absolute', top: 0, left: 0, right: 0, height: 360,
+          background: 'linear-gradient(180deg, rgba(10,15,24,0.25) 0%, rgba(10,15,24,0.55) 55%, var(--bg-1) 92%)',
+          zIndex: 1, pointerEvents: 'none',
+        }}
+      />
+      <div style={{ position: 'relative', zIndex: 2 }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10, height: 40, padding: '0 12px',
+          background: 'linear-gradient(180deg, rgba(58,59,63,0.55), rgba(35,36,39,0.75))',
+          backdropFilter: 'blur(6px)',
+          borderBottom: '1px solid rgba(0,0,0,0.5)',
+          boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.06)',
+        }}>
+          <div style={{ width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden>
+              <circle cx="12" cy="12" r="3" fill="var(--accent)" />
+              <circle cx="12" cy="12" r="7" fill="none" stroke="var(--accent)" strokeWidth="1" opacity="0.5" />
+              <circle cx="12" cy="12" r="11" fill="none" stroke="var(--accent)" strokeWidth="1" opacity="0.25" />
+            </svg>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.05 }}>
+            <span className="mono" style={{ fontSize: 14, fontWeight: 700, letterSpacing: '0.02em', color: 'var(--fg-0)', textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}>
+              ZEUS
+            </span>
+            <span className="label-xs" style={{ color: 'var(--fg-1)', fontSize: 9, textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}>
+              OpenHPSDR · Protocol 1 / 2
+            </span>
+          </div>
+        </div>
+        <div style={{ height: 180 }} />
+        <div style={{ padding: '16px 20px 20px', display: 'flex', flexDirection: 'column', gap: 12, background: 'var(--bg-1)' }}>
+          <div style={{
+            padding: '12px 16px',
+            background: 'rgba(74,158,255,0.08)',
+            border: '1px solid rgba(74,158,255,0.25)',
+            borderRadius: 6,
+            display: 'flex', flexDirection: 'column', gap: 6,
+          }}>
+            <span style={{ color: 'var(--fg-0)', fontSize: 13, fontWeight: 600 }}>
+              Preparing Zeus for first use
+            </span>
+            <span style={{ color: 'var(--fg-2)', fontSize: 12, lineHeight: 1.5 }}>
+              Optimising signal-processing routines for your CPU. This takes 1–3 minutes and
+              only happens once — future launches will start in seconds.
+            </span>
+          </div>
+          <button
+            type="button"
+            disabled
+            className="btn pulsing"
+            style={{ fontSize: 12, padding: '8px 12px', cursor: 'wait' }}
+          >
+            Preparing DSP — {elapsedStr}
+          </button>
+          <span className="label-xs" style={{ color: 'var(--fg-3)', fontSize: 11, textTransform: 'none', letterSpacing: 0 }}>
+            Do not close this window. The radio will be available automatically when ready.
+          </span>
+        </div>
+      </div>
+    </div>
   );
 }
 

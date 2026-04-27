@@ -15,6 +15,10 @@ IQ / audio / meter data to a React + WebGL frontend over WebSocket.
 >   via an external KiwiSDR. PureSignal converging on G2 MkII. 160m not yet wired.
 > - **ANAN-100D / Angelia (Protocol-2):** RX verified; S-ATT and PRE wired to radio.
 > - Other Protocol-1 radios (older ANAN, Hermes, etc.) are not yet supported.
+>
+> **Important:** Openhpsdr-Zeus has only been tested on the **Hermes Lite 2**
+> and the **ANAN G2 / G2 MkII** to date. If you have another OpenHPSDR board
+> and can help bring it up, a PR would be lovely.
 
 ## About the name
 

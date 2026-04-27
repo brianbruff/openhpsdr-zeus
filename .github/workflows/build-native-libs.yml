@@ -71,7 +71,18 @@ jobs:
           # Phase 1 of issue #162: confirm the rebuild actually picks up the
           # libspecbleach-backed sbnr.c (8 SetRXASBNR* exports). If this fails
           # the build is silently stub-based and NR4 won't work at runtime.
-          $exports = & dumpbin /EXPORTS native/build/Release/wdsp.dll | Select-String "SetRXASBNR"
+          #
+          # dumpbin lives inside the MSVC toolset and isn't on PATH outside a
+          # developer shell. vswhere is on every windows-latest runner image
+          # at a fixed path; use it to locate the latest VS install and pick
+          # the highest-versioned x64-host dumpbin under VC\Tools\MSVC.
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsInstall = & $vswhere -latest -property installationPath
+          $dumpbin = Get-ChildItem -Path "$vsInstall\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" |
+                     Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $dumpbin) { throw "dumpbin.exe not found under $vsInstall\VC\Tools\MSVC" }
+          Write-Host "Using dumpbin: $dumpbin"
+          $exports = & $dumpbin /EXPORTS native/build/Release/wdsp.dll | Select-String "SetRXASBNR"
           $count = ($exports | Measure-Object).Count
           Write-Host "Found $count SetRXASBNR* exports:"
           $exports

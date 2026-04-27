@@ -126,10 +126,10 @@ Five small shim / glue files under `native/wdsp/` and
 GPL-2.0-or-later under the Zeus copyright:
 
 - `native/wdsp/wdsp_export.h`
-- `native/wdsp/stubs/rnnoise.h`
-- `native/wdsp/stubs/rnnr_stub.c`
-- `native/wdsp/stubs/sbnr_stub.c`
-- `native/wdsp/stubs/specbleach_adenoiser.h`
+- `native/wdsp/stubs/nr3/rnnoise.h`
+- `native/wdsp/stubs/nr3/rnnr_stub.c`
+- `native/wdsp/stubs/nr4/sbnr_stub.c`
+- `native/wdsp/stubs/nr4/specbleach_adenoiser.h`
 
 ## libspecbleach
 

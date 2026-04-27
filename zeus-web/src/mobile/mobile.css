@@ -42,21 +42,105 @@
   letter-spacing: 3px;
   color: var(--fg-0);
 }
-.m-conn-chip {
+/* Topbar Connect/Disconnect button. The chip-style container doubles as the
+   tap target that opens the radio selector overlay. Tinted accent when
+   connected, accent-blue when prompting to connect. */
+.m-conn-btn {
   margin-left: auto;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 9px;
+  gap: 8px;
+  padding: 6px 10px;
   background: var(--bg-0);
   border: 1px solid var(--btn-edge);
   border-radius: var(--r-md);
-  font-family: var(--font-mono);
+  color: var(--fg-1);
+  font-family: var(--font-sans);
   font-size: 11px;
+  cursor: pointer;
+  min-height: 32px;
 }
-.m-conn-k { color: var(--fg-3); letter-spacing: 0.5px; }
-.m-conn-v { color: var(--fg-2); }
-.m-conn-chip[data-connected='true'] .m-conn-v { color: var(--accent); }
+.m-conn-btn:hover { background: var(--bg-1); }
+.m-conn-led {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  flex-shrink: 0;
+}
+.m-conn-led--off {
+  background: var(--fg-3);
+  box-shadow: none;
+}
+.m-conn-v {
+  font-family: var(--font-mono);
+  color: var(--accent);
+}
+.m-conn-action {
+  color: var(--fg-2);
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+.m-conn-action--primary { color: var(--accent); font-weight: 700; }
+.m-conn-btn[data-connected='false'] { border-color: var(--accent-soft); }
+
+/* ── Radio selector overlay ─────────────────────────────── */
+.m-selector-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: env(safe-area-inset-top, 16px) 12px 12px;
+  z-index: 50;
+  overflow-y: auto;
+}
+.m-selector-sheet {
+  width: 100%;
+  max-width: 460px;
+  margin-top: 48px;
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-lg);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.m-selector-head {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  background: linear-gradient(180deg, var(--panel-head-top) 0%, var(--panel-head-bot) 100%);
+  border-bottom: 1px solid var(--panel-border);
+}
+.m-selector-title {
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--fg-0);
+}
+.m-selector-close {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--fg-2);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+}
+.m-selector-close:hover { background: var(--bg-1); color: var(--fg-0); }
+.m-selector-body {
+  padding: 8px;
+  overflow-y: auto;
+}
+/* ConnectPanel sets minWidth: 460px inline (ConnectPanel.tsx:363); on a
+   402 px viewport that overflows. Force it to fill the sheet width. */
+.m-selector-body .panel { min-width: 0 !important; max-width: 100% !important; }
 
 /* ── Vertical stack ────────────────────────────────────── */
 .m-stack {
@@ -105,21 +189,29 @@
 .m-section-body {
   padding: 10px;
 }
+/* Tight modifier — used by S-Meter so the LED strip + dBm readout fill the
+   panel chrome edge to edge. SMeterLive paints its own padding:10 inline,
+   override that too. */
+.m-section--tight > .m-section-body { padding: 0; }
+.m-section--tight > .m-section-body > div { padding: 0 !important; }
 
-/* The VFO is the hero — give it room to breathe and centre the digits.
-   The shared `.freq-display` panel sizes its digits with `clamp(38px, 26cqh, 140px)`
-   (layout.css:607). When dropped into a 34px-tall flex slot the 38 px floor
-   overflows the panel chrome — pin a comfortable mobile height so the digits
-   sit inside the dark blue inset chrome. */
+/* The VFO. The shared `.freq-display` panel sizes digits with
+   `clamp(38px, 26cqh, 140px)` (layout.css:607); pin a tight mobile height
+   so the digits sit inside the dark blue inset chrome and the panel doesn't
+   dominate the screen. The bottom hint label (.freq-bot) is hidden — it's
+   discoverable on first interaction; not worth the extra rows on mobile. */
 .m-vfo-wrap {
   display: flex;
   justify-content: center;
   align-items: stretch;
 }
 .m-app .freq-display {
-  min-height: 110px;
+  min-height: 56px;
+  padding: 6px 12px;
   width: 100%;
 }
+.m-app .freq-display .freq-bot { display: none; }
+.m-app .freq-display .freq-digits { margin: 0; }
 
 /* ── Panadapter + waterfall ────────────────────────────── */
 /* The map-layer + spectrum stack share a single positioned ancestor so the

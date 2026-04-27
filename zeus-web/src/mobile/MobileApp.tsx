@@ -9,7 +9,7 @@
 // type, and controls are the existing Zeus surface (tokens.css + the
 // component library) per the maintainer's brief.
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { setMode, type RxMode } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useQrzStore } from '../state/qrz-store';
@@ -22,6 +22,7 @@ import { TunButton } from '../components/TunButton';
 import { PsToggleButton } from '../components/PsToggleButton';
 import { AudioToggle } from '../components/AudioToggle';
 import { BandButtons } from '../components/BandButtons';
+import { ConnectPanel } from '../components/ConnectPanel';
 import { LeafletWorldMap } from '../components/design/LeafletWorldMap';
 import { LeafletMapErrorBoundary } from '../components/design/LeafletMapErrorBoundary';
 import { bandOf } from '../components/design/data';
@@ -69,6 +70,21 @@ export function MobileApp() {
   const bandLabel = bandOf(vfoHz);
   const freqMHz = (vfoHz / 1_000_000).toFixed(3);
 
+  // Radio selector overlay. Open from the topbar; auto-close once a connect
+  // *transition* completes (status flips Disconnected → Connected) so the
+  // operator lands back on the radio screen without an extra dismiss tap.
+  // Watching the edge — not the steady state — lets the operator open the
+  // selector while already connected (to disconnect or switch radios)
+  // without it slamming shut on first render.
+  const [selectorOpen, setSelectorOpen] = useState(false);
+  const prevConnectedRef = useRef(connected);
+  useEffect(() => {
+    if (selectorOpen && !prevConnectedRef.current && connected) {
+      setSelectorOpen(false);
+    }
+    prevConnectedRef.current = connected;
+  }, [selectorOpen, connected]);
+
   // QRZ map background — mirrors desktop's behaviour. The map renders behind
   // the spectrum stack when the operator has a QTH home pinned and an XML
   // subscription (same gate as App.tsx's qrzActive). LeafletWorldMap takes a
@@ -96,11 +112,58 @@ export function MobileApp() {
           </svg>
           <span className="m-brand-text">ZEUS</span>
         </div>
-        <div className="m-conn-chip" data-connected={connected}>
-          <span className="m-conn-k">RADIO</span>
-          <span className="m-conn-v">{radioLabel}</span>
-        </div>
+        <button
+          type="button"
+          className="m-conn-btn"
+          data-connected={connected}
+          onClick={() => setSelectorOpen(true)}
+          title={connected ? `Connected to ${radioLabel} — tap to manage` : 'Tap to discover radios'}
+        >
+          {connected ? (
+            <>
+              <span className="m-conn-led" aria-hidden />
+              <span className="m-conn-v">{radioLabel}</span>
+              <span className="m-conn-action">Disconnect</span>
+            </>
+          ) : (
+            <>
+              <span className="m-conn-led m-conn-led--off" aria-hidden />
+              <span className="m-conn-action m-conn-action--primary">Connect</span>
+            </>
+          )}
+        </button>
       </header>
+
+      {selectorOpen && (
+        <div
+          className="m-selector-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Radio selector"
+          onClick={(e) => {
+            // Backdrop click dismisses; clicks inside the sheet bubble through
+            // to here too, so guard on currentTarget.
+            if (e.target === e.currentTarget) setSelectorOpen(false);
+          }}
+        >
+          <div className="m-selector-sheet">
+            <header className="m-selector-head">
+              <span className="m-selector-title">Radio</span>
+              <button
+                type="button"
+                className="m-selector-close"
+                onClick={() => setSelectorOpen(false)}
+                aria-label="Close radio selector"
+              >
+                ✕
+              </button>
+            </header>
+            <div className="m-selector-body">
+              <ConnectPanel />
+            </div>
+          </div>
+        </div>
+      )}
 
       <main className="m-stack">
         <Section label="Frequency" meta="VFO A">
@@ -109,7 +172,7 @@ export function MobileApp() {
           </div>
         </Section>
 
-        <Section label="S-Meter" meta="RX">
+        <Section label="S-Meter" meta="RX" tight>
           <SMeterLive />
         </Section>
 
@@ -178,14 +241,18 @@ export function MobileApp() {
 function Section({
   label,
   meta,
+  tight,
   children,
 }: {
   label: string;
   meta?: string;
+  /** Strip the body padding — used by the SMeter section so the meter
+   *  fills the chrome edge to edge. */
+  tight?: boolean;
   children: ReactNode;
 }) {
   return (
-    <section className="m-section">
+    <section className={`m-section${tight ? ' m-section--tight' : ''}`}>
       <header className="m-section-head">
         <span className="m-section-led" />
         <span className="m-section-label">{label}</span>

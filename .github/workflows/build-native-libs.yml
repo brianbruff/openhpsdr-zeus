@@ -30,21 +30,42 @@ jobs:
           # static-md = FFTW linked statically into wdsp.dll, but using the
           # default dynamic CRT (/MD) so no CRT mismatch with CMake defaults.
           # Result: a single self-contained wdsp.dll, no fftw3.dll needed.
+          # vcpkg's fftw3 port builds all three precisions (fftw3, fftw3f,
+          # fftw3l) by default, so libspecbleach (NR4) gets fftw3f from the
+          # same install.
           vcpkg install fftw3:${{ matrix.arch }}-windows-static-md
           echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
 
       - name: Configure CMake
         run: |
           $archFlag = if ("${{ matrix.arch }}" -eq "arm64") { "ARM64" } else { "x64" }
+          # WDSP_WITH_NR4=ON pulls in native/libspecbleach/ as a STATIC sub-
+          # target embedded into wdsp.dll. NR3 stays OFF (librnnoise not
+          # vendored). Both flags are explicit for build-log clarity.
           cmake -S native/wdsp -B native/build `
             -G "Visual Studio 17 2022" `
             -A $archFlag `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET=${{ matrix.arch }}-windows-static-md
+            -DVCPKG_TARGET_TRIPLET=${{ matrix.arch }}-windows-static-md `
+            -DWDSP_WITH_NR3=OFF `
+            -DWDSP_WITH_NR4=ON
 
       - name: Build
         run: |
           cmake --build native/build --config Release --parallel
+
+      - name: Verify SBNR exports
+        run: |
+          # Phase 1 of issue #162: confirm the rebuild actually picks up the
+          # libspecbleach-backed sbnr.c (8 SetRXASBNR* exports). If this fails
+          # the build is silently stub-based and NR4 won't work at runtime.
+          $exports = & dumpbin /EXPORTS native/build/Release/wdsp.dll | Select-String "SetRXASBNR"
+          $count = ($exports | Measure-Object).Count
+          Write-Host "Found $count SetRXASBNR* exports:"
+          $exports
+          if ($count -ne 8) {
+            throw "Expected 8 SetRXASBNR* exports, got $count. NR4 did not link correctly."
+          }
 
       - name: Stage DLL
         run: |
@@ -71,6 +92,9 @@ jobs:
       - name: Install dependencies (x64)
         if: matrix.arch == 'x64'
         run: |
+          # libfftw3-dev ships both fftw3 (double, for WDSP) and fftw3f
+          # (single, for libspecbleach / NR4) in the same package — no
+          # extra dependency needed for NR4.
           sudo apt-get update
           sudo apt-get install -y libfftw3-dev cmake build-essential pkg-config
 
@@ -80,7 +104,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu cmake pkg-config
 
-          # Download and build FFTW for arm64
+          # Cross-compile FFTW3 (double precision) for arm64. We deliberately
+          # do NOT cross-compile FFTW3f (single precision) here — the arm64
+          # job is configured with WDSP_WITH_NR4=OFF below, so libspecbleach
+          # isn't needed. Building FFTW twice would double the cross-compile
+          # time for a binary that doesn't currently ship NR4 anyway. NR4 on
+          # linux-arm64 is a Phase 1f follow-up under #162.
           wget http://www.fftw.org/fftw-3.3.10.tar.gz
           tar xzf fftw-3.3.10.tar.gz
           cd fftw-3.3.10
@@ -94,13 +123,23 @@ jobs:
       - name: Configure CMake (x64)
         if: matrix.arch == 'x64'
         run: |
-          cmake -S native/wdsp -B native/build -DCMAKE_BUILD_TYPE=Release
+          # WDSP_WITH_NR4=ON pulls in native/libspecbleach/ as a STATIC sub-
+          # target embedded into libwdsp.so. NR3 stays OFF (librnnoise not
+          # vendored). Both flags are explicit for build-log clarity.
+          cmake -S native/wdsp -B native/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWDSP_WITH_NR3=OFF \
+            -DWDSP_WITH_NR4=ON
 
       - name: Configure CMake (arm64)
         if: matrix.arch == 'arm64'
         run: |
+          # WDSP_WITH_NR4=OFF on arm64 — see "Install cross-compilation tools"
+          # above. linux-arm64 NR4 is a Phase 1f follow-up under #162.
           cmake -S native/wdsp -B native/build \
             -DCMAKE_BUILD_TYPE=Release \
+            -DWDSP_WITH_NR3=OFF \
+            -DWDSP_WITH_NR4=OFF \
             -DCMAKE_SYSTEM_NAME=Linux \
             -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
             -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
@@ -111,6 +150,20 @@ jobs:
       - name: Build
         run: |
           cmake --build native/build --config Release --parallel
+
+      - name: Verify SBNR exports (x64)
+        if: matrix.arch == 'x64'
+        run: |
+          # Phase 1 of issue #162: confirm the rebuild actually picks up the
+          # libspecbleach-backed sbnr.c (8 SetRXASBNR* exports). If this fails
+          # the build is silently stub-based and NR4 won't work at runtime.
+          count=$(nm -D native/build/libwdsp.so | grep -c "SetRXASBNR" || true)
+          echo "Found $count SetRXASBNR* exports:"
+          nm -D native/build/libwdsp.so | grep "SetRXASBNR" || true
+          if [ "$count" -ne 8 ]; then
+            echo "ERROR: Expected 8 SetRXASBNR* exports, got $count. NR4 did not link correctly."
+            exit 1
+          fi
 
       - name: Stage library
         run: |

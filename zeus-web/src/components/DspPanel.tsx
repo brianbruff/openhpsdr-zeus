@@ -89,16 +89,17 @@ function nrButtonTitle(mode: NrMode): string {
   }
 }
 
-// Only NR1 and NR2 have a tunables panel today (NR4 is silently inert
-// until the Phase 1 libwdsp rebuild ships, so its panel is suppressed).
+// NR1 / NR2 / NR4 each have a tunables panel. NR4 panel was suppressed
+// pre-#162 (libwdsp didn't export SetRXASBNR*); now that Phase 1 binaries
+// ship the symbols on linux-x64 + win-x64, the panel is reachable again.
 // Mirrors NrControls.tsx.
 function settingsModeFor(nrMode: NrMode): NrSettingsMode {
-  if (nrMode === 'Anr' || nrMode === 'Emnr') return nrMode;
+  if (nrMode === 'Anr' || nrMode === 'Emnr' || nrMode === 'Sbnr') return nrMode;
   return 'Emnr';
 }
 
 function hasNrSettings(nrMode: NrMode): boolean {
-  return nrMode === 'Anr' || nrMode === 'Emnr';
+  return nrMode === 'Anr' || nrMode === 'Emnr' || nrMode === 'Sbnr';
 }
 
 const NB_CYCLE: readonly NbMode[] = ['Off', 'Nb1', 'Nb2'];

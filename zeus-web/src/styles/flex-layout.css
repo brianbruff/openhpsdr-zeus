@@ -75,6 +75,13 @@
   overflow: hidden;
 }
 
+/* Allow overflow for HeroPanel to prevent clipping of interactive overlays
+   (FreqAxis, DbScale) which are absolutely positioned and need to extend
+   beyond the tab container for proper hit testing. */
+.flexlayout__tab:has(.hero) {
+  overflow: visible;
+}
+
 /* Splitter (resize handle) — same color as the outer container so the
    gap between tabsets reads as a flat dark gutter (like default's
    `.workspace { gap: 6px }`). Accent only on hover/drag. */

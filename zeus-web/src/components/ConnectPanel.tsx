@@ -570,21 +570,21 @@ export function ConnectPanel() {
                       <button
                         type="button"
                         onClick={() => handleConnect(r)}
-                        disabled={r.busy || inflight || (dspPreparing && !isP2)}
+                        disabled={r.busy || inflight || dspPreparing}
                         title={
                           r.busy
                             ? 'Radio is busy (in use by another client)'
-                            : dspPreparing && !isP2
-                              ? 'DSP is preparing FFTW plans (first-run only, up to ~2 min)'
+                            : dspPreparing
+                              ? 'DSP is preparing FFTW plans — first-run only. Please leave the app open and wait.'
                               : isP2
                                 ? 'Protocol 2 path — experimental, RX only'
                                 : undefined
                         }
-                        className={`btn sm ${r.busy ? '' : 'active'} ${dspPreparing && !isP2 ? 'pulsing' : ''}`}
+                        className={`btn sm ${r.busy ? '' : 'active'} ${dspPreparing ? 'pulsing' : ''}`}
                       >
                         {r.busy
                           ? 'Busy'
-                          : dspPreparing && !isP2
+                          : dspPreparing
                             ? 'Preparing DSP…'
                             : inflight
                               ? 'Connecting…'
@@ -627,6 +627,72 @@ export function ConnectPanel() {
         )}
       </div>
       </div>
+      {dspPreparing && (
+        <div
+          role="status"
+          aria-live="polite"
+          aria-label="First-run DSP setup in progress"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 3,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 14,
+            padding: '24px 28px',
+            textAlign: 'center',
+            background: 'var(--bg-1)',
+            boxShadow: 'inset 0 0 0 1px var(--panel-border)',
+          }}
+        >
+          <span
+            className="label-xs"
+            style={{
+              color: 'var(--accent)',
+              fontSize: 11,
+              letterSpacing: '0.18em',
+            }}
+          >
+            First-run setup
+          </span>
+          <span
+            className="mono"
+            style={{
+              color: 'var(--fg-0)',
+              fontSize: 20,
+              fontWeight: 700,
+              letterSpacing: '0.04em',
+            }}
+          >
+            Preparing DSP…
+          </span>
+          <span
+            style={{
+              color: 'var(--fg-1)',
+              fontSize: 12,
+              lineHeight: 1.5,
+              maxWidth: 380,
+            }}
+          >
+            Zeus is building FFTW plans for WDSP. This is a one-time step
+            the first time Zeus runs on this machine and may take several
+            minutes — please leave the app open and wait. Subsequent
+            startups are fast.
+          </span>
+          <span
+            className="label-xs"
+            style={{
+              color: 'var(--fg-3)',
+              fontSize: 10,
+              letterSpacing: '0.14em',
+            }}
+          >
+            Connect will become available automatically when DSP is ready
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -666,7 +732,7 @@ const fieldLabelStyle: React.CSSProperties = {
 };
 
 function ManualMode(p: ManualModeProps) {
-  const canConnect = !p.inflight && !(p.dspPreparing && p.protocol === 'P1');
+  const canConnect = !p.inflight && !p.dspPreparing;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div
@@ -775,12 +841,17 @@ function ManualMode(p: ManualModeProps) {
         type="button"
         onClick={p.onConnect}
         disabled={!canConnect}
-        className={`btn lg ${canConnect ? 'active' : ''} ${p.dspPreparing && p.protocol === 'P1' ? 'pulsing' : ''}`}
+        title={
+          p.dspPreparing
+            ? 'DSP is preparing FFTW plans — first-run only. Please leave the app open and wait.'
+            : undefined
+        }
+        className={`btn lg ${canConnect ? 'active' : ''} ${p.dspPreparing ? 'pulsing' : ''}`}
         style={{ alignSelf: 'stretch' }}
       >
         {p.inflight
           ? 'Connecting…'
-          : p.dspPreparing && p.protocol === 'P1'
+          : p.dspPreparing
             ? 'Preparing DSP…'
             : 'Connect'}
       </button>

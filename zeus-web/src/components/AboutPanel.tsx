@@ -101,7 +101,13 @@ export function AboutPanel() {
       <div style={{ marginBottom: 20 }}>
         <div style={{ marginBottom: 12 }}>
           <span style={{ color: 'var(--fg-2)', marginRight: 8 }}>Version:</span>
-          <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{versionInfo.version}</span>
+          <span style={{ color: 'var(--accent)', fontWeight: 600 }}>
+            {/* Strip -dev / -prerelease / +commit-sha suffix so the About
+                pane shows the clean SemVer triple regardless of whether
+                the build was tagged. The full string is still available
+                via /api/version for support purposes. */}
+            {versionInfo.version.replace(/[-+].*$/, '')}
+          </span>
         </div>
 
         <div style={{ marginBottom: 12 }}>

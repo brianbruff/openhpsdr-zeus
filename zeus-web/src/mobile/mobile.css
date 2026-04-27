@@ -187,6 +187,20 @@
   color: var(--fg-3);
   font-family: var(--font-mono);
 }
+/* Right-aligned slot in the section head — used by the S-Meter card to
+   carry SWR + MIC dBfs chips during TX. `margin-left: auto` pushes the
+   slot to the right edge regardless of the label/meta width on its left.
+   The header inherits `text-transform: uppercase`, but `.chip .k` is
+   already uppercase and `.chip .v` is just digits so the cascade is a
+   no-op in practice. */
+.m-section-extra {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: none;
+  letter-spacing: normal;
+}
 .m-section-body {
   padding: 10px;
 }

@@ -173,9 +173,8 @@ export function MobileApp() {
           </div>
         </Section>
 
-        <Section label="S-Meter" meta="RX" tight>
-          <SMeterLive />
-        </Section>
+        <SMeterSection />
+
 
         <Section label="Panadapter" meta={`${freqMHz} MHz · ${bandLabel}`}>
           <div className="m-pan-stack">
@@ -301,14 +300,52 @@ function MicGate() {
   );
 }
 
+// S-Meter card. Wrapped in its own component so subscribing to TX state
+// for the in-header SWR + MIC chips doesn't re-render the whole MobileApp
+// at the meter's update rate. During TX, the chips render in the section
+// header (right-aligned) instead of below the meter — keeping the body
+// height fixed so keying MOX doesn't push the PTT button down.
+function SMeterSection() {
+  const moxOn = useTxStore((s) => s.moxOn);
+  const tunOn = useTxStore((s) => s.tunOn);
+  const swr = useTxStore((s) => s.swr);
+  const micDbfs = useTxStore((s) => s.micDbfs);
+  const transmitting = moxOn || tunOn;
+  const swrColor = swr >= 3 ? 'var(--tx)' : swr >= 2 ? 'var(--power)' : 'var(--fg-0)';
+
+  const chips = transmitting ? (
+    <>
+      <span className="chip mono">
+        <span className="k">SWR</span>
+        <span className="v" style={{ color: swrColor }}>{swr.toFixed(2)}</span>
+      </span>
+      <span className="chip mono">
+        <span className="k">MIC</span>
+        <span className="v">{micDbfs.toFixed(0)} dBfs</span>
+      </span>
+    </>
+  ) : null;
+
+  return (
+    <Section label="S-Meter" meta={transmitting ? 'TX' : 'RX'} extra={chips} tight>
+      <SMeterLive hideChips />
+    </Section>
+  );
+}
+
 function Section({
   label,
   meta,
+  extra,
   tight,
   children,
 }: {
   label: string;
   meta?: string;
+  /** Right-aligned slot in the section header. Used by the S-Meter card to
+   *  surface SWR + MIC dBfs chips during TX without growing the body and
+   *  shifting the PTT button below it. */
+  extra?: ReactNode;
   /** Strip the body padding — used by the SMeter section so the meter
    *  fills the chrome edge to edge. */
   tight?: boolean;
@@ -320,6 +357,7 @@ function Section({
         <span className="m-section-led" />
         <span className="m-section-label">{label}</span>
         {meta && <span className="m-section-meta">· {meta}</span>}
+        {extra && <span className="m-section-extra">{extra}</span>}
       </header>
       <div className="m-section-body">{children}</div>
     </section>

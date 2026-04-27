@@ -45,89 +45,72 @@
 import { useRef } from 'react';
 import { useTxStore } from '../state/tx-store';
 
-// Overdrive detector — fires on ANY of three independent HL2 community
-// signatures (W1AEX, softerhardware wiki), each sustained >= 200 ms:
-//   1. mic clipping         micPk  >= -1 dBFS  (bad regardless of downstream)
-//   2. ALC limiting hard    alcGr  > 10 dB
-//   3. CFC limiting hard    cfcGr  > 10 dB     (silent until CFC is enabled)
-// Earlier AND-of-mic+ALC spec never fired in live test because the Leveler
-// (enabled by default in P1.1) absorbs mic dynamics before ALC — so mic
-// could peg at 0 dBFS while alcGr stayed near 0. OR of independent
-// signatures captures each failure mode on its own. Each signature gets
-// its own sustain timer so a short transient on one doesn't reset the others.
-const OVERDRIVE_MIC_PK_DBFS = -1;
-const OVERDRIVE_ALC_GR_DB = 10;
-const OVERDRIVE_CFC_GR_DB = 10;
-const OVERDRIVE_SUSTAIN_MS = 200;
+// Overdrive detector — fires when the TX signal is actually clipping at
+// digital full scale. Two signatures, both at the 0 dBFS hard limit:
+//   1. mic ADC clipping     wdspMicPk >= 0 dBFS  (post-panel-gain, pre-DSP)
+//   2. TX output clipping   outPk     >= 0 dBFS  (post-DSP, what the radio sees)
+// "Clipping" is a hard fact (sample reached digital full scale ±1.0), not a
+// soft "compressor working hard" signal. Compressor activity is normal and
+// belongs on the GR meters, not on a warning indicator. Earlier versions
+// also OR'd ALC GR > 10 dB and CFC GR > 10 dB; both produced false positives
+// (CFC's −400 dBFS bypass sentinel becomes +400 after the WdspDspEngine
+// negation and slips past isBypassed; ALC GR sustained at 10 dB during heavy
+// compression isn't clipping, it's the limiter doing its job).
+//
+// Visual: hold the indicator lit for OVERDRIVE_HOLD_MS after the most recent
+// clip event so a single transient produces a visible flash and sustained
+// clipping keeps the light on.
+const OVERDRIVE_CLIP_DBFS = 0;
+const OVERDRIVE_HOLD_MS = 250;
 
 type OverdriveState = {
   tripped: boolean;
   mic: boolean;
-  alc: boolean;
-  cfc: boolean;
+  out: boolean;
 };
 
 function useOverdrive(): OverdriveState {
   const micPk = useTxStore((s) => s.wdspMicPk);
-  const alcGr = useTxStore((s) => s.alcGr);
-  const cfcGr = useTxStore((s) => s.cfcGr);
+  const outPk = useTxStore((s) => s.outPk);
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
-  // Per-signature last-NOT-met timestamps; sustain = now - lastNotMet.
-  const now0 =
-    typeof performance !== 'undefined' ? performance.now() : 0;
-  const micNotMetRef = useRef<number>(now0);
-  const alcNotMetRef = useRef<number>(now0);
-  const cfcNotMetRef = useRef<number>(now0);
+  const lastMicClipRef = useRef<number>(0);
+  const lastOutClipRef = useRef<number>(0);
 
   const transmitting = moxOn || tunOn;
   const now =
     typeof performance !== 'undefined' ? performance.now() : Date.now();
 
-  const micRaw =
+  const micClip =
     transmitting &&
     isFinite(micPk) &&
     !isBypassed(micPk) &&
-    micPk >= OVERDRIVE_MIC_PK_DBFS;
-  const alcRaw =
+    micPk >= OVERDRIVE_CLIP_DBFS;
+  const outClip =
     transmitting &&
-    isFinite(alcGr) &&
-    !isBypassed(alcGr) &&
-    alcGr > OVERDRIVE_ALC_GR_DB;
-  // CFC stays bypassed by default; isBypassed check keeps the −400 sentinel
-  // from ever tripping this signature until the operator enables CFC.
-  const cfcRaw =
-    transmitting &&
-    isFinite(cfcGr) &&
-    !isBypassed(cfcGr) &&
-    cfcGr > OVERDRIVE_CFC_GR_DB;
+    isFinite(outPk) &&
+    !isBypassed(outPk) &&
+    outPk >= OVERDRIVE_CLIP_DBFS;
 
-  if (!micRaw) micNotMetRef.current = now;
-  if (!alcRaw) alcNotMetRef.current = now;
-  if (!cfcRaw) cfcNotMetRef.current = now;
+  if (micClip) lastMicClipRef.current = now;
+  if (outClip) lastOutClipRef.current = now;
 
-  const mic = micRaw && now - micNotMetRef.current >= OVERDRIVE_SUSTAIN_MS;
-  const alc = alcRaw && now - alcNotMetRef.current >= OVERDRIVE_SUSTAIN_MS;
-  const cfc = cfcRaw && now - cfcNotMetRef.current >= OVERDRIVE_SUSTAIN_MS;
+  const mic =
+    transmitting && now - lastMicClipRef.current < OVERDRIVE_HOLD_MS;
+  const out =
+    transmitting && now - lastOutClipRef.current < OVERDRIVE_HOLD_MS;
 
-  return { tripped: mic || alc || cfc, mic, alc, cfc };
+  return { tripped: mic || out, mic, out };
 }
 
 function overdriveTooltip(s: OverdriveState): string {
   const triggers: string[] = [];
-  if (s.mic) triggers.push('mic clipping (≥ -1 dBFS)');
-  if (s.alc) triggers.push('ALC limiting hard (> 10 dB GR)');
-  if (s.cfc) triggers.push('CFC limiting hard (> 10 dB GR)');
+  if (s.mic) triggers.push('mic clipping (≥ 0 dBFS)');
+  if (s.out) triggers.push('TX output clipping (≥ 0 dBFS)');
   if (s.tripped) {
-    return (
-      `Overdrive: ${triggers.join(' + ')}. ` +
-      'Reduce mic gain or drive.'
-    );
+    return `Overdrive: ${triggers.join(' + ')}. Reduce mic gain or drive.`;
   }
-  return (
-    'Overdrive detector — fires on any of: mic peak ≥ -1 dBFS, ALC GR > 10 dB, ' +
-    'or CFC GR > 10 dB, sustained 200 ms.'
-  );
+  return 'Overdrive detector — flashes when mic input or TX output reaches 0 dBFS (digital clip).';
 }
 
 export function OverdriveIndicator() {

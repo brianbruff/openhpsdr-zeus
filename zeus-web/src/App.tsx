@@ -908,24 +908,26 @@ export default function App() {
             </Dockable>
           </div>
 
-          {/* Great-Circle Map sits below DSP — always visible in the side
-              stack now that QRZ has moved to the bottom row alongside the
-              Logbook. */}
-          <div className="side-slot hide-mobile">
-            <Dockable title="Great-Circle Map" ledOn={!!contact}>
-              <AzimuthMap target={contact} myGrid="EM48" />
-            </Dockable>
-          </div>
-
           <div className="side-slot hide-mobile">
             <Dockable title="TX" ledOn={false}>
               <TxFilterPanel />
             </Dockable>
           </div>
 
-          <div className="side-slot hide-mobile">
+          {/* Tuning Step — taller in classic mode + button row wraps so
+              all step values stay visible without horizontal overflow. */}
+          <div className="side-slot side-slot--tuning-step hide-mobile">
             <Dockable title="Tuning Step" ledOn>
               <TuningStepWidget />
+            </Dockable>
+          </div>
+
+          {/* Great-Circle Map sits at the bottom of the side stack now
+              that QRZ has moved to the bottom row alongside the Logbook.
+              Always visible. */}
+          <div className="side-slot hide-mobile">
+            <Dockable title="Great-Circle Map" ledOn={!!contact}>
+              <AzimuthMap target={contact} myGrid="EM48" />
             </Dockable>
           </div>
         </div>

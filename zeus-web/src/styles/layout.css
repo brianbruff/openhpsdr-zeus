@@ -138,12 +138,14 @@
 .btn-row { display: flex; gap: 3px; align-items: center; }
 .btn-row.wrap { flex-wrap: wrap; width: 290px; }
 
-/* TuningStepWidget — single-line grid of equal-width step buttons that
-   stretches to fill its FlexLayout tab. minmax(0, 1fr) lets cells shrink
-   below the button's intrinsic min-width when the panel gets narrow. */
+/* TuningStepWidget — auto-fit grid of equal-width step buttons. Each
+   button stays at least 56px wide; when the panel is too narrow to fit
+   all 13 buttons in a single row at that floor, the row wraps. Wide
+   panels (FlexLayout tabs that span the full row) still get the
+   original single-line layout. */
 .step-grid {
   display: grid;
-  grid-template-columns: repeat(13, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(56px, 1fr));
   gap: 4px;
   width: 100%;
 }
@@ -151,6 +153,14 @@
   min-width: 0;
   padding-left: 0.4em;
   padding-right: 0.4em;
+}
+
+/* Classic-layout side-stack only: give the Tuning Step slot a taller
+   floor so the wrapped step grid has room to breathe (~2 rows + the
+   label) without the panel chrome pinching it. Flex-layout tabsets
+   are sized by the operator's drag and don't read this rule. */
+.workspace .side-stack .side-slot--tuning-step {
+  min-height: 110px;
 }
 
 /* ===== Buttons — chunky dark gradient chrome (matches reference) ===== */

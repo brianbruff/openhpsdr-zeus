@@ -391,6 +391,12 @@
   gap: 6px;
   min-height: 0;
 }
+/* When the QRZ slot is rendered (operator has the QRZ button engaged),
+   widen the row to three columns: QRZ | Logbook | TX Stage Meters.
+   Logbook stays the largest so longer log lines still fit comfortably. */
+.bottom-row.has-qrz {
+  grid-template-columns: 1.2fr 1.6fr 1fr;
+}
 .bottom-slot { display: flex; min-height: 0; }
 .bottom-slot > * { flex: 1; min-height: 0; }
 

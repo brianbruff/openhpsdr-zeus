@@ -56,7 +56,9 @@ type FlexLayoutJson = Record<string, unknown>;
 //   v4 (2026-04-27): VFO weight 15→21, QRZ Lookup pulled out of right
 //                    column into bottom row before Logbook, Azimuth Map
 //                    becomes the sole tab in its previous slot.
-const LAYOUT_SCHEMA_VERSION = 4;
+//   v5 (2026-04-27): Azimuth Map moved below DSP in the right-column
+//                    stack (classic-layout parity).
+const LAYOUT_SCHEMA_VERSION = 5;
 const VERSION_KEY = 'zeus.layout.schemaVersion';
 
 function getStoredVersion(): number {

@@ -902,13 +902,45 @@ export default function App() {
             </Dockable>
           </div>
 
-          {terminatorActive ? (
-            <div className="side-slot grow hide-mobile">
+          <div className="side-slot hide-mobile">
+            <Dockable title="DSP" ledOn={dspActive}>
+              <DspPanel />
+            </Dockable>
+          </div>
+
+          {/* Great-Circle Map sits below DSP — always visible in the side
+              stack now that QRZ has moved to the bottom row alongside the
+              Logbook. */}
+          <div className="side-slot hide-mobile">
+            <Dockable title="Great-Circle Map" ledOn={!!contact}>
+              <AzimuthMap target={contact} myGrid="EM48" />
+            </Dockable>
+          </div>
+
+          <div className="side-slot hide-mobile">
+            <Dockable title="TX" ledOn={false}>
+              <TxFilterPanel />
+            </Dockable>
+          </div>
+
+          <div className="side-slot hide-mobile">
+            <Dockable title="Tuning Step" ledOn>
+              <TuningStepWidget />
+            </Dockable>
+          </div>
+        </div>
+
+        {/* Bottom row — QRZ (when active) + Logbook + TX Stage Meters on
+            desktop; big PTT on mobile. The has-qrz class on .bottom-row
+            switches the grid to three columns when QRZ is on. */}
+        <div className={`bottom-row ${terminatorActive ? 'has-qrz' : ''}`}>
+          {terminatorActive && (
+            <div className="bottom-slot bottom-slot--qrz hide-mobile">
               <Dockable
                 title="QRZ.com Lookup"
                 ledOn={!!contact}
                 key={'qrz-' + lookupKey}
-                className={terminatorActive ? 't1000-panel' : ''}
+                className="t1000-panel"
                 actions={
                   <form
                     onSubmit={onCallsignSubmit}
@@ -934,35 +966,7 @@ export default function App() {
                 />
               </Dockable>
             </div>
-          ) : (
-            <div className="side-slot hide-mobile">
-              <Dockable title="Great-Circle Map" ledOn={!!contact}>
-                <AzimuthMap target={contact} myGrid="EM48" />
-              </Dockable>
-            </div>
           )}
-
-          <div className="side-slot hide-mobile">
-            <Dockable title="DSP" ledOn={dspActive}>
-              <DspPanel />
-            </Dockable>
-          </div>
-
-          <div className="side-slot hide-mobile">
-            <Dockable title="TX" ledOn={false}>
-              <TxFilterPanel />
-            </Dockable>
-          </div>
-
-          <div className="side-slot hide-mobile">
-            <Dockable title="Tuning Step" ledOn>
-              <TuningStepWidget />
-            </Dockable>
-          </div>
-        </div>
-
-        {/* Bottom row — Logbook + TX Stage Meters on desktop; big PTT on mobile. */}
-        <div className="bottom-row">
           <div className="bottom-slot hide-mobile">
             <Dockable title={logbookTitle} ledOn actions={logbookActions}>
               <LogbookLive />

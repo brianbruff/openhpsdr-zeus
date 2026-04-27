@@ -29,12 +29,14 @@ import { TciSettingsPanel } from './TciSettingsPanel';
 import { RadioSelector } from './RadioSelector';
 import { usePaStore } from '../state/pa-store';
 import { PsSettingsPanel } from './PsSettingsPanel';
+import { TxAudioToolsPanel } from './TxAudioToolsPanel';
 
-type TabId = 'pa' | 'ps' | 'qrz' | 'rotator' | 'tci' | 'display' | 'about';
+type TabId = 'pa' | 'ps' | 'tx-audio' | 'qrz' | 'rotator' | 'tci' | 'display' | 'about';
 
 const TABS: ReadonlyArray<{ id: TabId; label: string }> = [
   { id: 'pa', label: 'PA SETTINGS' },
   { id: 'ps', label: 'PURESIGNAL' },
+  { id: 'tx-audio', label: 'TX AUDIO TOOLS' },
   { id: 'qrz', label: 'QRZ' },
   { id: 'rotator', label: 'ROTATOR' },
   { id: 'tci', label: 'TCI' },
@@ -300,6 +302,7 @@ export function SettingsMenu({ open, onClose, initialTab }: Props) {
         >
           {active === 'pa' && <PaSettingsPanel />}
           {active === 'ps' && <PsSettingsPanel />}
+          {active === 'tx-audio' && <TxAudioToolsPanel />}
           {active === 'qrz' && <QrzSettingsPanel />}
           {active === 'rotator' && <RotatorSettingsPanel />}
           {active === 'tci' && <TciSettingsPanel />}

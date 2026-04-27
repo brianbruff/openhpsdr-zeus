@@ -45,7 +45,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-import type { RadioStateDto } from '../api/client';
+import type { CfcConfigDto, RadioStateDto } from '../api/client';
+import { CFC_CONFIG_DEFAULT } from '../api/client';
 
 // TX-side state. Intentionally separate from connection-store so the TX panel
 // can mount/unmount cleanly and so TX-specific fields (drivePercent, micGainDb,
@@ -80,11 +81,18 @@ export type TxMeters = {
 
 export enum AlertKind {
   SwrTrip = 0,
+  FrontendUpdate = 1,
 }
+
+export type AlertAction = {
+  label: string;
+  onClick: () => void;
+};
 
 export type Alert = {
   kind: AlertKind;
   message: string;
+  action?: AlertAction;
 };
 
 export type TxState = {
@@ -197,6 +205,14 @@ export type TxState = {
   // pihpsdr/Thetis behaviour.
   psFeedbackSource: 'internal' | 'external';
   setPsFeedbackSource: (s: 'internal' | 'external') => void;
+  // PS-Monitor (issue #121) — operator-facing "Monitor PA output" toggle.
+  // When on AND PS armed AND PS converged, the TX panadapter source flips
+  // from the predistorted TX-IQ analyzer to the PS-feedback analyzer
+  // (post-PA loopback). Default off; not persisted (parity with psEnabled
+  // — viewing preference, resets each session). Hidden / disabled in the
+  // UI on boards with no PS feedback path (e.g. HermesLite2).
+  psMonitorEnabled: boolean;
+  setPsMonitorEnabled: (on: boolean) => void;
   // Live readout pushed via MsgType.PsMeters (0x18) at 10 Hz when armed.
   psFeedbackLevel: number;
   psCorrectionDb: number;
@@ -220,6 +236,16 @@ export type TxState = {
   setTwoToneFreq2: (hz: number) => void;
   twoToneMag: number;
   setTwoToneMag: (m: number) => void;
+
+  // ---- CFC (Continuous Frequency Compressor) — issue #123. Whole config
+  // travels as one object so the panel's per-band edits + master toggles
+  // round-trip atomically. Persisted via partialize so a reload reads the
+  // same UI state without waiting for the server hydrate. Hydrated from
+  // the server's StateDto.cfc on connect — the server is the source of
+  // truth (LiteDB-backed) so a fresh browser sees the operator's last
+  // dial-in.
+  cfcConfig: CfcConfigDto;
+  setCfcConfig: (cfg: CfcConfigDto) => void;
 
   // Hydrate the persistable PS / TwoTone fields from the server's StateDto.
   // Called from ConnectPanel and App.tsx alongside connection-store.applyState
@@ -322,6 +348,8 @@ export const useTxStore = create<TxState>()(
       setPsIntsSpiPreset: (p) => set({ psIntsSpiPreset: p }),
       psFeedbackSource: 'internal',
       setPsFeedbackSource: (s) => set({ psFeedbackSource: s }),
+      psMonitorEnabled: false,
+      setPsMonitorEnabled: (on) => set({ psMonitorEnabled: on }),
       psFeedbackLevel: 0,
       psCorrectionDb: 0,
       psCalState: 0,
@@ -345,6 +373,12 @@ export const useTxStore = create<TxState>()(
       twoToneMag: 0.49,
       setTwoToneMag: (m) => set({ twoToneMag: m }),
 
+      // CFC — defaults mirror CfcConfig.Default on the server (master OFF,
+      // pihpsdr-classic 10-band split). The server is authoritative and
+      // hydrates over this on connect.
+      cfcConfig: CFC_CONFIG_DEFAULT,
+      setCfcConfig: (cfg) => set({ cfcConfig: cfg }),
+
       hydrateFromState: (s) =>
         set({
           psAuto: s.psAuto,
@@ -358,6 +392,7 @@ export const useTxStore = create<TxState>()(
           twoToneFreq1: s.twoToneFreq1,
           twoToneFreq2: s.twoToneFreq2,
           twoToneMag: s.twoToneMag,
+          cfcConfig: s.cfc,
         }),
     }),
     {
@@ -383,6 +418,9 @@ export const useTxStore = create<TxState>()(
         twoToneFreq1: s.twoToneFreq1,
         twoToneFreq2: s.twoToneFreq2,
         twoToneMag: s.twoToneMag,
+        // CFC tuning — persisted client-side too so the panel paints with
+        // the operator's last config before the server hydrate lands.
+        cfcConfig: s.cfcConfig,
       }),
     },
   ),

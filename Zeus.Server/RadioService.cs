@@ -129,6 +129,13 @@ public sealed class RadioService : IDisposable
     // its own CmdHighPriority byte 4.
     public event Action<bool>? MoxChanged;
     public event Action<bool>? TunActiveChanged;
+    // Fires when the operator toggles the Mercury preamp. P1 path is pushed
+    // directly via ActiveClient?.SetPreamp inside SetPreamp; this event lets
+    // DspPipelineService mirror the same change into a live Protocol2Client
+    // (CmdHighPriority byte 1403, bit 0 = RX0 preamp). Issue #126 — the P2
+    // forwarding is the missing link that left the PRE button non-functional
+    // on Angelia / ANAN-100D.
+    public event Action<bool>? PreampChanged;
 
     // Shared TX IQ source threaded through Protocol1Client. TxAudioIngest
     // writes into the same instance; this is the seam between "mic arrived
@@ -152,6 +159,10 @@ public sealed class RadioService : IDisposable
 
         // Load persisted DSP settings from the store, or use defaults if not found
         var persistedNr = _dspSettingsStore.Get() ?? new NrConfig();
+        // CFC — issue #123. Persisted globally; null on a fresh install or
+        // legacy DB row falls back to the default-OFF baseline so the operator
+        // sees no behaviour change unless they enable.
+        var persistedCfc = _dspSettingsStore.GetCfc() ?? CfcConfig.Default;
 
         // Seed the last-preset cache from persisted store for all modes so
         // the first mode-switch in a session recalls the correct slot.
@@ -199,7 +210,8 @@ public sealed class RadioService : IDisposable
             // (700/1900 Hz, 0.49 each — peak ~0.98 just under WDSP IQ clip).
             TwoToneFreq1: ps?.TwoToneFreq1 ?? 700.0,
             TwoToneFreq2: ps?.TwoToneFreq2 ?? 1900.0,
-            TwoToneMag: ps?.TwoToneMag ?? 0.49);
+            TwoToneMag: ps?.TwoToneMag ?? 0.49,
+            Cfc: persistedCfc);
     }
 
     /// <summary>
@@ -257,6 +269,29 @@ public sealed class RadioService : IDisposable
     }
 
     public StateDto Snapshot() { lock (_sync) return _state; }
+
+    /// <summary>Current operator preamp toggle. PreampOn isn't on the
+    /// StateDto wire format, so DspPipelineService reads it directly when
+    /// it needs to push the value into a freshly-opened Protocol2Client
+    /// (issue #126). Lock-safe so a connect-time read can't tear against
+    /// a concurrent SetPreamp.</summary>
+    public bool PreampOn { get { lock (_sync) return _preampOn; } }
+
+    /// <summary>Effective RX step attenuator in dB — operator baseline
+    /// (<see cref="StateDto.AttenDb"/>) plus any auto-ATT overload offset
+    /// (<see cref="StateDto.AttOffsetDb"/>), clamped to 0..31. This is the
+    /// value that lands on the wire (CmdHighPriority byte 1443 on P2;
+    /// CC0=0x14 on P1). Exposed for DspPipelineService.ConnectP2Async so a
+    /// fresh P2 client is initialised with the operator's current effective
+    /// atten before its first CmdHighPriority emission.</summary>
+    public int EffectiveAttenDb
+    {
+        get
+        {
+            lock (_sync)
+                return Math.Clamp(_atten.ClampedDb + _attOffsetDb, HpsdrAtten.MinDb, HpsdrAtten.MaxDb);
+        }
+    }
 
     public async Task<StateDto> ConnectAsync(string endpoint, int sampleRate, CancellationToken ct = default)
     {
@@ -569,8 +604,13 @@ public sealed class RadioService : IDisposable
 
     public StateDto SetPreamp(bool on)
     {
-        _preampOn = on;
+        lock (_sync) _preampOn = on;
+        // P1 path: Protocol1Client owns the bit; SetPreamp pushes the
+        // updated CcState on the next outgoing frame. ActiveClient is
+        // null on a P2 connection, so the PreampChanged event below is
+        // what carries the bit into Protocol2Client (issue #126).
         ActiveClient?.SetPreamp(on);
+        PreampChanged?.Invoke(on);
         return Snapshot();
     }
 
@@ -710,7 +750,6 @@ public sealed class RadioService : IDisposable
             DriveByte: driveByte,
             OcTxMask: bandCfg.OcTx,
             OcRxMask: bandCfg.OcRx,
-            OcTuneMask: cfg.Global.OcTune,
             PaEnabled: paEnabled));
     }
 
@@ -751,6 +790,65 @@ public sealed class RadioService : IDisposable
         // Persist the new DSP settings to the store
         _dspSettingsStore.Upsert(cfg);
 
+        return Snapshot();
+    }
+
+    // Right-click popover save for NR2 (EMNR) post2 tunables. Merges only
+    // the non-null fields onto the current NrConfig so the operator can edit
+    // a single knob without disturbing siblings, then re-pushes the whole
+    // block through SetNr to keep persistence and engine state in lock-step.
+    public StateDto SetNr2Post2(Nr2Post2ConfigSetRequest req)
+    {
+        ArgumentNullException.ThrowIfNull(req);
+        var current = Snapshot().Nr ?? new NrConfig();
+        var merged = current with
+        {
+            EmnrPost2Run = req.Post2Run ?? current.EmnrPost2Run,
+            EmnrPost2Factor = req.Post2Factor ?? current.EmnrPost2Factor,
+            EmnrPost2Nlevel = req.Post2Nlevel ?? current.EmnrPost2Nlevel,
+            EmnrPost2Rate = req.Post2Rate ?? current.EmnrPost2Rate,
+            EmnrPost2Taper = req.Post2Taper ?? current.EmnrPost2Taper,
+        };
+        return SetNr(merged);
+    }
+
+    // Right-click popover save for NR4 (SBNR) tunables — same merge-and-
+    // re-push pattern as SetNr2Post2.
+    public StateDto SetNr4(Nr4ConfigSetRequest req)
+    {
+        ArgumentNullException.ThrowIfNull(req);
+        var current = Snapshot().Nr ?? new NrConfig();
+        var merged = current with
+        {
+            Nr4ReductionAmount = req.ReductionAmount ?? current.Nr4ReductionAmount,
+            Nr4SmoothingFactor = req.SmoothingFactor ?? current.Nr4SmoothingFactor,
+            Nr4WhiteningFactor = req.WhiteningFactor ?? current.Nr4WhiteningFactor,
+            Nr4NoiseRescale = req.NoiseRescale ?? current.Nr4NoiseRescale,
+            Nr4PostFilterThreshold = req.PostFilterThreshold ?? current.Nr4PostFilterThreshold,
+            Nr4NoiseScalingType = req.NoiseScalingType ?? current.Nr4NoiseScalingType,
+            Nr4Position = req.Position ?? current.Nr4Position,
+        };
+        return SetNr(merged);
+    }
+
+    // CFC (Continuous Frequency Compressor) — issue #123. The whole 10-band
+    // config travels in one POST because the operator edits the panel as a
+    // single table; the engine then re-pushes the whole profile to WDSP.
+    // Mirrors the SetNr shape: validate, mutate state, persist, return
+    // snapshot. DspPipelineService picks up the change-detect on the next
+    // OnRadioStateChanged tick and pushes through to the engine.
+    public StateDto SetCfc(CfcSetRequest req)
+    {
+        ArgumentNullException.ThrowIfNull(req);
+        var cfg = req.Config ?? throw new ArgumentException("Config required", nameof(req));
+        if (cfg.Bands is null || cfg.Bands.Length != 10)
+            throw new ArgumentException($"Bands must have exactly 10 entries; got {cfg.Bands?.Length ?? 0}", nameof(req));
+
+        Mutate(s => s with { Cfc = cfg });
+        _dspSettingsStore.Upsert(cfg);
+        _log.LogInformation(
+            "radio.setCfc enabled={Enabled} peq={Peq} preComp={Pre:F1}dB prePeq={PrePeq:F1}dB",
+            cfg.Enabled, cfg.PostEqEnabled, cfg.PreCompDb, cfg.PrePeqDb);
         return Snapshot();
     }
 
@@ -803,6 +901,22 @@ public sealed class RadioService : IDisposable
         ArgumentNullException.ThrowIfNull(req);
         Mutate(s => s with { PsFeedbackSource = req.Source });
         PersistPsState();
+        return Snapshot();
+    }
+
+    /// <summary>
+    /// Toggle the "Monitor PA output" view (issue #121). When on, AND PS is
+    /// armed, AND PS has converged, DspPipelineService.Tick reads pixels
+    /// from the PS-feedback analyzer instead of the post-CFIR TX analyzer
+    /// so the operator sees the actual on-air RF rather than the
+    /// predistorted baseband. Operator viewing preference — NOT persisted
+    /// across sessions (same discipline as PsEnabled / MOX).
+    /// </summary>
+    public StateDto SetPsMonitor(PsMonitorSetRequest req)
+    {
+        ArgumentNullException.ThrowIfNull(req);
+        _log.LogInformation("setPsMonitor enabled={Enabled}", req.Enabled);
+        Mutate(s => s with { PsMonitorEnabled = req.Enabled });
         return Snapshot();
     }
 

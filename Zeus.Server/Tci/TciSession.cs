@@ -43,21 +43,25 @@
 // License for details.
 
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text;
-using System.Threading.Channels;
 using Zeus.Contracts;
 
 namespace Zeus.Server.Tci;
 
 /// <summary>
 /// Per-client TCI session. Manages WebSocket send/receive loops, command
-/// parsing, event broadcasting, and rate limiting. Mirrors the StreamingHub
-/// pattern: parallel send + receive tasks, bounded channel with drop-oldest.
+/// parsing, event broadcasting, and rate limiting.
+///
+/// Outbound architecture mirrors Thetis TCIServer: three priority queues
+/// (Urgent / Binary / Control) drained by a single send loop in priority
+/// order. Queues are unbounded — backpressure is provided implicitly by
+/// the underlying socket send window; on a write exception, the session
+/// is torn down.
 /// </summary>
 public sealed class TciSession : IDisposable
 {
-    private const int MaxBacklogPerClient = 16;
     private const int MaxInboundTextBytes = 8 * 1024;
     private const int MaxInboundBinaryBytes = 2 * 1024 * 1024; // 2 MB for future binary frames
 
@@ -71,18 +75,39 @@ public sealed class TciSession : IDisposable
     private readonly TciOptions _options;
     private readonly TciRateLimiter _rateLimiter;
 
-    private readonly Channel<string> _sendQueue = Channel.CreateBounded<string>(
-        new BoundedChannelOptions(MaxBacklogPerClient)
-        {
-            FullMode = BoundedChannelFullMode.DropOldest,
-            SingleReader = true,
-            SingleWriter = false,
-        });
+    private readonly ConcurrentQueue<TciOutboundFrame> _urgentQueue = new();
+    private readonly ConcurrentQueue<TciOutboundFrame> _binaryQueue = new();
+    private readonly ConcurrentQueue<TciOutboundFrame> _controlQueue = new();
+    private readonly SemaphoreSlim _outboundSignal = new(0);
 
     // Track current drive level so we can echo it back on query
     private int _lastDrivePercent = 50;
 
+    // Per-session binary stream subscriptions. Producers (TciServer publish
+    // path) check WantsIqStream(rx) before building/dispatching frames.
+    private readonly object _streamLock = new();
+    private readonly HashSet<int> _iqStreamEnabled = new();
+    private int _iqSampleRate = 48000;
+
     public Guid Id => _id;
+
+    /// <summary>True if this session has subscribed to IQ for the given receiver.</summary>
+    public bool WantsIqStream(int receiver)
+    {
+        lock (_streamLock) return _iqStreamEnabled.Contains(receiver);
+    }
+
+    /// <summary>True if this session has subscribed to IQ for any receiver.</summary>
+    public bool WantsAnyIqStream()
+    {
+        lock (_streamLock) return _iqStreamEnabled.Count > 0;
+    }
+
+    /// <summary>Last client-requested IQ sample rate, clamped to [48000, 384000].</summary>
+    public int IqSampleRate
+    {
+        get { lock (_streamLock) return _iqSampleRate; }
+    }
 
     public TciSession(
         Guid id,
@@ -110,15 +135,16 @@ public sealed class TciSession : IDisposable
     /// </summary>
     public async Task RunAsync(CancellationToken ct)
     {
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         try
         {
             // Send handshake immediately after WS upgrade
-            await SendHandshakeAsync(ct);
+            await SendHandshakeAsync(linkedCts.Token);
 
-            var sendTask = SendLoopAsync(ct);
-            var recvTask = ReceiveLoopAsync(ct);
+            var sendTask = SendLoopAsync(linkedCts.Token);
+            var recvTask = ReceiveLoopAsync(linkedCts.Token);
             await Task.WhenAny(sendTask, recvTask);
-            _sendQueue.Writer.TryComplete();
+            linkedCts.Cancel();
             try { await Task.WhenAll(sendTask, recvTask); } catch { /* drained */ }
         }
         finally
@@ -128,11 +154,30 @@ public sealed class TciSession : IDisposable
     }
 
     /// <summary>
-    /// Enqueue a TCI command for immediate send (bypass rate limiter).
+    /// Enqueue a TCI text command at Control priority (commands, query echoes,
+    /// state-change events). Bypasses the rate limiter.
     /// </summary>
     public void Send(string commandLine)
     {
-        _sendQueue.Writer.TryWrite(commandLine);
+        Enqueue(new TciOutboundFrame(commandLine), TciOutboundPriority.Control);
+    }
+
+    /// <summary>
+    /// Enqueue a TCI text command at Urgent priority (ping/pong, close, errors).
+    /// </summary>
+    public void SendUrgent(string commandLine)
+    {
+        Enqueue(new TciOutboundFrame(commandLine), TciOutboundPriority.Urgent);
+    }
+
+    /// <summary>
+    /// Enqueue a binary frame (IQ / RX-audio / TX-chrono stream payload) at
+    /// Binary priority. Frame bytes are sent verbatim as a WebSocket binary
+    /// message — the caller is responsible for the TCI 64-byte stream header.
+    /// </summary>
+    public void SendBinary(byte[] payload)
+    {
+        Enqueue(new TciOutboundFrame(payload), TciOutboundPriority.Binary);
     }
 
     /// <summary>
@@ -141,6 +186,23 @@ public sealed class TciSession : IDisposable
     public void SendRateLimited(string key, string commandLine)
     {
         _rateLimiter.Enqueue(key, commandLine);
+    }
+
+    private void Enqueue(TciOutboundFrame frame, TciOutboundPriority priority)
+    {
+        switch (priority)
+        {
+            case TciOutboundPriority.Urgent:
+                _urgentQueue.Enqueue(frame);
+                break;
+            case TciOutboundPriority.Binary:
+                _binaryQueue.Enqueue(frame);
+                break;
+            default:
+                _controlQueue.Enqueue(frame);
+                break;
+        }
+        _outboundSignal.Release();
     }
 
     private async Task SendHandshakeAsync(CancellationToken ct)
@@ -158,21 +220,55 @@ public sealed class TciSession : IDisposable
         _log.LogInformation("tci.handshake sent client={Id}", _id);
     }
 
+    /// <summary>
+    /// Single send loop draining Urgent → Binary → Control queues in priority
+    /// order. On any send failure the loop exits, the linked CTS cancels the
+    /// receive loop, and the session tears down (matches Thetis abortSocketTransport).
+    /// </summary>
     private async Task SendLoopAsync(CancellationToken ct)
     {
         try
         {
-            await foreach (var line in _sendQueue.Reader.ReadAllAsync(ct))
+            while (!ct.IsCancellationRequested && _ws.State == WebSocketState.Open)
             {
-                if (_ws.State != WebSocketState.Open) break;
-                var bytes = Encoding.ASCII.GetBytes(line);
-                await _ws.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
+                await _outboundSignal.WaitAsync(ct);
+                if (TryDequeueNext(out var frame))
+                {
+                    await SendFrameAsync(frame, ct);
+                }
             }
         }
         catch (OperationCanceledException) { }
         catch (WebSocketException ex)
         {
             _log.LogDebug(ex, "tci send loop ended client={Id}", _id);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "tci send loop write failed client={Id}", _id);
+        }
+    }
+
+    private bool TryDequeueNext(out TciOutboundFrame frame)
+    {
+        if (_urgentQueue.TryDequeue(out frame)) return true;
+        if (_binaryQueue.TryDequeue(out frame)) return true;
+        if (_controlQueue.TryDequeue(out frame)) return true;
+        frame = default;
+        return false;
+    }
+
+    private async Task SendFrameAsync(TciOutboundFrame frame, CancellationToken ct)
+    {
+        if (_ws.State != WebSocketState.Open) return;
+        if (frame.IsBinary)
+        {
+            await _ws.SendAsync(frame.Bytes!, WebSocketMessageType.Binary, true, ct);
+        }
+        else
+        {
+            var bytes = Encoding.ASCII.GetBytes(frame.Text!);
+            await _ws.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
         }
     }
 
@@ -337,7 +433,20 @@ public sealed class TciSession : IDisposable
                     HandleMonVolume(args);
                     break;
 
-                // --- Split / RIT / XIT ---
+                // --- AGC ---
+                case "agc_gain":
+                    HandleAgcGain(args);
+                    break;
+
+                // --- CW keyer / macros (ack-only; no CW engine yet) ---
+                case "cw_macros_speed":
+                case "cw_macros":
+                case "cw_msg":
+                case "keyer":
+                    _log.LogDebug("tci cw command accepted but unimplemented (no CW engine): {Cmd}", command);
+                    break;
+
+                // --- Split / RIT / XIT / Lock (stubs) ---
                 case "split_enable":
                     HandleSplitEnable(args);
                     break;
@@ -376,11 +485,19 @@ public sealed class TciSession : IDisposable
                     HandleSpotClear(args);
                     break;
 
-                // --- Binary streams (future) ---
+                // --- Binary streams ---
                 case "iq_start":
+                    HandleIqStart(args);
+                    break;
                 case "iq_stop":
+                    HandleIqStop(args);
+                    break;
+                case "iq_samplerate":
+                    HandleIqSampleRate(args);
+                    break;
                 case "audio_start":
                 case "audio_stop":
+                case "audio_samplerate":
                     _log.LogDebug("tci command not implemented: {Cmd}", command);
                     break;
 
@@ -604,6 +721,28 @@ public sealed class TciSession : IDisposable
         // Ignore set — sidetone not implemented
     }
 
+    private void HandleAgcGain(string[] args)
+    {
+        // agc_gain:<rx>,<db> or agc_gain:<rx> (query)
+        // ExpertSDR3 TCI spec: AGC gain is synonymous with AGC top (max gain)
+        // Range: -20 to 120 dB per Thetis convention
+        if (args.Length < 1) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+
+        if (args.Length == 1)
+        {
+            // Query: echo current AGC top
+            var state = _radio.Snapshot();
+            Send(TciProtocol.Command("agc_gain", rx, (int)state.AgcTopDb));
+        }
+        else if (args.Length >= 2 && TciProtocol.TryParseDouble(args[1], out double db))
+        {
+            // Set AGC top (gain)
+            _radio.SetAgcTop(db);
+            // StateChanged event will broadcast the update to all clients
+        }
+    }
+
     private void HandleSplitEnable(string[] args)
     {
         // split_enable:<rx>,<bool> or split_enable:<rx> (query)
@@ -723,8 +862,84 @@ public sealed class TciSession : IDisposable
         _spots.ClearAll();
     }
 
+    private void HandleIqStart(string[] args)
+    {
+        // iq_start:<rx>,<bool>  — start (true) or stop (false) per-receiver IQ stream
+        if (args.Length < 1) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+        bool enable = true;
+        if (args.Length >= 2 && TciProtocol.TryParseBool(args[1], out bool parsed))
+            enable = parsed;
+        SetIqStream(rx, enable);
+    }
+
+    private void HandleIqStop(string[] args)
+    {
+        // iq_stop:<rx>  — alias of iq_start:<rx>,false
+        if (args.Length < 1) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+        SetIqStream(rx, false);
+    }
+
+    private void HandleIqSampleRate(string[] args)
+    {
+        // iq_samplerate:<rate>  or  iq_samplerate (query)
+        // Range matches Thetis: [48000, 384000]. Stored on the session; the
+        // actual rate of published frames is the radio's native rate, echoed
+        // back to the client when streaming starts.
+        if (args.Length == 0)
+        {
+            Send(TciProtocol.Command("iq_samplerate", IqSampleRate));
+            return;
+        }
+        if (TciProtocol.TryParseInt(args[0], out int rate))
+        {
+            rate = Math.Clamp(rate, 48000, 384000);
+            lock (_streamLock) _iqSampleRate = rate;
+            Send(TciProtocol.Command("iq_samplerate", rate));
+        }
+    }
+
+    private void SetIqStream(int rx, bool enable)
+    {
+        lock (_streamLock)
+        {
+            if (enable) _iqStreamEnabled.Add(rx);
+            else _iqStreamEnabled.Remove(rx);
+        }
+        Send(TciProtocol.Command("iq_start", rx, enable));
+    }
+
     public void Dispose()
     {
         _rateLimiter.Dispose();
+        _outboundSignal.Dispose();
+    }
+}
+
+internal enum TciOutboundPriority
+{
+    Urgent,
+    Binary,
+    Control,
+}
+
+internal readonly struct TciOutboundFrame
+{
+    public readonly string? Text;
+    public readonly byte[]? Bytes;
+
+    public bool IsBinary => Bytes is not null;
+
+    public TciOutboundFrame(string text)
+    {
+        Text = text;
+        Bytes = null;
+    }
+
+    public TciOutboundFrame(byte[] bytes)
+    {
+        Text = null;
+        Bytes = bytes;
     }
 }

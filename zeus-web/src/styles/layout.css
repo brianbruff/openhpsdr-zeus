@@ -1160,8 +1160,8 @@
     overflow-x: hidden;
     min-width: 0;
   }
-  /* Override inline min-width: 360 on the visible ZOOM·DRIVE·MIC ctrl-group so
-     the two remaining sliders shrink to fit narrow viewports. */
+  /* Override inline min-width on the visible ZOOM ctrl-group so it shrinks
+     to fit narrow viewports. */
   .control-strip .ctrl-group { min-width: 0 !important; }
   .control-strip .btn-row { min-width: 0; flex: 1; }
   .control-strip .knob-group { min-width: 0; flex: 1; }

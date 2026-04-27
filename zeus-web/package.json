@@ -16,6 +16,7 @@
   "dependencies": {
     "flexlayout-react": "^0.8.19",
     "leaflet": "^1.9.4",
+    "lucide-react": "^1.11.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-leaflet": "^5.0.0",

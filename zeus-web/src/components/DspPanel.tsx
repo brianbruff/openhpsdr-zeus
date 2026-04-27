@@ -53,6 +53,7 @@ import {
 import { useConnectionStore } from '../state/connection-store';
 import { useTxStore } from '../state/tx-store';
 import { Slider } from './design/Slider';
+import { NrSettingsSection, type NrSettingsMode } from './nr/NrSettingsSection';
 
 // Leveler max-gain slider bounds — matches backend clamp and the HL2
 // community-recommended range. 0.5 dB steps give a useful resolution
@@ -68,14 +69,37 @@ function quantizeLvlr(v: number): number {
   return Math.round(snapped * 10) / 10;
 }
 
-// Mirrors NrControls.tsx — cycle order matches Thetis WDSP semantics. ANR
-// and EMNR are mutually exclusive in WDSP so both ride the single nrMode.
-const NR_CYCLE: readonly NrMode[] = ['Off', 'Anr', 'Emnr'];
+// Mirrors NrControls.tsx — cycle order matches Thetis WDSP semantics. NR3
+// (RNNR) is intentionally skipped — see issue #79. The four modes are
+// mutually exclusive in WDSP so they all ride the single nrMode.
+const NR_CYCLE: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr'];
 const NR_LABEL: Record<NrMode, string> = {
   Off: 'NR',
   Anr: 'NR',
   Emnr: 'NR2',
+  Sbnr: 'NR4',
 };
+
+function nrButtonTitle(mode: NrMode): string {
+  switch (mode) {
+    case 'Off': return 'Noise reduction off (right-click for tunables)';
+    case 'Anr': return 'NR1 (ANR, time-domain LMS) — right-click for tunables';
+    case 'Emnr': return 'NR2 (EMNR, spectral) — right-click for tunables';
+    case 'Sbnr': return 'NR4 (SBNR, libspecbleach) — right-click for tunables';
+  }
+}
+
+// Only NR1 and NR2 have a tunables panel today (NR4 is silently inert
+// until the Phase 1 libwdsp rebuild ships, so its panel is suppressed).
+// Mirrors NrControls.tsx.
+function settingsModeFor(nrMode: NrMode): NrSettingsMode {
+  if (nrMode === 'Anr' || nrMode === 'Emnr') return nrMode;
+  return 'Emnr';
+}
+
+function hasNrSettings(nrMode: NrMode): boolean {
+  return nrMode === 'Anr' || nrMode === 'Emnr';
+}
 
 const NB_CYCLE: readonly NbMode[] = ['Off', 'Nb1', 'Nb2'];
 const NB_LABEL: Record<NbMode, string> = {
@@ -98,6 +122,7 @@ export function DspPanel() {
   const lvlrDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lvlrLastSent = useRef<number>(levelerMaxGainDb);
   const lvlrPrevOnError = useRef<number>(levelerMaxGainDb);
+
   useEffect(
     () => () => {
       inflightAbort.current?.abort();
@@ -162,10 +187,11 @@ export function DspPanel() {
   );
 
   const cycleNr = useCallback(() => {
+    if (!connected) return;
     const idx = NR_CYCLE.indexOf(nr.nrMode);
     const nextIdx = (idx < 0 ? 0 : idx + 1) % NR_CYCLE.length;
     send({ ...nr, nrMode: NR_CYCLE[nextIdx]! });
-  }, [nr, send]);
+  }, [nr, send, connected]);
 
   const cycleNb = useCallback(() => {
     const idx = NB_CYCLE.indexOf(nr.nbMode);
@@ -195,6 +221,7 @@ export function DspPanel() {
   const nbActive = nr.nbMode !== 'Off';
 
   return (
+    <>
     <div className="dsp-grid">
       <div className="dsp-row">
         <button
@@ -222,16 +249,10 @@ export function DspPanel() {
       <div className="dsp-row">
         <button
           type="button"
-          disabled={!connected}
           onClick={cycleNr}
+          aria-disabled={!connected}
           className={`btn sm ${nrActive ? 'active' : ''}`}
-          title={
-            nr.nrMode === 'Off'
-              ? 'Noise reduction off'
-              : nr.nrMode === 'Anr'
-                ? 'NR1 (ANR, time-domain LMS)'
-                : 'NR2 (EMNR, spectral)'
-          }
+          title={nrButtonTitle(nr.nrMode)}
         >
           {NR_LABEL[nr.nrMode]}
         </button>
@@ -277,6 +298,10 @@ export function DspPanel() {
           disabled={!connected}
         />
       </div>
+      {hasNrSettings(nr.nrMode) && (
+        <NrSettingsSection mode={settingsModeFor(nr.nrMode)} />
+      )}
     </div>
+    </>
   );
 }

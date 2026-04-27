@@ -124,7 +124,12 @@ export function AttenuatorSlider() {
         }
         className={`btn sm ${autoEnabled ? 'active' : ''} ${overload ? 'overload' : ''}`}
       >
-        {autoEnabled ? 'A-ATT' : 'S-ATT'}
+        {/* Issue #126 — Dfinitski / HPSDR convention: this control is the
+            Step Attenuator (S-ATT). The button toggles the auto-att overlay
+            on top of it; "active" CSS class conveys that auto state without
+            renaming the control itself. Previously read "A-ATT" while auto
+            was on, which was non-standard nomenclature. */}
+        S-ATT
       </button>
       <input
         type="range"

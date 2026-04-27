@@ -6,6 +6,11 @@ zeus-web/dist/
 zeus-web/dev-dist/
 Zeus.Server/wwwroot/
 
+# Stray npm artifacts from running `npm install` at the repo root.
+# Zeus has no root-level package.json — the JS app lives under zeus-web/.
+/node_modules/
+/package-lock.json
+
 # TypeScript incremental-build cache — rewritten on every `tsc -b`, never code
 *.tsbuildinfo
 

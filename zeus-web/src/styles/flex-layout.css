@@ -4,15 +4,18 @@
    console look. Uses the same CSS variables as layout.css / tokens.css.
    ================================================================ */
 
-/* Container */
+/* Container — match the default `.app` background (--bg-0) so unfilled
+   space and splitter "gaps" read like the default workspace's 6px gutters
+   rather than the lighter --bg-workspace blue-gray. */
 .flexlayout__layout {
-  background: var(--bg-workspace, #575e6b);
+  background: var(--bg-0, #1a1b1e);
 }
 
-/* Tabset (panel container) */
+/* Tabset (panel container) — borders removed; the dark splitter gaps now
+   provide separation, matching the default `.workspace` grid-gap look. */
 .flexlayout__tabset {
-  background: var(--bg-0, #1a1b1e);
-  border: 1px solid var(--panel-border, #0d0d10);
+  background: var(--bg-1, #2a2b2e);
+  border: none;
 }
 
 .flexlayout__tabset_header {
@@ -63,15 +66,20 @@
   text-overflow: ellipsis;
 }
 
-/* Tab content area */
+/* Tab content area — match the tabset (.--bg-1) so content blends into
+   the panel wrapper, mirroring how default `.panel`/`.panel-body` share
+   --bg-1. Individual panel components (e.g. .qrz-card, .az-map) override
+   this with their own --bg-1 anyway, so this just covers the gap. */
 .flexlayout__tab {
-  background: var(--bg-0, #1a1b1e);
+  background: var(--bg-1, #2a2b2e);
   overflow: hidden;
 }
 
-/* Splitter (resize handle) */
+/* Splitter (resize handle) — same color as the outer container so the
+   gap between tabsets reads as a flat dark gutter (like default's
+   `.workspace { gap: 6px }`). Accent only on hover/drag. */
 .flexlayout__splitter {
-  background: var(--bg-workspace, #575e6b);
+  background: var(--bg-0, #1a1b1e);
   transition: background 120ms;
 }
 

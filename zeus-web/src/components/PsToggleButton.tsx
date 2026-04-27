@@ -63,7 +63,7 @@ export function PsToggleButton() {
       type="button"
       disabled={disabled}
       onClick={click}
-      className={`btn lg tx-btn ${psEnabled ? 'tx' : ''}`}
+      className={`btn tx-btn ${psEnabled ? 'tx' : ''}`}
       title={tooltip}
     >
       <span className={`led ${psEnabled ? 'tx' : ''}`} style={{ marginRight: 8 }} />

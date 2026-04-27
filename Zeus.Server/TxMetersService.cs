@@ -68,6 +68,12 @@ public sealed class TxMetersService : BackgroundService
     // Thetis uses a 90/10 split on the raw ADC (console.cs:25011).
     private const double SmoothAlpha = 0.90;
 
+    /// <summary>
+    /// Raised when TX meter values are updated (approximately 10 Hz during MOX).
+    /// Arguments: (fwdWatts, refWatts, swr, alcPk, alcGr)
+    /// </summary>
+    public event Action<float, float, float, float, float>? TxMetersUpdated;
+
     // Wire FWD ≤ 2 W as a floor for SWR; below the bridge noise dominates
     // and the ratio is meaningless (Thetis does the same in console.cs:25974).
     private const double SwrMinFwdWatts = 2.0;
@@ -311,6 +317,9 @@ public sealed class TxMetersService : BackgroundService
                 }
 
                 _hub.Broadcast(frame);
+
+                // Raise TCI meter event (FWD, REF, SWR, ALC peak, ALC GR)
+                TxMetersUpdated?.Invoke(frame.FwdWatts, frame.RefWatts, frame.Swr, frame.AlcPk, frame.AlcGr);
 
                 // PureSignal stage meters — broadcast only while PsEnabled is
                 // armed so idle wire stays quiet. The engine returns

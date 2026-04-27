@@ -231,4 +231,87 @@ public class TciProtocolTests
         Assert.True(success);
         Assert.Equal(expected, value, precision: 5);
     }
+
+    [Fact]
+    public void Command_AgcGain_FormatsQueryCorrectly()
+    {
+        // agc_gain:<rx>,<db> — query response
+        var result = TciProtocol.Command("agc_gain", 0, 80);
+        Assert.Equal("agc_gain:0,80;", result);
+    }
+
+    [Theory]
+    [InlineData(-20)]
+    [InlineData(0)]
+    [InlineData(80)]
+    [InlineData(120)]
+    public void Command_AgcGain_FormatsWithValidRange(int db)
+    {
+        var result = TciProtocol.Command("agc_gain", 0, db);
+        Assert.Equal($"agc_gain:0,{db};", result);
+    }
+
+    [Fact]
+    public void Parse_AgcGainQuery_ParsesCorrectly()
+    {
+        var parsed = TciProtocol.Parse("agc_gain:0;");
+        Assert.NotNull(parsed);
+        Assert.Equal("agc_gain", parsed.Value.command);
+        Assert.Single(parsed.Value.args);
+        Assert.Equal("0", parsed.Value.args[0]);
+    }
+
+    [Fact]
+    public void Parse_AgcGainSet_ParsesCorrectly()
+    {
+        var parsed = TciProtocol.Parse("agc_gain:0,85;");
+        Assert.NotNull(parsed);
+        Assert.Equal("agc_gain", parsed.Value.command);
+        Assert.Equal(2, parsed.Value.args.Length);
+        Assert.Equal("0", parsed.Value.args[0]);
+        Assert.Equal("85", parsed.Value.args[1]);
+    }
+
+    [Fact]
+    public void Command_RxSmeter_FormatsCorrectly()
+    {
+        // rx_smeter:<rx>,<chan>,<dbm>
+        var result = TciProtocol.Command("rx_smeter", 0, 0, -73);
+        Assert.Equal("rx_smeter:0,0,-73;", result);
+    }
+
+    [Theory]
+    [InlineData(0, -120)]
+    [InlineData(0, -73)]
+    [InlineData(0, -40)]
+    [InlineData(0, 0)]
+    public void Command_RxSmeter_FormatsWithVariousDbm(int channel, int dbm)
+    {
+        var result = TciProtocol.Command("rx_smeter", 0, channel, dbm);
+        Assert.Equal($"rx_smeter:0,{channel},{dbm};", result);
+    }
+
+    [Fact]
+    public void Command_TxPower_FormatsCorrectly()
+    {
+        // tx_power:<watts>
+        var result = TciProtocol.Command("tx_power", 50);
+        Assert.Equal("tx_power:50;", result);
+    }
+
+    [Fact]
+    public void Command_TxSwr_FormatsCorrectly()
+    {
+        // tx_swr:<ratio> — formatted as decimal string
+        var result = TciProtocol.Command("tx_swr", "1.5");
+        Assert.Equal("tx_swr:1.5;", result);
+    }
+
+    [Fact]
+    public void Command_TxAlc_FormatsCorrectly()
+    {
+        // tx_alc:<percent> — ALC as percentage 0-100
+        var result = TciProtocol.Command("tx_alc", 25);
+        Assert.Equal("tx_alc:25;", result);
+    }
 }

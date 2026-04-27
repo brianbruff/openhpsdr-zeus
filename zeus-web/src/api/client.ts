@@ -62,7 +62,7 @@ export type RxMode =
   | 'DIGL'
   | 'DIGU';
 
-export type NrMode = 'Off' | 'Anr' | 'Emnr';
+export type NrMode = 'Off' | 'Anr' | 'Emnr' | 'Sbnr';
 export type NbMode = 'Off' | 'Nb1' | 'Nb2';
 
 export type NrConfigDto = {
@@ -72,6 +72,20 @@ export type NrConfigDto = {
   nbpNotchesEnabled: boolean;
   nbMode: NbMode;
   nbThreshold: number;
+  // NR2 (EMNR) post2 comfort-noise tunables — null means "use engine default".
+  emnrPost2Run?: boolean | null;
+  emnrPost2Factor?: number | null;
+  emnrPost2Nlevel?: number | null;
+  emnrPost2Rate?: number | null;
+  emnrPost2Taper?: number | null;
+  // NR4 (SBNR / libspecbleach) tunables — null means "use engine default".
+  nr4ReductionAmount?: number | null;
+  nr4SmoothingFactor?: number | null;
+  nr4WhiteningFactor?: number | null;
+  nr4NoiseRescale?: number | null;
+  nr4PostFilterThreshold?: number | null;
+  nr4NoiseScalingType?: number | null;
+  nr4Position?: number | null;
 };
 
 export const NR_CONFIG_DEFAULT: NrConfigDto = {
@@ -82,6 +96,27 @@ export const NR_CONFIG_DEFAULT: NrConfigDto = {
   nbMode: 'Off',
   nbThreshold: 20,
 };
+
+// Engine-side defaults for the popover. Sourced from
+// WdspDspEngine.NrDefaults / Thetis radio.cs:2350-2462. The popover seeds
+// its initial form values from these when the persisted config has nulls.
+export const NR2_POST2_DEFAULTS = {
+  run: true,
+  factor: 0.15,
+  nlevel: 0.15,
+  rate: 5.0,
+  taper: 12,
+} as const;
+
+export const NR4_DEFAULTS = {
+  reductionAmount: 10.0,
+  smoothingFactor: 0.0,
+  whiteningFactor: 0.0,
+  noiseRescale: 2.0,
+  postFilterThreshold: 0.0,
+  noiseScalingType: 0,
+  position: 1,
+} as const;
 
 // Integer 1..8. Backend accepts up to 16 (SyntheticDspEngine.MaxZoomLevel)
 // but anything past 8 doesn't visibly narrow the span further at current
@@ -129,6 +164,47 @@ export type RadioStateDto = {
   twoToneFreq1: number;
   twoToneFreq2: number;
   twoToneMag: number;
+  // CFC (Continuous Frequency Compressor) — issue #123. Always present
+  // after normalisation; falls back to CFC_CONFIG_DEFAULT when the server
+  // omits it (legacy state frames).
+  cfc: CfcConfigDto;
+};
+
+// CFC mirrors Zeus.Contracts.CfcConfig. Bands array is fixed at 10 entries
+// — the panel layout depends on it; the server validates the same.
+export type CfcBandDto = {
+  freqHz: number;
+  compLevelDb: number;
+  postGainDb: number;
+};
+export type CfcConfigDto = {
+  enabled: boolean;
+  postEqEnabled: boolean;
+  preCompDb: number;
+  prePeqDb: number;
+  bands: CfcBandDto[];
+};
+
+// Pihpsdr classic-mode default — voice-band split the operator recognises
+// from PowerSDR. Master OFF + zeroed comp/post means a fresh enable is
+// audibly transparent. Mirrors CfcConfig.Default on the server.
+export const CFC_CONFIG_DEFAULT: CfcConfigDto = {
+  enabled: false,
+  postEqEnabled: false,
+  preCompDb: 0,
+  prePeqDb: 0,
+  bands: [
+    { freqHz: 50,   compLevelDb: 0, postGainDb: 0 },
+    { freqHz: 100,  compLevelDb: 0, postGainDb: 0 },
+    { freqHz: 200,  compLevelDb: 0, postGainDb: 0 },
+    { freqHz: 500,  compLevelDb: 0, postGainDb: 0 },
+    { freqHz: 1000, compLevelDb: 0, postGainDb: 0 },
+    { freqHz: 1500, compLevelDb: 0, postGainDb: 0 },
+    { freqHz: 2000, compLevelDb: 0, postGainDb: 0 },
+    { freqHz: 2500, compLevelDb: 0, postGainDb: 0 },
+    { freqHz: 3000, compLevelDb: 0, postGainDb: 0 },
+    { freqHz: 5000, compLevelDb: 0, postGainDb: 0 },
+  ],
 };
 
 export type FilterPresetDto = {
@@ -179,7 +255,7 @@ const MODE_ORDER: readonly RxMode[] = [
   'DIGU',
 ];
 
-const NR_MODE_ORDER: readonly NrMode[] = ['Off', 'Anr', 'Emnr'];
+const NR_MODE_ORDER: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr'];
 const NB_MODE_ORDER: readonly NbMode[] = ['Off', 'Nb1', 'Nb2'];
 
 export function normalizeStatus(v: unknown): ConnectionStatus {
@@ -230,6 +306,20 @@ export function normalizeNbMode(v: unknown): NbMode {
   return 'Off';
 }
 
+// `null` means "no operator override yet — use engine default" and round-
+// trips that signal back to the server. Anything else (number/bool) is
+// preserved; missing keys collapse to null so an older server payload
+// doesn't accidentally invent a value.
+function nullableNumber(v: unknown): number | null {
+  return typeof v === 'number' ? v : null;
+}
+function nullableBool(v: unknown): boolean | null {
+  return typeof v === 'boolean' ? v : null;
+}
+function nullableInt(v: unknown): number | null {
+  return typeof v === 'number' && Number.isInteger(v) ? v : null;
+}
+
 export function normalizeNr(raw: unknown): NrConfigDto {
   if (!raw || typeof raw !== 'object') return { ...NR_CONFIG_DEFAULT };
   const r = raw as Record<string, unknown>;
@@ -243,6 +333,18 @@ export function normalizeNr(raw: unknown): NrConfigDto {
       typeof r.nbThreshold === 'number'
         ? r.nbThreshold
         : NR_CONFIG_DEFAULT.nbThreshold,
+    emnrPost2Run: nullableBool(r.emnrPost2Run),
+    emnrPost2Factor: nullableNumber(r.emnrPost2Factor),
+    emnrPost2Nlevel: nullableNumber(r.emnrPost2Nlevel),
+    emnrPost2Rate: nullableNumber(r.emnrPost2Rate),
+    emnrPost2Taper: nullableInt(r.emnrPost2Taper),
+    nr4ReductionAmount: nullableNumber(r.nr4ReductionAmount),
+    nr4SmoothingFactor: nullableNumber(r.nr4SmoothingFactor),
+    nr4WhiteningFactor: nullableNumber(r.nr4WhiteningFactor),
+    nr4NoiseRescale: nullableNumber(r.nr4NoiseRescale),
+    nr4PostFilterThreshold: nullableNumber(r.nr4PostFilterThreshold),
+    nr4NoiseScalingType: nullableInt(r.nr4NoiseScalingType),
+    nr4Position: nullableInt(r.nr4Position),
   };
 }
 
@@ -294,6 +396,50 @@ export function normalizeState(raw: unknown): RadioStateDto {
     twoToneFreq1: typeof r.twoToneFreq1 === 'number' ? r.twoToneFreq1 : 700,
     twoToneFreq2: typeof r.twoToneFreq2 === 'number' ? r.twoToneFreq2 : 1900,
     twoToneMag: typeof r.twoToneMag === 'number' ? r.twoToneMag : 0.49,
+    cfc: normalizeCfc(r.cfc),
+  };
+}
+
+// Normalise the wire CFC config. Missing or malformed payload falls back to
+// CFC_CONFIG_DEFAULT so a legacy server (no `cfc` field) still gives the
+// settings panel something to render. Bands are clamped to length 10 by
+// padding with the matching default-band slot if the server somehow returns
+// fewer; extras are truncated. The server validates length on POST.
+export function normalizeCfc(raw: unknown): CfcConfigDto {
+  if (!raw || typeof raw !== 'object') return cloneCfc(CFC_CONFIG_DEFAULT);
+  const r = raw as Record<string, unknown>;
+  const rawBands = Array.isArray(r.bands) ? (r.bands as unknown[]) : [];
+  const bands: CfcBandDto[] = [];
+  for (let i = 0; i < 10; i++) {
+    const b = (rawBands[i] ?? {}) as Record<string, unknown>;
+    // CFC_CONFIG_DEFAULT.bands has exactly 10 entries (frozen at module
+    // init), so the indexed lookup is always defined — but tsc's
+    // noUncheckedIndexedAccess can't see that, so fall through with a
+    // zeroed band as a belt-and-braces guard.
+    const fallback =
+      CFC_CONFIG_DEFAULT.bands[i] ?? { freqHz: 0, compLevelDb: 0, postGainDb: 0 };
+    bands.push({
+      freqHz: typeof b.freqHz === 'number' ? b.freqHz : fallback.freqHz,
+      compLevelDb: typeof b.compLevelDb === 'number' ? b.compLevelDb : fallback.compLevelDb,
+      postGainDb: typeof b.postGainDb === 'number' ? b.postGainDb : fallback.postGainDb,
+    });
+  }
+  return {
+    enabled: typeof r.enabled === 'boolean' ? r.enabled : false,
+    postEqEnabled: typeof r.postEqEnabled === 'boolean' ? r.postEqEnabled : false,
+    preCompDb: typeof r.preCompDb === 'number' ? r.preCompDb : 0,
+    prePeqDb: typeof r.prePeqDb === 'number' ? r.prePeqDb : 0,
+    bands,
+  };
+}
+
+function cloneCfc(c: CfcConfigDto): CfcConfigDto {
+  return {
+    enabled: c.enabled,
+    postEqEnabled: c.postEqEnabled,
+    preCompDb: c.preCompDb,
+    prePeqDb: c.prePeqDb,
+    bands: c.bands.map((b) => ({ ...b })),
   };
 }
 
@@ -741,9 +887,64 @@ export function setNr(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       // Server registers JsonStringEnumConverter, so NrMode/NbMode travel as
-      // PascalCase strings ("Off"/"Anr"/"Emnr", "Off"/"Nb1"/"Nb2"). Unknown
-      // values get a 400, which ApiError surfaces to the caller.
+      // PascalCase strings ("Off"/"Anr"/"Emnr"/"Sbnr", "Off"/"Nb1"/"Nb2").
+      // Unknown values get a 400, which ApiError surfaces to the caller.
       body: JSON.stringify({ nr }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+// PATCH-style request for the NR2 right-click popover. All fields nullable;
+// server merges onto the persisted NrConfig and returns the full state so
+// the frontend can reconcile.
+export type Nr2Post2PatchBody = {
+  post2Run?: boolean | null;
+  post2Factor?: number | null;
+  post2Nlevel?: number | null;
+  post2Rate?: number | null;
+  post2Taper?: number | null;
+};
+
+export function setNr2Post2(
+  body: Nr2Post2PatchBody,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/rx/nr2/post2',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+// PATCH-style request for the NR4 right-click popover. Same merge semantics
+// as setNr2Post2.
+export type Nr4PatchBody = {
+  reductionAmount?: number | null;
+  smoothingFactor?: number | null;
+  whiteningFactor?: number | null;
+  noiseRescale?: number | null;
+  postFilterThreshold?: number | null;
+  noiseScalingType?: number | null;
+  position?: number | null;
+};
+
+export function setNr4(
+  body: Nr4PatchBody,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/rx/nr4',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
       signal,
     },
     normalizeState,
@@ -999,6 +1200,29 @@ export async function setPsFeedbackSource(
   );
 }
 
+// PS-Monitor toggle (issue #121). When on AND PS is armed AND PS has
+// converged, the TX panadapter switches its source from the post-CFIR
+// predistorted-IQ analyzer to the PS-feedback (post-PA loopback) analyzer
+// so the operator sees the actual on-air RF instead of the predistorted
+// baseband. Default off — preserves the Thetis-style predistorted view.
+// Server-side this is a pure UI source-routing flag; no WDSP setter, no
+// wire-format change, default-off is byte-identical to pre-#121.
+export async function setPsMonitor(
+  enabled: boolean,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/ps/monitor',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+      signal,
+    },
+    (raw) => raw as RadioStateDto,
+  );
+}
+
 export async function resetPs(signal?: AbortSignal): Promise<void> {
   await jsonFetch('/api/tx/ps/reset', { method: 'POST', signal }, () => null);
 }
@@ -1026,6 +1250,26 @@ export async function restorePs(filename: string, signal?: AbortSignal): Promise
       signal,
     },
     () => null,
+  );
+}
+
+// CFC (Continuous Frequency Compressor) — issue #123. POSTs the full
+// 10-band CFC profile + master flags. Server treats this as the
+// authoritative state and persists it. Optimistic-update pattern lives in
+// the panel — failures roll the local store back to the prior config.
+export async function setCfcConfig(
+  cfg: CfcConfigDto,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/cfc',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ config: cfg }),
+      signal,
+    },
+    (raw) => normalizeState(raw),
   );
 }
 

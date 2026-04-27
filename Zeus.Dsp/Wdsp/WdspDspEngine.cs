@@ -211,6 +211,30 @@ public sealed class WdspDspEngine : IDspEngine
     private int _txDispRxSampleRateHz;
     private bool _txDispAlive;
 
+    // PureSignal feedback display analyzer (issue #121). Optional second WDSP
+    // disp slot fed from FeedPsFeedbackBlock's rxI/rxQ — i.e. the post-PA
+    // signal observed via the radio's loopback ADC. When the operator turns on
+    // the "Monitor PA output" toggle (StateDto.PsMonitorEnabled) AND PS is
+    // armed AND calcc reports correcting=true, DspPipelineService.Tick reads
+    // pixels from this analyzer instead of the post-CFIR TX analyzer so the
+    // panadapter shows the actual on-air RF rather than the predistorted
+    // baseband. Lifecycle is paired with SetPsEnabled(true/false): we open
+    // the disp slot when PS arms and tear it down when PS disarms so the
+    // WDSP analyzer table doesn't leak.
+    //
+    // Pixel width / zoom / matched RX sample rate are inherited from the TX
+    // analyzer at arm time so display frames slot in with no resize when the
+    // toggle flips. If the TX analyzer isn't alive (no RXA, or rate mismatch)
+    // the PS-FB analyzer is also skipped — Tick will fall through to the TX
+    // analyzer (or RX analyzer) the same as today.
+    private readonly object _psFbDispLock = new();
+    private int? _psFbDispId;
+    private int _psFbDispPixelWidth;
+    private int _psFbDispZoomLevel = 1;
+    private int _psFbDispRxSampleRateHz;
+    private bool _psFbDispAlive;
+    private long _psFbFeedCount;
+
     // PureSignal state. _psLock serializes the WDSP PS setters (which mutate
     // shared state inside calcc.c) and FeedPsFeedbackBlock. _psInfoBuf is
     // pinned once and reused on every GetPSInfo call.
@@ -226,6 +250,11 @@ public sealed class WdspDspEngine : IDspEngine
     private double _psAmpDelayNs = 150.0;
     private bool _psPtol;                // false = strict 0.8 ; true = relax 0.4 (matches pihpsdr/Thetis: ptol ? 0.4 : 0.8)
     private const int PsFeedbackBlockSize = 1024;
+    // PS feedback IQ runs at 192 kHz on G2 / Saturn / ANAN-7000 (P2 paired
+    // DDC0/DDC1 — see SetPSFeedbackRate(id, 192_000) in OpenTxChannel).
+    // Used when configuring the PS-feedback display analyzer so its bin-clip
+    // math matches the data rate it's receiving.
+    private const int PsFeedbackSampleRateHz = 192_000;
     private readonly int[] _psInfoBuf = new int[16];
     // Edge-triggered state-transition log target. 255 is an out-of-range
     // sentinel so the first observed state always logs (LRESET..LTURNON
@@ -487,7 +516,19 @@ public sealed class WdspDspEngine : IDspEngine
             {
                 _txDispZoomLevel = level;
                 txaIdToReconfig = txa;
-                TryConfigureTxAnalyzer(txa, _txaOutputRateHz, _txaOutSize, _txDispRxSampleRateHz, _txDispPixelWidth, level);
+                TryConfigureTxAnalyzer(txa, _txaDspRateHz, _txaDspSize, _txDispRxSampleRateHz, _txDispPixelWidth, level);
+            }
+        }
+
+        // Mirror zoom onto the PS-FB analyzer when it's open, same reasoning
+        // as the TX analyzer: keep the PA-output trace span lock-step with the
+        // RX panadapter so toggling the PS-Monitor view doesn't shift the axis.
+        lock (_psFbDispLock)
+        {
+            if (_psFbDispAlive && _psFbDispId is int psFb)
+            {
+                _psFbDispZoomLevel = level;
+                TryConfigureTxAnalyzer(psFb, PsFeedbackSampleRateHz, PsFeedbackBlockSize, _psFbDispRxSampleRateHz, _psFbDispPixelWidth, level);
             }
         }
 
@@ -508,12 +549,14 @@ public sealed class WdspDspEngine : IDspEngine
         {
             case NrMode.Anr:
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
+                TrySetSbnrRun(channelId, 0);
                 NativeMethods.SetRXAANRVals(channelId, NrDefaults.AnrTaps, NrDefaults.AnrDelay, NrDefaults.AnrGain, NrDefaults.AnrLeakage);
                 NativeMethods.SetRXAANRPosition(channelId, NrDefaults.Position);
                 NativeMethods.SetRXAANRRun(channelId, 1);
                 break;
             case NrMode.Emnr:
                 NativeMethods.SetRXAANRRun(channelId, 0);
+                TrySetSbnrRun(channelId, 0);
                 NativeMethods.SetRXAEMNRgainMethod(channelId, NrDefaults.EmnrGainMethod);
                 NativeMethods.SetRXAEMNRnpeMethod(channelId, NrDefaults.EmnrNpeMethod);
                 NativeMethods.SetRXAEMNRaeRun(channelId, NrDefaults.EmnrAeRun);
@@ -521,19 +564,28 @@ public sealed class WdspDspEngine : IDspEngine
                 // post2 comfort-noise injection. emnr.c:981–1023 generates a
                 // smoothed noise floor that masks residual EMNR warble — the
                 // psychoacoustic mechanism behind Thetis's noticeably smoother
-                // NR2 hiss. Configure params before flipping post2Run, then
-                // Run=1 below activates EMNR with post2 already armed.
-                NativeMethods.SetRXAEMNRpost2Factor(channelId, NrDefaults.EmnrPost2Factor);
-                NativeMethods.SetRXAEMNRpost2Nlevel(channelId, NrDefaults.EmnrPost2Nlevel);
-                NativeMethods.SetRXAEMNRpost2Rate(channelId, NrDefaults.EmnrPost2Rate);
-                NativeMethods.SetRXAEMNRpost2Taper(channelId, NrDefaults.EmnrPost2Taper);
-                NativeMethods.SetRXAEMNRpost2Run(channelId, NrDefaults.EmnrPost2Run);
+                // NR2 hiss. Operator-tunable values come from cfg; null falls
+                // back to the Thetis-derived NrDefaults baseline.
+                ApplyNr2Post2(channelId, cfg);
                 NativeMethods.SetRXAEMNRRun(channelId, 1);
+                break;
+            case NrMode.Sbnr:
+                // NR4 — libspecbleach spectral bleaching. Disable the other
+                // post-RXA NR paths first (mutual exclusion), then push the
+                // operator-tuned (or Thetis-default) parameters before flipping
+                // Run=1. Wrapped in TrySetSbnr* so a libwdsp build that
+                // pre-dates Phase 1 (no SBNR exports) leaves the channel in
+                // NR-off rather than crashing the worker.
+                NativeMethods.SetRXAANRRun(channelId, 0);
+                NativeMethods.SetRXAEMNRpost2Run(channelId, 0);
+                NativeMethods.SetRXAEMNRRun(channelId, 0);
+                ApplyNr4Sbnr(channelId, cfg);
                 break;
             default:
                 NativeMethods.SetRXAANRRun(channelId, 0);
                 NativeMethods.SetRXAEMNRpost2Run(channelId, 0);
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
+                TrySetSbnrRun(channelId, 0);
                 break;
         }
 
@@ -586,6 +638,55 @@ public sealed class WdspDspEngine : IDspEngine
             cfg.NbMode, scaledThreshold);
     }
 
+    // NR2 (EMNR) post2 comfort-noise tunables. Configures all five params
+    // before flipping post2Run so the post-processing stage starts coherent.
+    // Null fields fall back to NrDefaults so the operator's "leave it default"
+    // choice (cleared field) is honoured at write time without baking the
+    // current default into the persisted config.
+    private static void ApplyNr2Post2(int channelId, NrConfig cfg)
+    {
+        NativeMethods.SetRXAEMNRpost2Factor(channelId, cfg.EmnrPost2Factor ?? NrDefaults.EmnrPost2Factor);
+        NativeMethods.SetRXAEMNRpost2Nlevel(channelId, cfg.EmnrPost2Nlevel ?? NrDefaults.EmnrPost2Nlevel);
+        NativeMethods.SetRXAEMNRpost2Rate(channelId, cfg.EmnrPost2Rate ?? NrDefaults.EmnrPost2Rate);
+        NativeMethods.SetRXAEMNRpost2Taper(channelId, cfg.EmnrPost2Taper ?? NrDefaults.EmnrPost2Taper);
+        bool runOn = cfg.EmnrPost2Run ?? (NrDefaults.EmnrPost2Run != 0);
+        NativeMethods.SetRXAEMNRpost2Run(channelId, runOn ? 1 : 0);
+    }
+
+    // NR4 (SBNR / libspecbleach) parameter push + Run=1. Native setters take
+    // float; we downcast at the seam. Wrapped in TrySet* because a libwdsp
+    // built without Phase 1 of issue #79 will throw EntryPointNotFoundException
+    // here — the operator gets NR-off behaviour instead of a worker crash.
+    private void ApplyNr4Sbnr(int channelId, NrConfig cfg)
+    {
+        try
+        {
+            NativeMethods.SetRXASBNRPosition(channelId, cfg.Nr4Position ?? NrDefaults.Nr4Position);
+            NativeMethods.SetRXASBNRreductionAmount(channelId, (float)(cfg.Nr4ReductionAmount ?? NrDefaults.Nr4ReductionAmount));
+            NativeMethods.SetRXASBNRsmoothingFactor(channelId, (float)(cfg.Nr4SmoothingFactor ?? NrDefaults.Nr4SmoothingFactor));
+            NativeMethods.SetRXASBNRwhiteningFactor(channelId, (float)(cfg.Nr4WhiteningFactor ?? NrDefaults.Nr4WhiteningFactor));
+            NativeMethods.SetRXASBNRnoiseRescale(channelId, (float)(cfg.Nr4NoiseRescale ?? NrDefaults.Nr4NoiseRescale));
+            NativeMethods.SetRXASBNRpostFilterThreshold(channelId, (float)(cfg.Nr4PostFilterThreshold ?? NrDefaults.Nr4PostFilterThreshold));
+            NativeMethods.SetRXASBNRnoiseScalingType(channelId, cfg.Nr4NoiseScalingType ?? NrDefaults.Nr4NoiseScalingType);
+            NativeMethods.SetRXASBNRRun(channelId, 1);
+        }
+        catch (EntryPointNotFoundException ex)
+        {
+            _log.LogWarning(
+                "wdsp.sbnr.unavailable channel={Id} reason=\"libwdsp build does not export SBNR symbols (Phase 1 of issue #79 not yet shipped)\" detail={Msg}",
+                channelId, ex.Message);
+        }
+    }
+
+    // Pre-Phase-1-binary safe Run=0 — the only SBNR call we make outside the
+    // Sbnr arm. EntryPointNotFoundException here just means "the library
+    // doesn't have SBNR; nothing to turn off."
+    private void TrySetSbnrRun(int channelId, int run)
+    {
+        try { NativeMethods.SetRXASBNRRun(channelId, run); }
+        catch (EntryPointNotFoundException) { /* libwdsp pre-Phase-1; SBNR is a no-op */ }
+    }
+
     // Post-RXA NR defaults — sourced from Thetis setup.designer.cs + radio.cs.
     // UI-space scaling (gain × 1e-6, leakage × 1e-3) is already resolved: these
     // are the post-scale values WDSP actually receives. See docs/prd/10-noise-reduction.md.
@@ -614,6 +715,18 @@ public sealed class WdspDspEngine : IDspEngine
         public const double EmnrPost2Nlevel = 0.15;
         public const double EmnrPost2Rate = 5.0;
         public const int EmnrPost2Taper = 12;
+
+        // NR4 (SBNR / libspecbleach) defaults — sourced from Thetis radio.cs
+        // :2350-2462 (rx_nr4_* private fields). Native setters take float;
+        // we keep them as double here and downcast at the P/Invoke seam to
+        // match the rest of the contract surface.
+        public const double Nr4ReductionAmount = 10.0;
+        public const double Nr4SmoothingFactor = 0.0;
+        public const double Nr4WhiteningFactor = 0.0;
+        public const double Nr4NoiseRescale = 2.0;
+        public const double Nr4PostFilterThreshold = 0.0;
+        public const int Nr4NoiseScalingType = 0;
+        public const int Nr4Position = 1;
 
         // NB1/NB2 runtime-steady-state params — what Thetis actually runs with
         // once radio.cs's NB property setters have fired (tau=advtime=hangtime
@@ -743,6 +856,31 @@ public sealed class WdspDspEngine : IDspEngine
             if (_txaChannelId is not int txa) return false;
             disp = txa;
             expectedWidth = _txDispPixelWidth;
+            if (dbOut.Length != expectedWidth)
+                throw new ArgumentException($"expected span of {expectedWidth}", nameof(dbOut));
+            NativeMethods.GetPixels(disp, (int)which, ref MemoryMarshal.GetReference(dbOut), out int flag);
+            return flag == 1;
+        }
+    }
+
+    /// <summary>PureSignal feedback panadapter pixels — sourced from the
+    /// post-PA loopback IQ pumped through FeedPsFeedbackBlock. Returns false
+    /// when the PS-FB analyzer is not open (PS disarmed, TX analyzer inactive,
+    /// or engine disposed). Caller is expected to gate this on
+    /// <c>PsEnabled &amp;&amp; PsMonitorEnabled &amp;&amp; PsCorrecting</c> so a
+    /// pre-correction transient doesn't briefly show splatter on the
+    /// panadapter.</summary>
+    public bool TryGetPsFeedbackDisplayPixels(DisplayPixout which, Span<float> dbOut)
+    {
+        if (_disposed != 0) return false;
+        int disp;
+        int expectedWidth;
+        lock (_psFbDispLock)
+        {
+            if (!_psFbDispAlive) return false;
+            if (_psFbDispId is not int id) return false;
+            disp = id;
+            expectedWidth = _psFbDispPixelWidth;
             if (dbOut.Length != expectedWidth)
                 throw new ArgumentException($"expected span of {expectedWidth}", nameof(dbOut));
             NativeMethods.GetPixels(disp, (int)which, ref MemoryMarshal.GetReference(dbOut), out int flag);
@@ -972,10 +1110,18 @@ public sealed class WdspDspEngine : IDspEngine
                         _txDispPixelWidth = rxPixelWidth;
                         _txDispZoomLevel = rxZoom;
                         _txDispRxSampleRateHz = rxSampleRateHz;
-                        configured = TryConfigureTxAnalyzer(id, _txaOutputRateHz, _txaOutSize, rxSampleRateHz, rxPixelWidth, rxZoom);
+                        // Configure for the SIPHON tap point (xsiphon position
+                        // in xtxa — BEFORE iqc/cfir/rsmpout). dsp_rate / dsp_size
+                        // describe the IQ at that stage. Pulling pre-iqc samples
+                        // gives the operator's clean voice spectrum on the
+                        // panadapter, matching Thetis (cmaster.cs:544-545,
+                        // TXA.c:586). Pre-fix the analyzer was configured at
+                        // the OUTPUT (post-cfir/rsmpout) rate and got fed the
+                        // predistorted IQ — cosmetically dirty by design.
+                        configured = TryConfigureTxAnalyzer(id, _txaDspRateHz, _txaDspSize, rxSampleRateHz, rxPixelWidth, rxZoom);
                         if (configured)
                         {
-                            ConfigureDisplayAveraging(id);
+                            ConfigureDisplayAveragingTau(id, TxAvgTauSec);
                             _txDispAlive = true;
                         }
                     }
@@ -1366,10 +1512,21 @@ public sealed class WdspDspEngine : IDspEngine
                 // single-cal cycle (which can leave the SM in LSTAYON) starts
                 // a fresh fit (Thetis PSForm.cs:645,661).
                 NativeMethods.SetPSControl(id, 1, mancal, automode, 0);
+                // Open the PS-feedback display analyzer (issue #121). Inherits
+                // pixel width / zoom / matched RX rate from the TX analyzer so
+                // the PS-Monitor pan/wf frames slot into the same widget the
+                // TX analyzer is rendering into. Skipped when TX analyzer is
+                // off (no RXA, or P1 P2 rate-ratio mismatch) — the toggle
+                // becomes a no-op in that case and Tick keeps falling through
+                // to the existing TX/RX trace.
+                OpenPsFeedbackAnalyzer(id);
             }
             else
             {
                 _psEnabled = false;
+                // Tear down the PS-FB analyzer first so a stale GetPixels
+                // call from Tick doesn't race with WDSP cleaning up the slot.
+                ClosePsFeedbackAnalyzer();
                 // pihpsdr shutdown gotcha (transmitter.c:2422-2444): when
                 // disabling PS while NOT keyed, push 7 zero-IQ blocks through
                 // psccF so the calcc state machine advances to LRESET cleanly
@@ -1384,6 +1541,93 @@ public sealed class WdspDspEngine : IDspEngine
             }
         }
         _log.LogInformation("wdsp.setPsEnabled enabled={Enabled}", enabled);
+    }
+
+    // Open / configure the PS-feedback display analyzer. Caller holds
+    // _psLock. Mirrors the TX analyzer's pixel width / zoom / matched RX
+    // sample rate so DspPipelineService.Tick can pick between TX-pixels and
+    // PS-FB-pixels per tick without a buffer resize.
+    private void OpenPsFeedbackAnalyzer(int txaId)
+    {
+        // Snapshot TX-display geometry under its own lock — we need it whether
+        // or not _txDispAlive is true, but the values are only meaningful when
+        // it is.
+        bool txAlive;
+        int pixelWidth;
+        int rxRate;
+        int zoom;
+        lock (_txDispLock)
+        {
+            txAlive = _txDispAlive;
+            pixelWidth = _txDispPixelWidth;
+            rxRate = _txDispRxSampleRateHz;
+            zoom = _txDispZoomLevel;
+        }
+        if (!txAlive || pixelWidth <= 0)
+        {
+            _log.LogInformation("wdsp.psFb.open skip — txDisp not alive (toggle will fall through to TX pixels)");
+            return;
+        }
+
+        lock (_psFbDispLock)
+        {
+            if (_psFbDispAlive) return;
+
+            // Pick a disp slot that doesn't collide with any RX channel id or
+            // the TXA channel id. WDSP's analyzer table is indexed
+            // independently of channel ids (see comment at OpenTxChannel
+            // analyzer creation), but our own bookkeeping needs the int to be
+            // unique so SetZoom / Spectrum0 / GetPixels reach the right slot.
+            int psFbId = 0;
+            while (_channels.ContainsKey(psFbId) || psFbId == txaId) psFbId++;
+
+            NativeMethods.XCreateAnalyzer(psFbId, out int rc, MaxFftSize, 1, 1, null);
+            if (rc != 0)
+            {
+                _log.LogWarning("wdsp.psFb.open XCreateAnalyzer rc={Rc} — PS-Monitor will fall back to TX trace", rc);
+                return;
+            }
+            bool configured = TryConfigureTxAnalyzer(psFbId, PsFeedbackSampleRateHz, PsFeedbackBlockSize, rxRate, pixelWidth, zoom);
+            if (!configured)
+            {
+                NativeMethods.DestroyAnalyzer(psFbId);
+                _log.LogWarning(
+                    "wdsp.psFb.open skipped — rx={RxRate} psFb={PsFbRate} not an integer multiple; PS-Monitor will fall back to TX trace",
+                    rxRate, PsFeedbackSampleRateHz);
+                return;
+            }
+            ConfigureDisplayAveragingTau(psFbId, TxAvgTauSec);
+            _psFbDispId = psFbId;
+            _psFbDispPixelWidth = pixelWidth;
+            _psFbDispRxSampleRateHz = rxRate;
+            _psFbDispZoomLevel = zoom;
+            _psFbDispAlive = true;
+            _log.LogInformation(
+                "wdsp.psFb.open id={Id} pix={Pix} rxRate={RxRate} psFbRate={PsFbRate} zoom={Zoom}",
+                psFbId, pixelWidth, rxRate, PsFeedbackSampleRateHz, zoom);
+        }
+    }
+
+    // Tear down the PS-feedback display analyzer. Caller holds _psLock so
+    // FeedPsFeedbackBlock can't race in mid-Spectrum0; combined with
+    // _psFbDispLock around GetPixels / Spectrum0 this keeps the analyzer slot
+    // safe to destroy.
+    private void ClosePsFeedbackAnalyzer()
+    {
+        lock (_psFbDispLock)
+        {
+            if (!_psFbDispAlive) return;
+            if (_psFbDispId is int id)
+            {
+                NativeMethods.DestroyAnalyzer(id);
+                _log.LogInformation("wdsp.psFb.close id={Id}", id);
+            }
+            _psFbDispId = null;
+            _psFbDispAlive = false;
+            _psFbDispPixelWidth = 0;
+            _psFbDispRxSampleRateHz = 0;
+            _psFbDispZoomLevel = 1;
+        }
     }
 
     public void FeedPsFeedbackBlock(ReadOnlySpan<float> txI, ReadOnlySpan<float> txQ,
@@ -1423,6 +1667,44 @@ public sealed class WdspDspEngine : IDspEngine
                 // line never appears while keyed + PS armed, the wire path
                 // (Protocol2Client paired-packet decode) isn't running.
                 _log.LogInformation("wdsp.pscc fed {N} blocks", n);
+            }
+        }
+
+        // Feed the PS-feedback display analyzer with the same rxI/rxQ block
+        // (post-PA loopback IQ). DspPipelineService.Tick reads from this
+        // analyzer when PsMonitorEnabled is on, surfacing the actual on-air
+        // signal instead of the predistorted TX-modulator IQ. Q is negated
+        // for the same WDSP analyzer convention used on the RX and TX paths
+        // (see ProcessTxBlock: `txSpectrumIq[2*i + 1] = -qout[i]`); without
+        // it the PS-Monitor view would render with sidebands flipped about
+        // the carrier.
+        if (_psFbDispAlive)
+        {
+            int? psFbId = null;
+            lock (_psFbDispLock)
+            {
+                if (_psFbDispAlive) psFbId = _psFbDispId;
+            }
+            if (psFbId is int fbDisp)
+            {
+                Span<double> psSpectrumIq = stackalloc double[2 * PsFeedbackBlockSize];
+                for (int i = 0; i < PsFeedbackBlockSize; i++)
+                {
+                    psSpectrumIq[2 * i] = bufRxI[i];
+                    psSpectrumIq[2 * i + 1] = -bufRxQ[i];
+                }
+                lock (_psFbDispLock)
+                {
+                    if (_psFbDispAlive && _psFbDispId == fbDisp)
+                    {
+                        NativeMethods.Spectrum0(1, fbDisp, 0, 0, ref psSpectrumIq[0]);
+                        long n = ++_psFbFeedCount;
+                        if (n == 1 || n % 200 == 0)
+                        {
+                            _log.LogInformation("wdsp.psFb.fed n={N} blocks", n);
+                        }
+                    }
+                }
             }
         }
     }
@@ -1565,6 +1847,75 @@ public sealed class WdspDspEngine : IDspEngine
         _log.LogInformation("wdsp.restorePsCorrection path={Path}", path);
     }
 
+    // CFC (Continuous Frequency Compressor) — issue #123. xcfcomp already
+    // sits in xtxa between xeqp and xbandpass; this method just pushes the
+    // operator-tuned profile + scalar params and toggles the run flag.
+    //
+    // Param push order matters: profile + scalars + post-EQ-run all happen
+    // BEFORE the master CFCOMPRun flip. That way when the master toggles on,
+    // the audio pipeline starts processing with a fully-configured stage —
+    // mirrors the same "configure, then enable" Thetis pattern we use for
+    // every other WDSP stage (see SetNoiseReduction NR2/NR4 ordering).
+    //
+    // Pass IntPtr.Zero for Qg/Qe — selects classic non-parametric mode
+    // (cfcomp.c:122-123 falls back to linear interpolation). Matches
+    // pihpsdr's cfc_menu.c, which is the canonical reference per issue #123.
+    public unsafe void SetCfcConfig(CfcConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        if (cfg.Bands is null) throw new ArgumentException("Bands must not be null", nameof(cfg));
+        if (cfg.Bands.Length != 10)
+            throw new ArgumentException($"Bands must have exactly 10 entries; got {cfg.Bands.Length}", nameof(cfg));
+
+        if (_disposed != 0) return;
+
+        int txa;
+        lock (_txaLock)
+        {
+            if (_txaChannelId is not int id) return;
+            txa = id;
+        }
+
+        // Build parallel arrays for SetTXACFCOMPprofile. WDSP sorts internally
+        // (cfcomp.c:147) and clamps to [0, Nyquist], so we don't pre-validate
+        // monotonicity — operators are free to type frequencies in any order.
+        const int nfreqs = 10;
+        double[] f = new double[nfreqs];
+        double[] g = new double[nfreqs];
+        double[] e = new double[nfreqs];
+        for (int i = 0; i < nfreqs; i++)
+        {
+            var band = cfg.Bands[i];
+            f[i] = band.FreqHz;
+            g[i] = band.CompLevelDb;
+            e[i] = band.PostGainDb;
+        }
+
+        lock (_txaLock)
+        {
+            // Re-check inside the lock — TXA could have closed between the
+            // outer lookup and here on a teardown race. Same pattern other
+            // _txaLock callers use.
+            if (_txaChannelId is not int id) return;
+
+            fixed (double* pF = f, pG = g, pE = e)
+            {
+                NativeMethods.SetTXACFCOMPprofile(
+                    id, nfreqs,
+                    ref *pF, ref *pG, ref *pE,
+                    IntPtr.Zero, IntPtr.Zero);
+            }
+            NativeMethods.SetTXACFCOMPPrecomp(id, cfg.PreCompDb);
+            NativeMethods.SetTXACFCOMPPrePeq(id, cfg.PrePeqDb);
+            NativeMethods.SetTXACFCOMPPeqRun(id, cfg.PostEqEnabled ? 1 : 0);
+            NativeMethods.SetTXACFCOMPRun(id, cfg.Enabled ? 1 : 0);
+        }
+
+        _log.LogInformation(
+            "wdsp.setCfc enabled={Enabled} peq={Peq} precomp={Pre:F1}dB prepeq={PrePeq:F1}dB",
+            cfg.Enabled, cfg.PostEqEnabled, cfg.PreCompDb, cfg.PrePeqDb);
+    }
+
     private DateTime _lastTxMeterLogUtc;
 
     public int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved)
@@ -1608,23 +1959,28 @@ public sealed class WdspDspEngine : IDspEngine
         }
 
         // Feed the TX analyzer with the post-CFIR IQ so TryGetTxDisplayPixels
-        // can serve the panadapter during MOX (issue #81). pihpsdr's
-        // transmitter.c:1639 feeds iq_output_buffer — same tap point. We feed
-        // unconditionally here: ProcessTxBlock only runs while TXA is keyed,
-        // and when it isn't called the analyzer's log-recursive average just
-        // coasts. Q is negated (complex conjugate) to match the RX analyzer's
-        // treatment in RunWorker: WDSP's analyzer pipeline renders both
-        // sidebands flipped about the carrier for our IQ convention, so the
-        // same empirical fix is needed on TX. Observed on a G2 MkII: without
-        // the negation, an LSB carrier/modulation rendered on the USB side
-        // and vice-versa even though on-air RF and audio were correct.
+        // Feed the TX analyzer from the WDSP TXA SIPHON (xsiphon position in
+        // xtxa, BEFORE iqc/cfir/rsmpout — see siphon.c, TXA.c:586) so the
+        // panadapter trace shows the operator's pre-distortion voice spectrum.
+        // Pre-fix this used the post-cfir iout/qout output buffer, which is
+        // intentionally shaped with anti-IMD content while PS is correcting
+        // and renders as visible "splatter" even when the antenna is clean
+        // (issue #121). Thetis takes the same tap (cmaster.cs:544-545,
+        // TXASetSipMode + TXASetSipDisplay). Sample rate / size match the
+        // analyzer config: dsp_rate / dsp_size. Q is still negated to match
+        // the WDSP analyzer's sideband convention (same fix as before — the
+        // siphon hands back complex IQ in the same orientation as the post-
+        // CFIR buffer did).
         if (_txDispAlive)
         {
-            Span<double> txSpectrumIq = stackalloc double[2 * outSize];
-            for (int i = 0; i < outSize; i++)
+            int sipSize = _txaDspSize;
+            Span<float> sipBuf = stackalloc float[2 * sipSize];
+            NativeMethods.TXAGetaSipF1(txa, ref sipBuf[0], sipSize);
+            Span<double> txSpectrumIq = stackalloc double[2 * sipSize];
+            for (int i = 0; i < sipSize; i++)
             {
-                txSpectrumIq[2 * i] = iout[i];
-                txSpectrumIq[2 * i + 1] = -qout[i];
+                txSpectrumIq[2 * i] = sipBuf[2 * i];
+                txSpectrumIq[2 * i + 1] = -sipBuf[2 * i + 1];
             }
             lock (_txDispLock)
             {
@@ -1704,10 +2060,11 @@ public sealed class WdspDspEngine : IDspEngine
                 double ma = Math.Max(oi, oq); if (ma > ioutPeak) ioutPeak = ma;
             }
             _log.LogInformation(
-                "wdsp.tx.stage micBlockPeak={MP:F3} iqBlockPeak={IP:F4} | mic pk={MicPk:F1} av={MicAv:F1} | eq pk={EqPk:F1} av={EqAv:F1} | lvlr pk={LvlrPk:F1} av={LvlrAv:F1} gr={LvlrGr:F1} | alc pk={AlcPk:F1} av={AlcAv:F1} gr={AlcGr:F1} | out pk={OutPk:F1} av={OutAv:F1}",
+                "wdsp.tx.stage micBlockPeak={MP:F3} iqBlockPeak={IP:F4} | mic pk={MicPk:F1} av={MicAv:F1} | eq pk={EqPk:F1} av={EqAv:F1} | lvlr pk={LvlrPk:F1} av={LvlrAv:F1} gr={LvlrGr:F1} | cfc pk={CfcPk:F1} av={CfcAv:F1} gr={CfcGr:F1} | alc pk={AlcPk:F1} av={AlcAv:F1} gr={AlcGr:F1} | out pk={OutPk:F1} av={OutAv:F1}",
                 micBlockPeak, ioutPeak,
                 micPk, micAv, eqPk, eqAv,
                 lvlrPk, lvlrAv, -lvlrGain,
+                cfcPk, cfcAv, -cfcGain,
                 alcPk, alcAv, -alcGain,
                 outPk, outAv);
         }
@@ -1721,6 +2078,10 @@ public sealed class WdspDspEngine : IDspEngine
         {
             if (_channels.TryRemove(key, out var state))
                 StopChannel(state);
+        }
+        lock (_psLock)
+        {
+            ClosePsFeedbackAnalyzer();
         }
         lock (_txaLock)
         {
@@ -1747,11 +2108,20 @@ public sealed class WdspDspEngine : IDspEngine
     // user called out, light enough that signals still pop.
     private const int PipelineFps = 30;
     private const double DefaultAvgTauSec = 0.100;
+    // Heavier smoothing on TX-side traces. Voice modulation through the
+    // operator's leveler/compressor/ALC has natural envelope dynamics that
+    // a 100 ms tau renders as visible "splatter spreading"; 0.5 s gives the
+    // Thetis-style smoothed envelope so the operator sees signal shape, not
+    // every voiced/unvoiced transition.
+    private const double TxAvgTauSec = 0.175;
     private const int LogRecursiveMode = 3;
 
     private static void ConfigureDisplayAveraging(int disp)
+        => ConfigureDisplayAveragingTau(disp, DefaultAvgTauSec);
+
+    private static void ConfigureDisplayAveragingTau(int disp, double tauSec)
     {
-        double backmult = Math.Exp(-1.0 / (PipelineFps * DefaultAvgTauSec));
+        double backmult = Math.Exp(-1.0 / (PipelineFps * tauSec));
         for (int pixout = 0; pixout < 2; pixout++)
         {
             NativeMethods.SetDisplayAverageMode(disp, pixout, LogRecursiveMode);

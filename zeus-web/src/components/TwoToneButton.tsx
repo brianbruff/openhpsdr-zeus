@@ -51,7 +51,7 @@ export function TwoToneButton() {
       type="button"
       disabled={!connected}
       onClick={click}
-      className={`btn lg tx-btn ${twoToneOn ? 'tx' : ''}`}
+      className={`btn tx-btn ${twoToneOn ? 'tx' : ''}`}
       title={
         twoToneOn
           ? 'Two-tone test signal armed'

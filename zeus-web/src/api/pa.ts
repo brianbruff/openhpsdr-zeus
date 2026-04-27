@@ -30,7 +30,6 @@ export type PaBandSettings = {
 export type PaGlobalSettings = {
   paEnabled: boolean;
   paMaxPowerWatts: number;
-  ocTune: number;
 };
 
 export type PaSettings = {
@@ -49,7 +48,6 @@ type PaBandDtoRaw = {
 type PaGlobalDtoRaw = {
   paEnabled?: unknown;
   paMaxPowerWatts?: unknown;
-  ocTune?: unknown;
 };
 
 type PaSettingsDtoRaw = {
@@ -69,7 +67,6 @@ function normalizeGlobal(raw: PaGlobalDtoRaw | undefined): PaGlobalSettings {
   return {
     paEnabled: toBool(raw?.paEnabled, true),
     paMaxPowerWatts: Math.max(0, Math.round(toNumber(raw?.paMaxPowerWatts, 0))),
-    ocTune: Math.max(0, Math.min(0x7f, Math.round(toNumber(raw?.ocTune, 0)))),
   };
 }
 

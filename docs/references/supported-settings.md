@@ -77,11 +77,11 @@ Zeus mapping: `Zeus.Protocol1/HpsdrEnums.cs` lines 65–73.
 |---|:---:|:---:|:---:|
 | Filter board style | N2ADR filter via 7 OC bits (`0x00[23:17]`) | Onboard ALEX filters + OC | Onboard ALEX filters + OC |
 | OC outputs per band | ✅ (`OcTx` / `OcRx` per band) | ✅ | ✅ |
-| OC on tune (`OcTune`) | ✅ | ✅ | ✅ |
+| OC on tune | identical to `OcTx` (no separate override) | identical to `OcTx` | identical to `OcTx` |
 | RX antenna select | ✅ (`0x00[13]`) | ✅ (ALEX RX ants 1–3) | ✅ |
 | Alex manual filter mode | ⚠️ not yet implemented (`0x09[22]`) | ✅ | ✅ |
 
-Zeus contracts: `Zeus.Contracts/Dtos.cs` lines ~192–197 (`OcTx`, `OcRx`, `OcTune`).
+Zeus contracts: `Zeus.Contracts/Dtos.cs` (`OcTx`, `OcRx`). The piHPSDR-style global `OcTune` override was removed in #124 for hardware-safety: OC during TUN follows the per-band `OcTx`, identical to TX.
 
 ---
 

@@ -60,9 +60,29 @@ public class NoiseReductionTests
         catch { return false; }
     }
 
+    // True only when the bundled libwdsp exports the SBNR (NR4) symbols.
+    // Phase 1 of issue #79 has not shipped yet — until it does, theories
+    // that try to actually arm SBNR Run=1 must Skip.IfNot on this so the
+    // suite stays green. Probes via a no-op call inside try/catch so we
+    // exercise exactly the same EntryPoint path the engine does.
+    private static bool SbnrAvailable()
+    {
+        if (!WdspAvailable()) return false;
+        try
+        {
+            // SetRXASBNRRun(channel=0, run=0) is a no-op even if libwdsp
+            // does export the symbol — no SBNR struct needs to exist for
+            // a Run=0 call. We're only probing for the entry point.
+            NativeMethods.SetRXASBNRRun(0, 0);
+            return true;
+        }
+        catch (EntryPointNotFoundException) { return false; }
+        catch { return true; /* any other throw means the symbol exists */ }
+    }
+
     public static IEnumerable<object[]> AllCombos()
     {
-        foreach (var nr in new[] { NrMode.Off, NrMode.Anr, NrMode.Emnr })
+        foreach (var nr in new[] { NrMode.Off, NrMode.Anr, NrMode.Emnr, NrMode.Sbnr })
         foreach (var anf in new[] { false, true })
         foreach (var snb in new[] { false, true })
         foreach (var notches in new[] { false, true })
@@ -101,11 +121,20 @@ public class NoiseReductionTests
     // post-RXA NR path. Audio correctness is covered by the existing smoke /
     // tone-peak tests; this test only has to prove the P/Invoke signatures
     // match libwdsp and that the engine's mutual-exclusion logic is sound.
+    //
+    // Sbnr-on cases skip when the bundled libwdsp doesn't export the SBNR
+    // entry points — Phase 1 of issue #79 (libwdsp rebuild) is tracked
+    // separately. The engine swallows EntryPointNotFoundException internally,
+    // but the test deliberately Skips so a future regression that DOES throw
+    // at the seam still surfaces clearly.
     [SkippableTheory]
     [MemberData(nameof(AllCombos))]
     public void Wdsp_AcceptsEveryModeCombinationWithoutCrashing(NrConfig cfg)
     {
         Skip.IfNot(WdspAvailable(), "libwdsp not available");
+        if (cfg.NrMode == NrMode.Sbnr)
+            Skip.IfNot(SbnrAvailable(), "Requires libwdsp rebuild — Phase 1 of issue #79; bundled binaries do not export SBNR symbols.");
+
         using var engine = new WdspDspEngine();
         int channel = engine.OpenChannel(192_000, 1024);
         try
@@ -121,9 +150,11 @@ public class NoiseReductionTests
     [SkippableFact]
     public void Wdsp_TogglingNrModes_DoesNotLeaveBothEnabled()
     {
-        // Thetis NR button is Off/NR/NR2 — only one of ANR/EMNR may be running
-        // at a time. Proven here by cycling through each mode; the engine
-        // must issue the counter-Run(0) before toggling the other on.
+        // NR button cycle is Off/NR1/NR2/NR4 — only one of ANR/EMNR/SBNR may
+        // be running at a time. Proven here by cycling through each mode; the
+        // engine must issue the counter-Run(0) before toggling the other on.
+        // Off transitions are exercised even when SBNR symbols are missing so
+        // we still cover the OFF-from-SBNR engine path (TrySetSbnrRun(0)).
         Skip.IfNot(WdspAvailable(), "libwdsp not available");
         using var engine = new WdspDspEngine();
         int channel = engine.OpenChannel(192_000, 1024);
@@ -132,6 +163,35 @@ public class NoiseReductionTests
             engine.SetNoiseReduction(channel, new NrConfig(NrMode.Anr));
             engine.SetNoiseReduction(channel, new NrConfig(NrMode.Emnr));
             engine.SetNoiseReduction(channel, new NrConfig(NrMode.Anr));
+
+            if (SbnrAvailable())
+            {
+                engine.SetNoiseReduction(channel, new NrConfig(NrMode.Sbnr));
+                engine.SetNoiseReduction(channel, new NrConfig(NrMode.Anr));
+            }
+
+            engine.SetNoiseReduction(channel, new NrConfig(NrMode.Off));
+        }
+        finally
+        {
+            engine.CloseChannel(channel);
+        }
+    }
+
+    // Engine must not throw when SBNR symbols are missing — TrySetSbnrRun /
+    // ApplyNr4Sbnr swallow EntryPointNotFoundException so the worker keeps
+    // running and the operator gets NR-off behaviour. Exercised even on a
+    // libwdsp build that DOES export SBNR; the catch path stays warm both
+    // ways. Run when WDSP is available regardless of SBNR availability.
+    [SkippableFact]
+    public void Wdsp_SbnrMode_DoesNotCrashWhenSymbolsMissing()
+    {
+        Skip.IfNot(WdspAvailable(), "libwdsp not available");
+        using var engine = new WdspDspEngine();
+        int channel = engine.OpenChannel(192_000, 1024);
+        try
+        {
+            engine.SetNoiseReduction(channel, new NrConfig(NrMode.Sbnr));
             engine.SetNoiseReduction(channel, new NrConfig(NrMode.Off));
         }
         finally
@@ -276,8 +336,9 @@ public class NoiseReductionTests
     {
         // Drop-in sanity: the contract's default-constructed NrConfig must
         // equal "everything off, NB threshold at Thetis UI default 20 (→ 3.3
-        // scaled)." If any default changes here without a corresponding spec
-        // update, this test is the tripwire.
+        // scaled), all NR2 post2 + NR4 tunables null (= use engine defaults)."
+        // If any default changes here without a corresponding spec update,
+        // this test is the tripwire.
         var cfg = new NrConfig();
         Assert.Equal(NrMode.Off, cfg.NrMode);
         Assert.False(cfg.AnfEnabled);
@@ -285,5 +346,50 @@ public class NoiseReductionTests
         Assert.False(cfg.NbpNotchesEnabled);
         Assert.Equal(NbMode.Off, cfg.NbMode);
         Assert.Equal(20.0, cfg.NbThreshold);
+        Assert.Null(cfg.EmnrPost2Run);
+        Assert.Null(cfg.EmnrPost2Factor);
+        Assert.Null(cfg.EmnrPost2Nlevel);
+        Assert.Null(cfg.EmnrPost2Rate);
+        Assert.Null(cfg.EmnrPost2Taper);
+        Assert.Null(cfg.Nr4ReductionAmount);
+        Assert.Null(cfg.Nr4SmoothingFactor);
+        Assert.Null(cfg.Nr4WhiteningFactor);
+        Assert.Null(cfg.Nr4NoiseRescale);
+        Assert.Null(cfg.Nr4PostFilterThreshold);
+        Assert.Null(cfg.Nr4NoiseScalingType);
+        Assert.Null(cfg.Nr4Position);
+    }
+
+    // Round-trip the new NR2 post2 + NR4 fields through JSON to lock the wire
+    // format. The popover saves each field individually via PATCH endpoints
+    // (Nr2Post2ConfigSetRequest / Nr4ConfigSetRequest) but the persisted
+    // NrConfig still has to deserialise cleanly when those fields are set.
+    [Fact]
+    public void NrConfig_JsonRoundTrip_PreservesNewTunables()
+    {
+        var opts = new JsonSerializerOptions();
+        opts.Converters.Add(new JsonStringEnumConverter());
+
+        var cfg = new NrConfig(
+            NrMode: NrMode.Sbnr,
+            EmnrPost2Run: false,
+            EmnrPost2Factor: 0.22,
+            EmnrPost2Nlevel: 0.18,
+            EmnrPost2Rate: 4.0,
+            EmnrPost2Taper: 8,
+            Nr4ReductionAmount: 14.0,
+            Nr4SmoothingFactor: 0.3,
+            Nr4WhiteningFactor: 0.1,
+            Nr4NoiseRescale: 1.5,
+            Nr4PostFilterThreshold: -3.0,
+            Nr4NoiseScalingType: 1,
+            Nr4Position: 0);
+
+        string json = JsonSerializer.Serialize(cfg, opts);
+        var back = JsonSerializer.Deserialize<NrConfig>(json, opts);
+
+        Assert.NotNull(back);
+        Assert.Equal(cfg, back);
+        Assert.Contains("\"Sbnr\"", json);
     }
 }

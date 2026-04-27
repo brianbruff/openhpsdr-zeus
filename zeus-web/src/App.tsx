@@ -52,9 +52,6 @@ import { AttenuatorSlider } from './components/AttenuatorSlider';
 import { AudioToggle } from './components/AudioToggle';
 import { BandButtons } from './components/BandButtons';
 import { ConnectPanel } from './components/ConnectPanel';
-import { DriveSlider } from './components/DriveSlider';
-import { TunePowerSlider } from './components/TunePowerSlider';
-import { MicGainSlider } from './components/MicGainSlider';
 import { MicMeter } from './components/MicMeter';
 import { MobilePttButton } from './components/MobilePttButton';
 import { MobileZoomSlider } from './components/MobileZoomSlider';
@@ -76,6 +73,7 @@ import { TunButton } from './components/TunButton';
 import { VfoDisplay } from './components/VfoDisplay';
 import { Waterfall } from './components/Waterfall';
 import { ZoomControl } from './components/ZoomControl';
+import { useSwUpdatePrompt } from './pwa/useSwUpdatePrompt';
 import { AzimuthMap } from './components/design/AzimuthMap';
 import { CONTACTS, bandOf } from './components/design/data';
 import { CwKeyer } from './components/design/CwKeyer';
@@ -111,6 +109,7 @@ import type { Contact } from './components/design/data';
 const STATE_POLL_MS = 333;
 
 export default function App() {
+  useSwUpdatePrompt();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<'pa' | 'qrz' | 'rotator' | 'about' | undefined>();
   const [updateAvailable, setUpdateAvailable] = useState(false);
@@ -224,7 +223,7 @@ export default function App() {
   }, []);
 
   // --- Design-mock state (QRZ, DSP grid toggles, CW WPM, memories) ---
-  const [callsign, setCallsign] = useState('EI6LF');
+  const [callsign, setCallsign] = useState('');
   const [terminatorActive, setTerminatorActive] = useState(true);
   // While 'M' is held and QRZ is engaged, the spectrum canvas stack goes
   // pointer-events:none and the Leaflet map underneath takes drag/zoom input.
@@ -717,15 +716,10 @@ export default function App() {
           <AfGainSlider />
         </div>
         <div className="spacer hide-mobile" style={{ flex: 1 }} />
-        <div className="ctrl-group" style={{ minWidth: 360 }}>
-          <div className="label-xs ctrl-lbl">ZOOM · DRIVE · MIC</div>
+        <div className="ctrl-group hide-mobile" style={{ minWidth: 160 }}>
+          <div className="label-xs ctrl-lbl">ZOOM</div>
           <div className="btn-row" style={{ gap: 10 }}>
-            <div className="hide-mobile" style={{ display: 'contents' }}>
-              <ZoomControl />
-            </div>
-            <DriveSlider />
-            <TunePowerSlider />
-            <MicGainSlider />
+            <ZoomControl />
           </div>
         </div>
       </div>
@@ -938,7 +932,7 @@ export default function App() {
           </div>
 
           <div className="side-slot hide-mobile">
-            <Dockable title="TX Filter" ledOn={false}>
+            <Dockable title="TX" ledOn={false}>
               <TxFilterPanel />
             </Dockable>
           </div>

@@ -65,6 +65,20 @@ public class DspPipelineService : BackgroundService
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<DspPipelineService> _log;
 
+    /// <summary>
+    /// Raised when an RX S-meter reading is available (approximately 5 Hz).
+    /// Arguments: (channelId, dBm)
+    /// </summary>
+    public event Action<int, double>? RxMeterUpdated;
+
+    /// <summary>
+    /// Raised on every decoded RX IQ frame, after it has been fed to WDSP.
+    /// Arguments: (receiver, sampleRateHz, interleavedIQ).
+    /// The memory references a pooled buffer and is only valid for the
+    /// duration of the synchronous handler — copy if retention is needed.
+    /// </summary>
+    public event Action<int, int, ReadOnlyMemory<double>>? RxIqAvailable;
+
     private readonly object _engineLock = new();
     private IDspEngine? _engine;
     private int _channelId;
@@ -110,6 +124,13 @@ public class DspPipelineService : BackgroundService
     private double _appliedPsHwPeak = 0.4072;
     private string _appliedPsIntsSpiPreset = "16/256";
     private PsFeedbackSource _appliedPsFeedbackSource = PsFeedbackSource.Internal;
+    // PS-Monitor toggle (issue #121). Pure source-routing flag — Tick reads
+    // it on each tick to choose between the TX analyzer (predistorted IQ)
+    // and the PS-feedback analyzer (post-PA loopback IQ). volatile because
+    // OnRadioStateChanged writes from the state-handler thread and Tick
+    // reads from the pipeline thread — no compound mutation, just a bool.
+    private volatile bool _psMonitorEnabled;
+    private long _psMonitorTickCount;
     // Set by DisconnectP2Async so the next OnRadioStateChanged after a
     // fresh ConnectP2Async re-pushes every PS field regardless of equality
     // — necessary because the new WdspDspEngine instance starts with field
@@ -120,6 +141,22 @@ public class DspPipelineService : BackgroundService
     private double _appliedTwoToneFreq1 = 700.0;
     private double _appliedTwoToneFreq2 = 1900.0;
     private double _appliedTwoToneMag = 0.49;
+    // CFC (Continuous Frequency Compressor) — issue #123. Default-OFF so a
+    // fresh state-change push (no Cfc field on the wire) doesn't flip the
+    // engine into a partial config. _psResyncRequired piggybacks: when a P2
+    // reconnect tears down the engine, we re-push the CFC profile too so the
+    // new WdspDspEngine instance picks up the operator's persisted config.
+    private CfcConfig _appliedCfc = CfcConfig.Default;
+
+    // RX front-end (step attenuator + Mercury preamp). Mirrored to a live
+    // Protocol2Client when the value moves; on P1 these go through
+    // RadioService.ActiveClient directly. Issue #126 — without this
+    // forwarding the S-ATT slider and PRE button were inert on Angelia /
+    // ANAN-100D. Effective atten = StateDto.AttenDb + AttOffsetDb (auto-ATT
+    // offset), so the existing overload control loop continues to drive the
+    // radio on P2. Sentinel -1 forces the first push regardless of value.
+    private int _appliedEffectiveAttDb = -1;
+    private bool _appliedPreampOn;
 
     private uint _seq;
     private uint _audioSeq;
@@ -152,6 +189,7 @@ public class DspPipelineService : BackgroundService
         _radio.PaSnapshotChanged += OnPaSnapshotChanged;
         _radio.MoxChanged += OnRadioMoxChanged;
         _radio.TunActiveChanged += OnRadioTunActiveChanged;
+        _radio.PreampChanged += OnRadioPreampChanged;
 
         var panBuf = new float[Width];
         var wfBuf = new float[Width];
@@ -174,6 +212,7 @@ public class DspPipelineService : BackgroundService
             _radio.PaSnapshotChanged -= OnPaSnapshotChanged;
             _radio.MoxChanged -= OnRadioMoxChanged;
             _radio.TunActiveChanged -= OnRadioTunActiveChanged;
+            _radio.PreampChanged -= OnRadioPreampChanged;
             await StopIqPumpAsync().ConfigureAwait(false);
             CloseCurrentEngine();
         }
@@ -433,9 +472,77 @@ public class DspPipelineService : BackgroundService
             _p2Client?.SetPsFeedbackSource(s.PsFeedbackSource == PsFeedbackSource.External);
             _appliedPsFeedbackSource = s.PsFeedbackSource;
         }
+
+        // ---- CFC (Continuous Frequency Compressor) ---------------------
+        // issue #123. Same resync rule as PS: a P2 disconnect tears down the
+        // engine, so the next state-change push has to re-assert the operator
+        // CFC config even when the StateDto value hasn't changed. Equality
+        // check uses CfcConfig record value semantics (the Bands array length
+        // is fixed at 10, contents compared element-wise via the auto-record
+        // Equals — but `record` only does reference equality on arrays, so
+        // value-compare manually). null on the wire (legacy state frame)
+        // falls back to CfcConfig.Default → engine sees a clean OFF profile.
+        var cfc = s.Cfc ?? CfcConfig.Default;
+        if (resync || !CfcConfigsEqual(cfc, _appliedCfc))
+        {
+            engine.SetCfcConfig(cfc);
+            _appliedCfc = cfc;
+        }
+
+        // ---- RX step attenuator (operator + auto-ATT offset) -----------
+        // Issue #126. Mirror RadioService's effective-atten composition
+        // (operator baseline AttenDb + auto-ATT overload offset AttOffsetDb,
+        // clamped 0..31) onto a live Protocol2Client. RadioService already
+        // pushes the same value to the P1 client directly via
+        // ActiveClient?.SetAttenuator on every operator change AND every
+        // auto-ATT tick — but on a P2 connection ActiveClient is null, so
+        // without this forward the S-ATT slider and the auto-ATT overload
+        // ramp both fail silently on Angelia / ANAN-100D. RadioService
+        // raises StateChanged whenever AttOffsetDb moves, so the auto-ATT
+        // control loop reaches the wire through this block too.
+        int effectiveAttDb = Math.Clamp(s.AttenDb + s.AttOffsetDb, 0, 31);
+        if (resync || effectiveAttDb != _appliedEffectiveAttDb)
+        {
+            _p2Client?.SetAttenuator(effectiveAttDb);
+            _appliedEffectiveAttDb = effectiveAttDb;
+        }
+
+        // PS-Monitor (issue #121) — pure UI source routing. No engine call,
+        // no wire write; Tick reads _psMonitorEnabled and prefers the
+        // PS-feedback analyzer when on + PS armed + correcting. Latched
+        // here so the volatile read in Tick stays cheap.
+        if (_psMonitorEnabled != s.PsMonitorEnabled)
+        {
+            _log.LogInformation("psMonitor.latch enabled={Enabled}", s.PsMonitorEnabled);
+            _psMonitorEnabled = s.PsMonitorEnabled;
+        }
+
         // Resync done — clear the flag so subsequent state changes use
         // normal change-detect (no spurious wire writes on each tick).
         _psResyncRequired = false;
+    }
+
+    // CfcConfig auto-generated record Equals does reference equality on the
+    // Bands array, which would always trigger a re-push on every tick where
+    // the panel rebuilt the array. Explicit element-wise compare so a no-op
+    // POST round-trip stays cheap.
+    private static bool CfcConfigsEqual(CfcConfig a, CfcConfig b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        if (a is null || b is null) return false;
+        if (a.Enabled != b.Enabled) return false;
+        if (a.PostEqEnabled != b.PostEqEnabled) return false;
+        if (a.PreCompDb != b.PreCompDb) return false;
+        if (a.PrePeqDb != b.PrePeqDb) return false;
+        if (a.Bands is null || b.Bands is null) return ReferenceEquals(a.Bands, b.Bands);
+        if (a.Bands.Length != b.Bands.Length) return false;
+        for (int i = 0; i < a.Bands.Length; i++)
+        {
+            if (a.Bands[i].FreqHz != b.Bands[i].FreqHz) return false;
+            if (a.Bands[i].CompLevelDb != b.Bands[i].CompLevelDb) return false;
+            if (a.Bands[i].PostGainDb != b.Bands[i].PostGainDb) return false;
+        }
+        return true;
     }
 
     // "16/256" → (16, 256). Falls back to (16, 256) on any parse failure
@@ -493,6 +600,7 @@ public class DspPipelineService : BackgroundService
                     int channel;
                     lock (_engineLock) { engine = _engine; channel = _channelId; }
                     engine?.FeedIq(channel, frame.InterleavedSamples.Span);
+                    RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
                 }
             }
             catch (OperationCanceledException) { }
@@ -518,6 +626,7 @@ public class DspPipelineService : BackgroundService
                     int channel;
                     lock (_engineLock) { engine = _engine; channel = _channelId; }
                     engine?.FeedIq(channel, frame.InterleavedSamples.Span);
+                    RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
                 }
             }
             catch (OperationCanceledException) { }
@@ -602,6 +711,18 @@ public class DspPipelineService : BackgroundService
             _loggerFactory.CreateLogger<Zeus.Protocol2.Protocol2Client>());
         client.SetNumAdc(numAdc);
         await client.ConnectAsync(radioEndpoint, ct).ConfigureAwait(false);
+        // Seed the operator's RX front-end (preamp + step attenuator) BEFORE
+        // StartAsync so the very first CmdHighPriority emitted inside the
+        // start sequence carries the correct values. SetPreamp/SetAttenuator
+        // pre-StartAsync only stash into private fields (the early-return on
+        // _rxTask==null path), so no wire packets fly here — they ride the
+        // CmdHighPriority(run=1) inside StartAsync below. Without this seed
+        // a P2 reconnect would leave the radio at preamp=off / atten=0
+        // until the operator nudged either control. Issue #126.
+        bool initialPreamp = _radio.PreampOn;
+        int initialAttDb = _radio.EffectiveAttenDb;
+        client.SetPreamp(initialPreamp);
+        client.SetAttenuator(initialAttDb);
         await client.StartAsync(sampleRateKhz, ct).ConfigureAwait(false);
 
         int rateHz = sampleRateKhz * 1000;
@@ -652,6 +773,27 @@ public class DspPipelineService : BackgroundService
         _log.LogInformation("dsp.pipeline p2 engine={Engine} rate={Rate}", newEngine.GetType().Name, rateHz);
 
         _p2Client = client;
+        // Sync the change-detect cache with the values we just seeded so the
+        // first OnRadioStateChanged after connect doesn't redundantly re-push
+        // (which would emit a duplicate CmdHighPriority). Re-read in case the
+        // operator changed either control during the connect window — the
+        // PreampChanged / StateChanged handlers would have early-returned on
+        // _p2Client==null. Comparing here recovers any drift before the cache
+        // settles.
+        _appliedPreampOn = initialPreamp;
+        _appliedEffectiveAttDb = initialAttDb;
+        bool nowPreamp = _radio.PreampOn;
+        int nowAttDb = _radio.EffectiveAttenDb;
+        if (nowPreamp != initialPreamp)
+        {
+            client.SetPreamp(nowPreamp);
+            _appliedPreampOn = nowPreamp;
+        }
+        if (nowAttDb != initialAttDb)
+        {
+            client.SetAttenuator(nowAttDb);
+            _appliedEffectiveAttDb = nowAttDb;
+        }
         StartIqPumpP2(client);
         StartPsFeedbackPumpP2(client);
         // Force the next OnRadioStateChanged to re-push every PS field into
@@ -680,7 +822,6 @@ public class DspPipelineService : BackgroundService
         if (p2 is null) return;
         p2.SetDriveByte(snap.DriveByte);
         p2.SetOcMasks(snap.OcTxMask, snap.OcRxMask);
-        p2.SetOcTuneMask(snap.OcTuneMask);
         p2.SetPaEnabled(snap.PaEnabled);
     }
 
@@ -693,6 +834,19 @@ public class DspPipelineService : BackgroundService
     private void OnRadioTunActiveChanged(bool on)
     {
         _p2Client?.SetTune(on);
+    }
+
+    // Mirror operator preamp toggles into a live Protocol2Client. P1 is
+    // pushed by RadioService.SetPreamp directly via ActiveClient. PreampOn
+    // isn't on the StateDto wire format, so this event-driven path is the
+    // only way the bit reaches CmdHighPriority byte 1403 on P2 (issue #126).
+    private void OnRadioPreampChanged(bool on)
+    {
+        var p2 = _p2Client;
+        if (p2 is null) return;
+        if (on == _appliedPreampOn) return;
+        p2.SetPreamp(on);
+        _appliedPreampOn = on;
     }
 
     /// <summary>
@@ -820,11 +974,44 @@ public class DspPipelineService : BackgroundService
         // we fall through to the RX analyzer, matching the pre-issue-#81
         // behaviour. This fallback also covers the first ~1 tick after
         // keying before the analyzer averaging has settled.
+        //
+        // Issue #121 layered on top: if the operator has the "Monitor PA
+        // output" toggle on AND PS is armed AND PS has converged
+        // (info[14]==1, surfaced via GetPsStageMeters().Correcting), prefer
+        // the PS-feedback analyzer (post-PA loopback IQ). Falls back to the
+        // TX analyzer if the PS-FB analyzer hasn't produced a fresh FFT yet
+        // — same shape as the existing TX → RX fallback. Default-off
+        // toggle: when off the codepath is identical to pre-#121, byte for
+        // byte, on every board.
         bool pan = false, wf = false;
+        bool psFbPanUsed = false, psFbWfUsed = false;
         if (_keyed)
         {
-            pan = engine.TryGetTxDisplayPixels(DisplayPixout.Panadapter, panBuf);
-            wf = engine.TryGetTxDisplayPixels(DisplayPixout.Waterfall, wfBuf);
+            if (_appliedPsEnabled && _psMonitorEnabled
+                && engine.GetPsStageMeters().Correcting)
+            {
+                pan = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Panadapter, panBuf);
+                wf = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Waterfall, wfBuf);
+                psFbPanUsed = pan;
+                psFbWfUsed = wf;
+            }
+            if (!pan) pan = engine.TryGetTxDisplayPixels(DisplayPixout.Panadapter, panBuf);
+            if (!wf) wf = engine.TryGetTxDisplayPixels(DisplayPixout.Waterfall, wfBuf);
+        }
+        if (_keyed && _psMonitorEnabled)
+        {
+            _psMonitorTickCount++;
+            if (_psMonitorTickCount % 30 == 0)
+            {
+                var m = engine.GetPsStageMeters();
+                _log.LogInformation(
+                    "psMonitor.gate keyed=1 psEn={PsEn} mon=1 corr={Corr} psFbPan={Pan} psFbWf={Wf}",
+                    _appliedPsEnabled, m.Correcting, psFbPanUsed, psFbWfUsed);
+            }
+        }
+        else
+        {
+            _psMonitorTickCount = 0;
         }
         if (!pan) pan = engine.TryGetDisplayPixels(channel, DisplayPixout.Panadapter, panBuf);
         if (!wf) wf = engine.TryGetDisplayPixels(channel, DisplayPixout.Waterfall, wfBuf);
@@ -907,6 +1094,7 @@ public class DspPipelineService : BackgroundService
             }
             if (!double.IsFinite(dbm)) dbm = -160.0;
             _hub.Broadcast(new RxMeterFrame((float)dbm));
+            RxMeterUpdated?.Invoke(channel, dbm);
         }
     }
 }

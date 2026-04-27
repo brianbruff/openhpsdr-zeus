@@ -24,11 +24,20 @@ import {
   setPs,
   setPsAdvanced,
   setPsFeedbackSource,
+  setPsMonitor,
   resetPs,
   setTwoTone,
 } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { useRadioStore } from '../state/radio-store';
 import { useTxStore } from '../state/tx-store';
+
+// HermesLite2 has no PS feedback receiver — the entire PS-Monitor view
+// hinges on a paired DDC0/DDC1 loopback that doesn't exist on HL2. Hide
+// the toggle on HL2 so the operator doesn't get a switch that does
+// nothing. ANAN-class boards (and anything else that shows up here)
+// retain the toggle. See issue #121.
+const HL2_BOARD_ID = 'HermesLite2';
 
 const CAL_STATE_NAMES = [
   'RESET',
@@ -53,8 +62,17 @@ const CAL_STATE_NAMES = [
 export function PsSettingsPanel() {
   const protocol = useConnectionStore((s) => s.connectedProtocol);
   const p1Disabled = protocol === 'P1';
+  // The PS-Monitor source switch only makes sense when there's a real PS
+  // feedback receiver. On HL2 we hide the toggle entirely. We key on the
+  // CONNECTED board (not preferred) so a user who explicitly selects G2
+  // while no radio is attached still sees the control as a preview, but
+  // a live HL2 connection cleanly drops it.
+  const connectedBoard = useRadioStore((s) => s.selection.connected);
+  const psMonitorSupported = connectedBoard !== HL2_BOARD_ID;
 
   const psEnabled = useTxStore((s) => s.psEnabled);
+  const psMonitorEnabled = useTxStore((s) => s.psMonitorEnabled);
+  const setPsMonitorLocal = useTxStore((s) => s.setPsMonitorEnabled);
   const psAuto = useTxStore((s) => s.psAuto);
   const psSingle = useTxStore((s) => s.psSingle);
   const psPtol = useTxStore((s) => s.psPtol);
@@ -128,6 +146,18 @@ export function PsSettingsPanel() {
       setPsFeedbackSource(next).catch(() => setPsFeedbackSourceLocal(prev));
     },
     [psFeedbackSourceState, setPsFeedbackSourceLocal],
+  );
+
+  // PS-Monitor — operator-facing display source switch (issue #121).
+  // Optimistic local set + POST, rolls back on failure so the analyzer
+  // routing the backend uses and the UI checkbox stay in sync.
+  const onPsMonitorToggle = useCallback(
+    (next: boolean) => {
+      const prev = psMonitorEnabled;
+      setPsMonitorLocal(next);
+      setPsMonitor(next).catch(() => setPsMonitorLocal(prev));
+    },
+    [psMonitorEnabled, setPsMonitorLocal],
   );
 
   const onTwoToneToggle = useCallback(() => {
@@ -364,6 +394,28 @@ export function PsSettingsPanel() {
           />
         </Row>
       </Section>
+
+      {/* Display — issue #121. Hidden on HL2 (no PS feedback Rx). The
+          control is operator opt-in; default off preserves the Thetis-
+          style predistorted-IQ panadapter view. The backend gates the
+          actual analyzer swap on PsEnabled && PsCorrecting in addition
+          to this flag, so flipping it on while PS is off is harmless. */}
+      {psMonitorSupported ? (
+        <Section title="Display">
+          <Row label="Monitor PA output">
+            <input
+              type="checkbox"
+              checked={psMonitorEnabled}
+              onChange={(e) => onPsMonitorToggle(e.target.checked)}
+              disabled={p1Disabled}
+              title="Show post-correction signal in TX panadapter"
+            />
+            <span style={{ fontSize: 11, color: 'var(--fg-2)', marginLeft: 8 }}>
+              Show post-correction signal in TX panadapter
+            </span>
+          </Row>
+        </Section>
+      ) : null}
 
       {/* Read-out */}
       <Section title="Read-out">

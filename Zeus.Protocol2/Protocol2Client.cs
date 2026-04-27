@@ -102,13 +102,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // PA settings — pushed from RadioService when PaSettingsStore changes or
     // the VFO crosses a band edge. _paEnabled is the global toggle that lands
     // in CmdGeneral[58]; _driveByte is the pre-calibrated drive level for
-    // CmdHighPriority[345]; _ocTxMask/_ocRxMask drive CmdHighPriority[1401]
-    // (OR'd with OCtune once that's plumbed).
+    // CmdHighPriority[345]; _ocTxMask/_ocRxMask drive CmdHighPriority[1401].
+    // The piHPSDR-style global "OCtune" override was removed in #124 for
+    // hardware-safety: OC during TUN follows OcTx, identical to TX.
     private bool _paEnabled = true;
     private byte _driveByte;
     private byte _ocTxMask;
     private byte _ocRxMask;
-    private byte _ocTuneMask;
     private bool _moxOn;
     private bool _tuneActive;
     private long _totalFrames;
@@ -304,12 +304,6 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         _ocTxMask = (byte)(txMask & 0x7F);
         _ocRxMask = (byte)(rxMask & 0x7F);
         if (_rxTask is not null) SendCmdHighPriority(run: true);
-    }
-
-    public void SetOcTuneMask(byte mask)
-    {
-        _ocTuneMask = (byte)(mask & 0x7F);
-        if (_rxTask is not null && _tuneActive) SendCmdHighPriority(run: true);
     }
 
     public void SetPaEnabled(bool enabled)
@@ -710,14 +704,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // and TX is keyed elsewhere (byte 4 bit 1). piHPSDR `new_protocol.c:860`.
         p[345] = _driveByte;
 
-        // OC outputs (7-bit mask) shifted left by 1 into byte 1401. During
-        // TX the TX mask applies; during TUN we OR in the OCtune mask so
-        // anything wired to the tune pin (e.g. an external linear's tune-
-        // mode relay) closes. RX mask when keyed down. pihpsdr
-        // new_protocol.c:877-894.
-        byte ocBits = _moxOn
-            ? (byte)(_ocTxMask | (_tuneActive ? _ocTuneMask : (byte)0))
-            : _ocRxMask;
+        // OC outputs (7-bit mask) shifted left by 1 into byte 1401. The TX
+        // mask applies whenever MOX is on (whether keyed by the operator or
+        // by TUN) and the RX mask applies otherwise. The piHPSDR-style global
+        // "OCtune" override was removed in #124 for hardware-safety reasons:
+        // a global override layered on top of the per-band OC TX mask could
+        // hand an external amp a confused band-select state during a steady
+        // tune carrier and damage the finals. Thetis behaves this way too.
+        byte ocBits = _moxOn ? _ocTxMask : _ocRxMask;
         p[1401] = (byte)((ocBits & 0x7F) << 1);
 
         // Mercury attenuator byte: bit 0 = RX0 preamp, bit 1 = RX1 preamp

@@ -59,9 +59,13 @@ public enum PsFeedbackSource : byte { Internal = 0, External = 1 }
 public enum ConnectionStatus { Disconnected, Connecting, Connected, Error }
 
 // Thetis NR-button state: Off = no spectral NR, Anr = NR1 (time-domain LMS),
-// Emnr = NR2 (Ephraim–Malah spectral). ANR and EMNR are mutually exclusive
-// in Thetis, so the button carries both in one enum.
-public enum NrMode : byte { Off, Anr, Emnr }
+// Emnr = NR2 (Ephraim–Malah spectral), Sbnr = NR4 (libspecbleach spectral
+// bleaching — issue #79). NR3 (RNNR) is intentionally absent: training data
+// for the bundled RNNoise model is voice-corpus-only and underperforms on
+// HF noise. All four modes are mutually exclusive in WDSP, so the button
+// carries them in one enum. Byte order is fixed — appending only — because
+// persisted DspSettingsStore rows would mis-deserialize on a reorder.
+public enum NrMode : byte { Off, Anr, Emnr, Sbnr = 3 }
 
 // Pre-RXA time-domain blanker. Nb1 = ANB (noise blanker), Nb2 = NOB (noise gate).
 // Engine silently ignores this until the pre-RXA pipeline lands (task #4);
@@ -71,13 +75,38 @@ public enum NbMode : byte { Off, Nb1, Nb2 }
 // Thetis default NbThreshold = 3.3 (WDSP units), which is `0.165 × 20` — the
 // Thetis UI slider sitting at 20. Kept here so REST round-trips preserve the
 // UI-space value rather than the scaled one.
+//
+// NR2 post2 + NR4 (Sbnr) tunables are nullable so legacy state frames (no
+// fields present) deserialize unchanged; null at the engine seam means
+// "use the WdspDspEngine.NrDefaults baseline". Persisted globally (not
+// per-band/mode/profile) per Thetis behaviour — see DspSettingsStore.
 public sealed record NrConfig(
     NrMode NrMode = NrMode.Off,
     bool AnfEnabled = false,
     bool SnbEnabled = false,
     bool NbpNotchesEnabled = false,
     NbMode NbMode = NbMode.Off,
-    double NbThreshold = 20.0);
+    double NbThreshold = 20.0,
+    // ---- NR2 (EMNR) post2 comfort-noise tunables ----
+    // Already wired in WdspDspEngine.NrDefaults; surfacing them via the
+    // right-click popover. Slider scale: factor/nlevel UI 0..100 → WDSP
+    // 0..1 (Thetis divides by 100). Taper is bins (0..100), Rate is
+    // time-constant in seconds. Run gates the comfort-noise injection.
+    bool? EmnrPost2Run = null,
+    double? EmnrPost2Factor = null,
+    double? EmnrPost2Nlevel = null,
+    double? EmnrPost2Rate = null,
+    int? EmnrPost2Taper = null,
+    // ---- NR4 (SBNR / libspecbleach) tunables ----
+    // Defaults from Thetis radio.cs:2350-2462. Native setters take float;
+    // we marshal to double on the wire and downcast at the P/Invoke seam.
+    double? Nr4ReductionAmount = null,
+    double? Nr4SmoothingFactor = null,
+    double? Nr4WhiteningFactor = null,
+    double? Nr4NoiseRescale = null,
+    double? Nr4PostFilterThreshold = null,
+    int? Nr4NoiseScalingType = null,
+    int? Nr4Position = null);
 
 public sealed record StateDto(
     ConnectionStatus Status,
@@ -130,6 +159,17 @@ public sealed record StateDto(
     // fields ARE persisted via PsSettingsStore so the operator's calibration
     // tuning survives restarts.
     bool PsEnabled = false,
+    // PsMonitorEnabled — operator-facing "Monitor PA output" toggle
+    // (issue #121). When true AND PsEnabled AND PS has converged
+    // (info[14]==1), DspPipelineService.Tick switches the TX panadapter /
+    // waterfall source from the post-CFIR predistorted-IQ analyzer to the
+    // PS-feedback analyzer fed from the radio's loopback ADC, so the
+    // operator sees the actual on-air signal. Default off — preserves the
+    // Thetis-style predistorted view. Hidden / disabled in the UI on
+    // boards that have no PS feedback path (e.g. HermesLite2). NOT
+    // persisted server-side: this is an operator viewing preference,
+    // resets to off each session same as PsEnabled.
+    bool PsMonitorEnabled = false,
     bool PsAuto = true,             // continuous adapt by default once armed
     bool PsSingle = false,          // one-shot SetPSControl(1,1,0,0)
     bool PsPtol = false,            // false = strict 0.4; true = relax 0.8
@@ -154,7 +194,13 @@ public sealed record StateDto(
     bool TwoToneEnabled = false,
     double TwoToneFreq1 = 700.0,
     double TwoToneFreq2 = 1900.0,
-    double TwoToneMag = 0.49);
+    double TwoToneMag = 0.49,
+
+    // ---- CFC (Continuous Frequency Compressor) — issue #123 ----
+    // Nullable so legacy state frames (no Cfc field) deserialize unchanged;
+    // null at the engine seam means "use CfcConfig.Default" — same pattern
+    // as the Nr field above. Persisted globally via DspSettingsStore.
+    CfcConfig? Cfc = null);
 
 public sealed record RadioInfo(
     string MacAddress,
@@ -202,6 +248,25 @@ public sealed record DriveSetRequest(int Percent);
 public sealed record TuneDriveSetRequest(int Percent);
 
 public sealed record NrSetRequest(NrConfig Nr);
+
+// Per-popover save requests for the NR right-click panels. Nullable shape so
+// the popover can PATCH a single field without disturbing siblings (the server
+// merges on top of the persisted NrConfig and re-applies the engine state).
+public sealed record Nr2Post2ConfigSetRequest(
+    bool? Post2Run = null,
+    double? Post2Factor = null,
+    double? Post2Nlevel = null,
+    double? Post2Rate = null,
+    int? Post2Taper = null);
+
+public sealed record Nr4ConfigSetRequest(
+    double? ReductionAmount = null,
+    double? SmoothingFactor = null,
+    double? WhiteningFactor = null,
+    double? NoiseRescale = null,
+    double? PostFilterThreshold = null,
+    int? NoiseScalingType = null,
+    int? Position = null);
 
 // Panadapter/waterfall zoom levels. Level=1 means the analyzer covers the full
 // sample-rate span; level=2 means VFO-centered half-span (×2 bins/Hz), and so
@@ -254,12 +319,14 @@ public sealed record PaBandSettingsDto(
 // Globals shared across bands. PaMaxPowerWatts=0 disables the watts
 // conversion path and falls back to the legacy "drive% = raw 0-255 byte"
 // behavior so existing installs behave identically until the user runs
-// a calibration. OcTune is OR'd into the OC byte while TUN is engaged
-// (Thetis: OCtune in `Penny.cs`; piHPSDR: `OCtune<<1` in `old_protocol.c`).
+// a calibration. OC bits during TUN follow the per-band OcTx mask (same
+// as TX) — Thetis behaves this way and the inherited piHPSDR-style
+// "OcTune" override was removed in #124 for hardware-safety reasons (a
+// global override can hand an external amp a confused band-select state
+// during a steady tune carrier and damage finals).
 public sealed record PaGlobalSettingsDto(
     bool PaEnabled = true,
-    int PaMaxPowerWatts = 0,
-    byte OcTune = 0);
+    int PaMaxPowerWatts = 0);
 
 public sealed record PaSettingsDto(
     PaGlobalSettingsDto Global,
@@ -307,6 +374,12 @@ public sealed record PsRestoreRequest(string Filename);
 // the WDSP cal/iqc stages operate on whatever IQ arrives at DDC0/DDC1.
 public sealed record PsFeedbackSourceSetRequest(PsFeedbackSource Source);
 
+// "Monitor PA output" toggle (issue #121). Pure UI/source-routing flag —
+// no WDSP setter, no wire-format change. RadioService just stamps the
+// StateDto, DspPipelineService reads it on Tick to pick which analyzer
+// to drain. Default off; operator opt-in.
+public sealed record PsMonitorSetRequest(bool Enabled);
+
 // Two-tone test generator (used as PS calibration excitation but works
 // standalone too). Protocol-agnostic.
 public sealed record TwoToneSetRequest(
@@ -314,3 +387,58 @@ public sealed record TwoToneSetRequest(
     double? Freq1 = null,
     double? Freq2 = null,
     double? Mag = null);
+
+// ---- CFC (Continuous Frequency Compressor) — issue #123 ------------------
+// Multi-band frequency-domain compressor exposed by WDSP's xcfcomp stage
+// (already wired in xtxa between xeqp and xbandpass). Mirrors pihpsdr's
+// classic 10-band non-parametric design — see cfc_menu.c. The architecture
+// proposal on issue #123 enumerates every WDSP CFCOMP setter we surface.
+//
+// Persisted GLOBALLY (not per-band/mode) per kb2uka's spec — operator
+// profiles are a future feature. CFC defaults to OFF so existing operators
+// (including the project owner's external analog rack workflow) see no
+// behavior change unless they enable. PostEqEnabled is a separate toggle
+// from the master Enabled to mirror pihpsdr — operators may want CFC
+// compression without the EQ branch.
+
+/// <summary>One CFC band: centre frequency in Hz (operator-typed),
+/// compression-level threshold in dB, and post-comp makeup gain in dB.
+/// WDSP sorts the band array internally (cfcomp.c:147), so the on-the-wire
+/// order is informational only — the engine relies on WDSP to canonicalise.
+/// </summary>
+public sealed record CfcBand(double FreqHz, double CompLevelDb, double PostGainDb);
+
+/// <summary>Operator-tunable CFC configuration. <c>Bands</c> length is
+/// fixed at 10 to match pihpsdr's classic-mode default and keep the panel
+/// layout stable. Engine validates length at the seam.</summary>
+public sealed record CfcConfig(
+    bool Enabled,
+    bool PostEqEnabled,
+    double PreCompDb,
+    double PrePeqDb,
+    CfcBand[] Bands)
+{
+    /// <summary>Pihpsdr's vfo.c:284-314 baseline — 10 bands at the voice-band
+    /// frequencies operators recognise from PowerSDR. All compression and
+    /// gains zeroed so enabling neutral CFC is audibly transparent.</summary>
+    public static CfcConfig Default => new(
+        Enabled: false,
+        PostEqEnabled: false,
+        PreCompDb: 0.0,
+        PrePeqDb: 0.0,
+        Bands: new[]
+        {
+            new CfcBand(50,    0, 0),
+            new CfcBand(100,   0, 0),
+            new CfcBand(200,   0, 0),
+            new CfcBand(500,   0, 0),
+            new CfcBand(1000,  0, 0),
+            new CfcBand(1500,  0, 0),
+            new CfcBand(2000,  0, 0),
+            new CfcBand(2500,  0, 0),
+            new CfcBand(3000,  0, 0),
+            new CfcBand(5000,  0, 0),
+        });
+}
+
+public sealed record CfcSetRequest(CfcConfig Config);

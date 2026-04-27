@@ -42,8 +42,19 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useEffect, useRef, useState } from 'react';
-import { Layout, Model, type IJsonModel, type TabNode } from 'flexlayout-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Actions,
+  BorderNode,
+  DockLocation,
+  Layout,
+  Model,
+  TabSetNode,
+  type IJsonModel,
+  type ITabSetRenderValues,
+  type TabNode,
+} from 'flexlayout-react';
+import { Plus } from 'lucide-react';
 import 'flexlayout-react/style/dark.css';
 import '../styles/flex-layout.css';
 import { useWorkspace } from './WorkspaceContext';
@@ -51,6 +62,7 @@ import { useLayoutStore } from '../state/layout-store';
 import { PANELS } from './panels';
 import { DEFAULT_LAYOUT } from './defaultLayout';
 import { TerminatorLines } from '../components/design/TerminatorLines';
+import { AddPanelModal } from './AddPanelModal';
 
 function factory(node: TabNode) {
   const id = node.getComponent();
@@ -67,6 +79,7 @@ export function FlexWorkspace() {
   const { terminatorActive } = useWorkspace();
   const { layout, isLoaded, setLayout, loadFromServer, syncToServerBeforeUnload } = useLayoutStore();
   const [model, setModel] = useState<Model | null>(null);
+  const [targetTabSetId, setTargetTabSetId] = useState<string | null>(null);
   const loadedRef = useRef(false);
 
   useEffect(() => {
@@ -90,6 +103,66 @@ export function FlexWorkspace() {
     return () => window.removeEventListener('beforeunload', handler);
   }, [syncToServerBeforeUnload]);
 
+  // Get list of existing panel IDs in the layout
+  const getExistingPanels = (): Set<string> => {
+    if (!model) return new Set();
+    const panelIds = new Set<string>();
+
+    model.visitNodes((node) => {
+      if (node.getType() === 'tab') {
+        const tabNode = node as TabNode;
+        const component = tabNode.getComponent();
+        if (component) panelIds.add(component);
+      }
+    });
+
+    return panelIds;
+  };
+
+  const addPanel = (panelId: string) => {
+    if (!model || !targetTabSetId) return;
+
+    const panel = PANELS[panelId];
+    if (!panel) return;
+
+    model.doAction(
+      Actions.addNode(
+        {
+          type: 'tab',
+          name: panel.name,
+          component: panelId,
+        },
+        targetTabSetId,
+        DockLocation.CENTER,
+        -1,
+        true,
+      ),
+    );
+  };
+
+  // Per-tabset "+" button — pushed into each tabset's sticky-button slot so it
+  // sits next to the maximise control. Mirrors Log4YM's pattern; uses the
+  // lucide-react Plus icon so the visual matches.
+  const onRenderTabSet = useCallback(
+    (node: TabSetNode | BorderNode, renderValues: ITabSetRenderValues) => {
+      if (!(node instanceof TabSetNode)) return;
+      const id = node.getId();
+      renderValues.stickyButtons.push(
+        <button
+          key="add-panel"
+          type="button"
+          title="Add panel to this tabset"
+          aria-label="Add panel"
+          className="flexlayout__tab_toolbar_button"
+          onClick={() => setTargetTabSetId(id)}
+        >
+          <Plus size={14} />
+        </button>,
+      );
+    },
+    [],
+  );
+
   if (!model) {
     // Brief loading state while server layout fetch resolves.
     return <div className="flex-workspace" />;
@@ -100,11 +173,19 @@ export function FlexWorkspace() {
       <Layout
         model={model}
         factory={factory}
+        onRenderTabSet={onRenderTabSet}
         onModelChange={(updatedModel) => {
           setLayout(updatedModel.toJson() as unknown as Record<string, unknown>);
         }}
       />
       <TerminatorLines active={terminatorActive} />
+      {targetTabSetId && (
+        <AddPanelModal
+          existingPanels={getExistingPanels()}
+          onAdd={addPanel}
+          onClose={() => setTargetTabSetId(null)}
+        />
+      )}
     </div>
   );
 }

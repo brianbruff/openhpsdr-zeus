@@ -139,7 +139,7 @@ export function PaSettingsPanel() {
             Reset to {resetTargetLabel}
           </button>
         </div>
-        <div className="grid grid-cols-1 gap-4 rounded bg-neutral-800/40 p-3 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 rounded bg-neutral-800/40 p-3 md:grid-cols-2">
           <label className="flex items-center gap-2 text-xs text-neutral-300">
             <input
               type="checkbox"
@@ -174,21 +174,6 @@ export function PaSettingsPanel() {
               </span>
             )}
           </label>
-
-          <div className="flex flex-col gap-1 text-xs text-neutral-300">
-            <span>OC bits while Tune</span>
-            <div className="flex gap-2">
-              {OC_PINS.map((bit) => (
-                <OcBitCheckbox
-                  key={bit}
-                  label="OC-Tune"
-                  bit={bit}
-                  mask={settings.global.ocTune}
-                  onToggle={(next) => setGlobal({ ocTune: next })}
-                />
-              ))}
-            </div>
-          </div>
         </div>
       </section>
 

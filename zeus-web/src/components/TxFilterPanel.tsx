@@ -22,6 +22,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { setTxFilter, type RxMode } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { DriveSlider } from './DriveSlider';
+import { TunePowerSlider } from './TunePowerSlider';
+import { MicGainSlider } from './MicGainSlider';
 
 const CUSTOM_MIN = 0;
 const CUSTOM_MAX = 10000;
@@ -113,10 +116,19 @@ export function TxFilterPanel() {
   const lowDisabled = isSymmetricMode(mode);
 
   return (
-    <div className="ctrl-group" style={{ padding: '6px 8px' }}>
-      {/* Reserved for future preset chips — keeps vertical rhythm matching the
-          RX ModeBandwidth custom block even while presets are unset. */}
-      <div className="btn-row wrap" style={{ minHeight: 4, marginBottom: 2 }} />
+    <div className="ctrl-group" style={{ padding: '6px 8px', gap: 6 }}>
+      <DriveSlider />
+      <TunePowerSlider />
+      <MicGainSlider />
+      {/* FILTER section — labeled explicitly now that the panel header is just
+          "TX". Top border separates the bandpass row from the sliders above so
+          the operator reads them as distinct controls. */}
+      <div
+        className="label-xs ctrl-lbl"
+        style={{ marginTop: 4, paddingTop: 6, borderTop: '1px solid var(--line)' }}
+      >
+        FILTER
+      </div>
       <div className="btn-row" style={{ alignItems: 'center', gap: 4 }}>
         <span className="label-xs" style={{ color: 'var(--fg-3)' }}>CUSTOM</span>
         <input

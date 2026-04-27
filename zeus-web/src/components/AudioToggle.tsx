@@ -79,7 +79,7 @@ export function AudioToggle() {
         type="button"
         onPointerUp={onClick}
         disabled={loading}
-        className={`btn ${playing ? 'active' : ''}`}
+        className={`btn tx-btn ${playing ? 'active' : ''}`}
         title={title}
       >
         <span className={`led ${playing ? 'on' : ''}`} style={{ marginRight: 6 }} />

@@ -206,6 +206,17 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void Spectrum0(int run, int disp, int ss, int LO, ref double pbuff);
 
+    // Pull complex IQ samples from TXA's siphon ring. The siphon sits at
+    // xsiphon's position in xtxa, which is BEFORE iqc (PureSignal correction)
+    // and BEFORE cfir/rsmpout. Default run=1, mode=0, sipsize=16384 (set
+    // inside libwdsp's create_txa). Output buffer is 2*size floats interleaved
+    // I,Q,I,Q. This lets the panadapter render the operator's pre-distortion
+    // voice spectrum so the trace looks "clean" while PS is converging — the
+    // same approach Thetis uses (cmaster.cs:544-545 + siphon.c:268).
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void TXAGetaSipF1(int channel, ref float pout, int size);
+
     // Averaging trio. Mode 3 = log-recursive (EMA in dB space) — the Thetis
     // default. Backmult is the per-frame retention factor (0 = no smoothing,
     // 1 = frozen). NumAverage matters for modes 2/4; we're on mode 3 so it
@@ -315,6 +326,45 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetRXAEMNRpost2Rate(int channel, double tc);
+
+    // SBNR (NR4) — libspecbleach spectral-bleaching NR. Symbols defined in
+    // native/wdsp/sbnr.c with the float / int signatures shown here.
+    // IMPORTANT: requires libwdsp rebuild — Phase 1 of issue #79; the
+    // bundled binaries shipped today do NOT export these symbols, so any
+    // call here will fail with EntryPointNotFoundException at runtime.
+    // The engine guards SBNR-on against the missing library; tests that
+    // try to actually flip Sbnr Run=1 are [Skip]'d until Phase 1 lands.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRPosition(int channel, int position);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRreductionAmount(int channel, float amount);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRsmoothingFactor(int channel, float factor);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRwhiteningFactor(int channel, float factor);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRnoiseRescale(int channel, float factor);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRpostFilterThreshold(int channel, float threshold);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASBNRnoiseScalingType(int channel, int noise_scaling_type);
 
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
@@ -556,6 +606,53 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetTXACFCOMPRun(int channel, int run);
+
+    // CFC (Continuous Frequency Compressor — multi-band frequency-domain
+    // compressor sitting in xtxa between xeqp and xbandpass). Issue #123.
+    // Entry points are case-sensitive — note `prof_i_le` is lowercase per
+    // cfcomp.c. Verified via `nm -D libwdsp.so | grep -i CFC`.
+    //
+    // SetTXACFCOMPprofile takes parallel arrays F[], G[], E[] (frequency Hz,
+    // compression dB, post-EQ gain dB) plus optional Q-derivative arrays for
+    // the *parametric* mode. Pass IntPtr.Zero for Qg/Qe to select the classic
+    // (pihpsdr / PowerSDR) non-parametric mode — cfcomp.c:122-123 falls back
+    // to linear interpolation when the Q pointers are NULL. The caller pins
+    // F/G/E with `fixed` blocks and passes them via `ref *pF`.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXACFCOMPprofile(
+        int channel,
+        int nfreqs,
+        ref double F,
+        ref double G,
+        ref double E,
+        IntPtr Qg,
+        IntPtr Qe);
+
+    // Frequency-independent pre-compressor gain (dB).
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXACFCOMPPrecomp(int channel, double precomp);
+
+    // Frequency-independent pre-EQ gain (dB).
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXACFCOMPPrePeq(int channel, double prepeq);
+
+    // Post-comp EQ branch enable (separate toggle from the master CFCOMPRun).
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXACFCOMPPeqRun(int channel, int run);
+
+    // Per-bin compression-meter readback. `comp_values` must be a pinned
+    // double[] sized to the FFT bins; `ready` is set to 1 when a fresh frame
+    // is available. Read-only diagnostic — not on the hot path.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void GetTXACFCOMPDisplayCompression(
+        int channel,
+        ref double comp_values,
+        out int ready);
 
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

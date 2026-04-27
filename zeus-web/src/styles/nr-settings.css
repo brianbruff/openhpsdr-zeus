@@ -1,0 +1,118 @@
+/* ===========================================================
+   NR settings inline section (issue #79).
+
+   Renders below the NR row inside DspPanel and as an
+   expandable section attached to NrControls. Same near-black
+   panel chrome the rest of the app uses (panel-top / panel-bot
+   gradient). No new tokens are introduced.
+   =========================================================== */
+
+.nr-settings {
+  margin-top: 6px;
+  padding: 8px 10px 10px 10px;
+  color: var(--fg-1);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--r-lg);
+  background: linear-gradient(180deg, var(--panel-top) 0%, var(--panel-bot) 100%);
+  box-shadow: inset 0 1px 0 var(--panel-hl-top);
+}
+
+.nr-settings__title {
+  margin: 0 0 6px 0;
+  padding: 0 0 4px 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-0);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--panel-edge);
+}
+
+.nr-settings__row {
+  display: grid;
+  grid-template-columns: 1fr 92px;
+  align-items: center;
+  column-gap: 10px;
+  margin: 4px 0;
+}
+
+.nr-settings__label {
+  color: var(--fg-1);
+  font-size: 12px;
+  user-select: none;
+}
+
+.nr-settings__input {
+  width: 100%;
+  padding: 3px 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-0);
+  background: var(--bg-0);
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--r-sm);
+  outline: none;
+}
+.nr-settings__input:focus { border-color: var(--accent); }
+
+.nr-settings__checkbox {
+  justify-self: end;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.nr-settings__select {
+  width: 100%;
+  padding: 2px 4px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--fg-0);
+  background: var(--bg-0);
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--r-sm);
+  outline: none;
+}
+
+.nr-settings__hint {
+  margin: 6px 0 0 0;
+  padding-top: 4px;
+  font-size: 11px;
+  color: var(--fg-2);
+  border-top: 1px solid var(--panel-edge);
+}
+
+.nr-settings__buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--panel-edge);
+}
+
+.nr-settings__button {
+  padding: 3px 10px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--btn-text);
+  background: linear-gradient(180deg, var(--btn-top) 0%, var(--btn-bot) 100%);
+  border: 1px solid var(--btn-edge);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.nr-settings__button--primary {
+  color: var(--btn-active-text);
+  background: linear-gradient(180deg, var(--btn-active-top) 0%, var(--btn-active-bot) 100%);
+}
+
+/* Compact toggle button used by NrControls in the topbar. */
+.nr-settings-toggle {
+  padding: 0 6px;
+  min-width: 22px;
+  font-size: 12px;
+  line-height: 1;
+}

@@ -54,8 +54,11 @@ import { LogbookPanel } from './panels/LogbookPanel';
 import { TxMetersPanel } from './panels/TxMetersPanel';
 import { FilterRibbonPanel } from './panels/FilterRibbonPanel';
 import { PsFlexPanel } from './panels/PsFlexPanel';
+import { BandPanel } from './panels/BandPanel';
+import { ModePanel } from './panels/ModePanel';
+import { StepPanel } from './panels/StepPanel';
 
-export type PanelCategory = 'spectrum' | 'vfo' | 'meters' | 'dsp' | 'log' | 'tools';
+export type PanelCategory = 'spectrum' | 'vfo' | 'meters' | 'dsp' | 'log' | 'tools' | 'controls';
 
 export interface PanelDef {
   id: string;
@@ -145,5 +148,26 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'tools',
     tags: ['puresignal', 'ps', 'tx', 'predistortion', 'linearization', 'twotone'],
     component: PsFlexPanel,
+  },
+  band: {
+    id: 'band',
+    name: 'Band Buttons',
+    category: 'controls',
+    tags: ['band', 'frequency', 'hf', 'tuning'],
+    component: BandPanel,
+  },
+  mode: {
+    id: 'mode',
+    name: 'Mode Buttons',
+    category: 'controls',
+    tags: ['mode', 'modulation', 'ssb', 'cw', 'am', 'fm'],
+    component: ModePanel,
+  },
+  step: {
+    id: 'step',
+    name: 'Tuning Step',
+    category: 'controls',
+    tags: ['step', 'tuning', 'frequency', 'increment'],
+    component: StepPanel,
   },
 };

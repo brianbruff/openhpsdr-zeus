@@ -630,6 +630,17 @@ app.MapPost("/api/tx/ps/feedback-source",
     return Results.Ok(r.SetPsFeedbackSource(req));
 });
 
+// PS-Monitor — operator-facing toggle that swaps the TX panadapter source
+// from the predistorted-IQ analyzer to the PS-feedback (post-PA) analyzer.
+// Pure UI/source-routing flag; no WDSP setter, no wire-format change.
+// Default off; resets each session same as the PS master arm. See issue #121.
+app.MapPost("/api/tx/ps/monitor",
+    (PsMonitorSetRequest req, RadioService r) =>
+{
+    log.LogInformation("api.tx.ps.monitor enabled={Enabled}", req.Enabled);
+    return Results.Ok(r.SetPsMonitor(req));
+});
+
 app.MapPost("/api/tx/ps/reset", (DspPipelineService pipe) =>
 {
     log.LogInformation("api.tx.ps.reset");
@@ -666,6 +677,43 @@ app.MapPost("/api/rx/nr", (NrSetRequest req, RadioService r) =>
     if (!Enum.IsDefined(req.Nr.NbMode))
         return Results.BadRequest(new { error = $"unknown NbMode {req.Nr.NbMode}" });
     return Results.Ok(r.SetNr(req.Nr));
+});
+
+// Per-popover PATCH endpoints for the right-click NR settings panels (issue
+// #79). Each merges nullable fields onto the persisted NrConfig so the
+// operator can edit one knob without resending the whole NR block. Skipping
+// fields (or sending null) is a no-op for that field.
+app.MapPost("/api/rx/nr2/post2", (Nr2Post2ConfigSetRequest req, RadioService r) =>
+{
+    log.LogInformation(
+        "api.rx.nr2.post2 run={Run} factor={Factor} nlevel={Nlevel} rate={Rate} taper={Taper}",
+        req.Post2Run, req.Post2Factor, req.Post2Nlevel, req.Post2Rate, req.Post2Taper);
+    return Results.Ok(r.SetNr2Post2(req));
+});
+
+app.MapPost("/api/rx/nr4", (Nr4ConfigSetRequest req, RadioService r) =>
+{
+    log.LogInformation(
+        "api.rx.nr4 reduction={Red} smoothing={Smo} whitening={Whi} noiseRescale={Nr} postThr={Pft} scaling={Sc} pos={Pos}",
+        req.ReductionAmount, req.SmoothingFactor, req.WhiteningFactor,
+        req.NoiseRescale, req.PostFilterThreshold, req.NoiseScalingType, req.Position);
+    return Results.Ok(r.SetNr4(req));
+});
+
+// CFC (Continuous Frequency Compressor) — issue #123. POSTs the full 10-band
+// CFC profile + master flags. Defaults to OFF so existing operators see no
+// behavior change. Validation is done by RadioService.SetCfc — bad shapes
+// throw ArgumentException which the framework returns as 400.
+app.MapPost("/api/tx/cfc", (CfcSetRequest req, RadioService r) =>
+{
+    if (req?.Config is null)
+        return Results.BadRequest(new { error = "Config required" });
+    if (req.Config.Bands is null || req.Config.Bands.Length != 10)
+        return Results.BadRequest(new { error = $"Bands must have exactly 10 entries; got {req.Config.Bands?.Length ?? 0}" });
+    log.LogInformation(
+        "api.tx.cfc enabled={Enabled} peq={Peq} preComp={Pre:F1}dB prePeq={PrePeq:F1}dB",
+        req.Config.Enabled, req.Config.PostEqEnabled, req.Config.PreCompDb, req.Config.PrePeqDb);
+    return Results.Ok(r.SetCfc(req));
 });
 
 app.MapPost("/api/rx/zoom", (ZoomSetRequest req, RadioService r) =>

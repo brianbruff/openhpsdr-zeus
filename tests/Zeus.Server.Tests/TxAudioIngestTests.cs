@@ -93,6 +93,7 @@ public class TxAudioIngestTests
         public int ReadAudio(int channelId, Span<float> output) => 0;
         public bool TryGetDisplayPixels(int channelId, DisplayPixout which, Span<float> dbOut) => false;
         public bool TryGetTxDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
+        public bool TryGetPsFeedbackDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
         public int OpenTxChannel(int outputRateHz = 48_000) => 0;
         public void SetMox(bool moxOn) { }
         public double GetRxaSignalDbm(int channelId) => -140.0;
@@ -114,6 +115,7 @@ public class TxAudioIngestTests
         public void ResetPs() { }
         public void SavePsCorrection(string path) { }
         public void RestorePsCorrection(string path) { }
+        public void SetCfcConfig(CfcConfig cfg) { }
         public void Dispose() { }
     }
 

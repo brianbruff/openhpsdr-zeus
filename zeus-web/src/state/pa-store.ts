@@ -42,7 +42,7 @@ function defaultBand(band: string): PaBandSettings {
 
 function defaultState(): PaSettings {
   return {
-    global: { paEnabled: true, paMaxPowerWatts: 0, ocTune: 0 },
+    global: { paEnabled: true, paMaxPowerWatts: 0 },
     bands: HF_BANDS.map(defaultBand),
   };
 }
@@ -71,8 +71,8 @@ type PaStore = {
   setBand: (band: string, patch: Partial<Omit<PaBandSettings, 'band'>>) => void;
   // Overwrite per-band PaGainDb + global PaMaxPowerWatts with the requested
   // board's pure defaults. Does NOT persist — the operator still has to
-  // press APPLY. OC masks / Disable-PA / PaEnabled / OcTune are preserved
-  // because those are wiring preferences, not per-board data.
+  // press APPLY. OC masks / Disable-PA / PaEnabled are preserved because
+  // those are wiring preferences, not per-board data.
   resetToBoardDefaults: (boardOverride?: string) => Promise<void>;
 };
 

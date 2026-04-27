@@ -72,9 +72,8 @@ public sealed class PaSettingsStore : IDisposable
             var global = g is null
                 ? new PaGlobalSettingsDto(
                     PaEnabled: true,
-                    PaMaxPowerWatts: PaDefaults.GetMaxPowerWatts(board),
-                    OcTune: 0)
-                : new PaGlobalSettingsDto(g.PaEnabled, g.PaMaxPowerWatts, g.OcTune);
+                    PaMaxPowerWatts: PaDefaults.GetMaxPowerWatts(board))
+                : new PaGlobalSettingsDto(g.PaEnabled, g.PaMaxPowerWatts);
 
             var existing = _bands.FindAll().ToDictionary(e => e.Band, e => e);
             var bands = BandUtils.HfBands
@@ -101,8 +100,7 @@ public sealed class PaSettingsStore : IDisposable
     {
         var global = new PaGlobalSettingsDto(
             PaEnabled: true,
-            PaMaxPowerWatts: PaDefaults.GetMaxPowerWatts(board),
-            OcTune: 0);
+            PaMaxPowerWatts: PaDefaults.GetMaxPowerWatts(board));
         var bands = BandUtils.HfBands
             .Select(b => new PaBandSettingsDto(b, PaGainDb: PaDefaults.GetPaGainDb(board, b)))
             .ToArray();
@@ -128,9 +126,8 @@ public sealed class PaSettingsStore : IDisposable
             return g is null
                 ? new PaGlobalSettingsDto(
                     PaEnabled: true,
-                    PaMaxPowerWatts: PaDefaults.GetMaxPowerWatts(board),
-                    OcTune: 0)
-                : new PaGlobalSettingsDto(g.PaEnabled, g.PaMaxPowerWatts, g.OcTune);
+                    PaMaxPowerWatts: PaDefaults.GetMaxPowerWatts(board))
+                : new PaGlobalSettingsDto(g.PaEnabled, g.PaMaxPowerWatts);
         }
     }
 
@@ -142,7 +139,6 @@ public sealed class PaSettingsStore : IDisposable
             var g = existingGlobal ?? new PaGlobalEntry();
             g.PaEnabled = dto.Global.PaEnabled;
             g.PaMaxPowerWatts = Math.Max(0, dto.Global.PaMaxPowerWatts);
-            g.OcTune = dto.Global.OcTune;
             g.UpdatedUtc = DateTime.UtcNow;
             if (existingGlobal is null) _globals.Insert(g);
             else _globals.Update(g);
@@ -195,7 +191,6 @@ public sealed record PaRuntimeSnapshot(
     byte DriveByte,
     byte OcTxMask,
     byte OcRxMask,
-    byte OcTuneMask,
     bool PaEnabled);
 
 public sealed class PaBandEntry
@@ -214,6 +209,12 @@ public sealed class PaGlobalEntry
     public int Id { get; set; }
     public bool PaEnabled { get; set; } = true;
     public int PaMaxPowerWatts { get; set; }
-    public byte OcTune { get; set; }
+    // NOTE: legacy rows persisted before #124 may carry an `OcTune` column.
+    // LiteDB's BsonMapper silently ignores unknown fields when deserializing,
+    // so existing PaSettings rows survive a load → save roundtrip with the
+    // column dropped on the next write. The global "OC bits while Tune"
+    // override was removed for hardware-safety (issue #124): it could hand
+    // an external amp a confused band-select state during a steady tune
+    // carrier and damage the finals. OC during TUN now follows OcTx.
     public DateTime UpdatedUtc { get; set; }
 }

@@ -52,8 +52,13 @@ import { useTxStore } from '../state/tx-store';
 //
 // SWR and mic dBfs are surfaced alongside the meter only while MOX is on —
 // they're TX-only telemetry and would be misleading under RX.
+//
+// `hideChips` lets a host (mobile shell) suppress the in-body chip row and
+// surface the same telemetry in its own chrome (e.g. the S-Meter section
+// header). Without that escape, the chips appear/disappear with TX state and
+// shift everything below the meter down on key — see MobileApp.tsx.
 
-export function SMeterLive() {
+export function SMeterLive({ hideChips = false }: { hideChips?: boolean } = {}) {
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
   const fwdWatts = useTxStore((s) => s.fwdWatts);
@@ -73,7 +78,7 @@ export function SMeterLive() {
           <SMeter mode="rx" dbm={rxDbm} />
         )}
       </div>
-      {transmitting && (
+      {transmitting && !hideChips && (
         <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
           <span className="chip mono">
             <span className="k">SWR</span>

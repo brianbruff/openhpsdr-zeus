@@ -69,6 +69,12 @@ builder.Services.Configure<JsonOptions>(o =>
 // on the LAN (doc 01 §Deployment: local single-user, same LAN as radio).
 // ZEUS_PORT overrides the default (used by the /run skill's portOffset).
 var zeusPort = int.TryParse(Environment.GetEnvironmentVariable("ZEUS_PORT"), out var zp) ? zp : 6060;
+var zeusHttpsPort = LanCertificate.GetHttpsPort();
+// HTTPS bind for mobile-browser parity. Browsers refuse getUserMedia on a
+// non-secure context, which kills mic-uplink TX from any phone reaching
+// the server by LAN IP. The cert is auto-managed; first visit on each
+// device shows the standard "Not secure" warning.
+var lanCert = LanCertificate.GetOrCreate();
 
 // Resolve TCI bind settings from configuration before DI builds, because Kestrel's
 // listeners have to be declared now. TCI shares Kestrel (rather than a separate
@@ -81,6 +87,7 @@ var tciPort = tciSection.GetValue<int?>("Port") ?? 40001;
 builder.WebHost.ConfigureKestrel(k =>
 {
     k.ListenAnyIP(zeusPort);
+    k.ListenAnyIP(zeusHttpsPort, l => l.UseHttps(lanCert));
     if (tciEnabled)
     {
         if (tciBindAddress is "0.0.0.0" or "*" or "")
@@ -161,6 +168,20 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<TciServer>());
 builder.Services.AddSingleton<TciManagementService>();
 
 var app = builder.Build();
+
+// Surface the HTTPS endpoints up front so the operator can pick one for
+// their phone. iOS Safari + Chrome on Android both refuse getUserMedia on
+// non-secure origins, so the mobile shell hard-requires this URL.
+{
+    var lanIps = LanCertificate.GetLanIps();
+    var startupLog = app.Services.GetRequiredService<ILogger<Program>>();
+    startupLog.LogInformation(
+        "Zeus listening:  http://localhost:{HttpPort}   https://localhost:{HttpsPort}{LanLines}",
+        zeusPort, zeusHttpsPort,
+        lanIps.Count == 0
+            ? string.Empty
+            : "   (LAN: " + string.Join(", ", lanIps.Select(ip => $"https://{ip}:{zeusHttpsPort}")) + ")");
+}
 
 // Initialize QrzService to restore stored credentials (silent login)
 var qrzService = app.Services.GetRequiredService<QrzService>();

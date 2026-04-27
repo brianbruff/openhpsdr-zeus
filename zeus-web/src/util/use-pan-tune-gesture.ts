@@ -112,14 +112,41 @@ export function usePanTuneGesture(
 
     type Drag = { startX: number; startHz: number; spanHz: number; moved: boolean };
     type MapDrag = { lastX: number; lastY: number };
+    type Pinch = {
+      baseDist: number;     // pointer separation when the pinch began (px)
+      baseZoom: number;     // zoom level when the pinch began
+      pendingZoom: number | null;
+      raf: number;
+    };
     let drag: Drag | null = null;
     // alt-held pointer drag — delegates to the background map via the
     // SpectrumWheelActionsContext so it feels like M-hold drag without
     // swapping pointer-events on the spectrum stack.
     let mapDrag: MapDrag | null = null;
+    // Live pointer roster for multi-touch (pinch-to-zoom on mobile). Single
+    // pointer flows through the existing drag-to-tune path; ≥2 pointers
+    // triggers pinch and suppresses any in-flight drag.
+    const pointers = new Map<number, { x: number; y: number }>();
+    let pinch: Pinch | null = null;
     let pendingHz: number | null = null;
     let pendingAbort: AbortController | null = null;
     let pendingRaf = 0;
+
+    const pinchDistance = (): number => {
+      const arr = Array.from(pointers.values());
+      if (arr.length < 2) return 0;
+      const a = arr[0];
+      const b = arr[1];
+      if (!a || !b) return 0;
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    };
+
+    const cancelPinchRaf = () => {
+      if (pinch && pinch.raf !== 0) {
+        cancelAnimationFrame(pinch.raf);
+        pinch.raf = 0;
+      }
+    };
 
     // Wheel bookkeeping: accumulate deltas so trackpad micro-deltas feel
     // consistent, but emit at most one step per physical wheel event — one
@@ -184,6 +211,26 @@ export function usePanTuneGesture(
 
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      // Two-finger pinch on mobile → zoom. Pinch always wins over an in-flight
+      // single-pointer drag; we drop the drag state so the lifted finger
+      // doesn't snap-tune on release.
+      if (pointers.size >= 2) {
+        if (drag) drag = null;
+        if (mapDrag) mapDrag = null;
+        canvas.style.cursor = '';
+        if (!pinch) {
+          pinch = {
+            baseDist: pinchDistance(),
+            baseZoom: useConnectionStore.getState().zoomLevel,
+            pendingZoom: null,
+            raf: 0,
+          };
+        }
+        try { canvas.setPointerCapture(e.pointerId); } catch { /* ok */ }
+        e.preventDefault();
+        return;
+      }
       // alt held → drag the background map instead of panning the spectrum.
       // Mirrors M-hold drag behavior without the pointer-events:none swap.
       if (e.altKey) {
@@ -211,6 +258,36 @@ export function usePanTuneGesture(
     };
 
     const onPointerMove = (e: PointerEvent) => {
+      const p = pointers.get(e.pointerId);
+      if (p) {
+        p.x = e.clientX;
+        p.y = e.clientY;
+      }
+      if (pinch) {
+        const d = pinchDistance();
+        if (d > 0 && pinch.baseDist > 0) {
+          const ratio = d / pinch.baseDist;
+          // Linear ratio → integer zoom level. Round so a small wobble doesn't
+          // chatter; the optimistic store update + setZoom still flush via
+          // nudgeZoom's existing debounce.
+          const target = clampZoom(pinch.baseZoom * ratio);
+          if (pinch.pendingZoom !== target) {
+            pinch.pendingZoom = target;
+            if (pinch.raf === 0) {
+              pinch.raf = requestAnimationFrame(() => {
+                if (!pinch) return;
+                pinch.raf = 0;
+                const next = pinch.pendingZoom;
+                if (next == null) return;
+                const cur = useConnectionStore.getState().zoomLevel;
+                if (next !== cur) nudgeZoom(next - cur);
+              });
+            }
+          }
+        }
+        e.preventDefault();
+        return;
+      }
       if (mapDrag) {
         const dx = e.clientX - mapDrag.lastX;
         const dy = e.clientY - mapDrag.lastY;
@@ -234,6 +311,20 @@ export function usePanTuneGesture(
     };
 
     const onPointerUp = (e: PointerEvent) => {
+      pointers.delete(e.pointerId);
+      if (pinch) {
+        if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+        if (pointers.size < 2) {
+          // End of pinch — discard any in-flight rAF and let the user lift +
+          // re-touch to start a fresh drag-to-tune. Re-entering drag from a
+          // post-pinch single finger leads to a jump tune, which is worse
+          // than an enforced clean break.
+          cancelPinchRaf();
+          pinch = null;
+          canvas.style.cursor = 'grab';
+        }
+        return;
+      }
       if (mapDrag) {
         mapDrag = null;
         canvas.style.cursor = 'grab';
@@ -309,6 +400,7 @@ export function usePanTuneGesture(
 
     return () => {
       if (pendingRaf !== 0) cancelAnimationFrame(pendingRaf);
+      cancelPinchRaf();
       pendingAbort?.abort();
       zoomInflight?.abort();
       canvas.removeEventListener('pointerdown', onPointerDown);

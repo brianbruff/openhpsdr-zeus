@@ -1,0 +1,405 @@
+/* Mobile single-column shell. Layout shape from the Zeus Mobile design;
+   colour and type from src/styles/tokens.css. The desktop "body { overflow:
+   hidden }" rule keeps the desktop shell pinned to the viewport — mobile
+   needs a scrolling document, so .m-app sets its own scroll context. */
+
+.m-app {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-app);
+  color: var(--fg-0);
+  font-family: var(--font-sans);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  /* Status-bar / dynamic-island clearance + bottom home-indicator clearance */
+  padding-top: env(safe-area-inset-top, 0);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+/* ── Topbar ────────────────────────────────────────────── */
+.m-topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: linear-gradient(180deg, var(--panel-head-top) 0%, var(--panel-head-bot) 100%);
+  border-bottom: 1px solid var(--panel-border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.m-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.m-brand-text {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.4px;
+  color: var(--fg-0);
+  white-space: nowrap;
+}
+/* Topbar Connect/Disconnect button. The chip-style container doubles as the
+   tap target that opens the radio selector overlay. Tinted accent when
+   connected, accent-blue when prompting to connect. */
+.m-conn-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-0);
+  border: 1px solid var(--btn-edge);
+  border-radius: var(--r-md);
+  color: var(--fg-1);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  cursor: pointer;
+  min-height: 32px;
+}
+.m-conn-btn:hover { background: var(--bg-1); }
+.m-conn-led {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  flex-shrink: 0;
+}
+.m-conn-led--off {
+  background: var(--fg-3);
+  box-shadow: none;
+}
+.m-conn-v {
+  font-family: var(--font-mono);
+  color: var(--accent);
+}
+.m-conn-action {
+  color: var(--fg-2);
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+.m-conn-action--primary { color: var(--accent); font-weight: 700; }
+.m-conn-btn[data-connected='false'] { border-color: var(--accent-soft); }
+
+/* ── Radio selector overlay ─────────────────────────────── */
+.m-selector-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: env(safe-area-inset-top, 16px) 12px 12px;
+  z-index: 50;
+  overflow-y: auto;
+}
+.m-selector-sheet {
+  width: 100%;
+  max-width: 460px;
+  margin-top: 48px;
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-lg);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.m-selector-head {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  background: linear-gradient(180deg, var(--panel-head-top) 0%, var(--panel-head-bot) 100%);
+  border-bottom: 1px solid var(--panel-border);
+}
+.m-selector-title {
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--fg-0);
+}
+.m-selector-close {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--fg-2);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+}
+.m-selector-close:hover { background: var(--bg-1); color: var(--fg-0); }
+.m-selector-body {
+  padding: 8px;
+  overflow-y: auto;
+}
+/* ConnectPanel sets minWidth: 460px inline (ConnectPanel.tsx:363); on a
+   402 px viewport that overflows. Force it to fill the sheet width. */
+.m-selector-body .panel { min-width: 0 !important; max-width: 100% !important; }
+
+/* ── Vertical stack ────────────────────────────────────── */
+.m-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+
+/* ── Section panel ─────────────────────────────────────── */
+.m-section {
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  box-shadow: var(--panel-shadow);
+}
+.m-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: linear-gradient(180deg, var(--panel-head-top) 0%, var(--panel-head-bot) 100%);
+  border-bottom: 1px solid var(--panel-border);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.m-section-led {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  flex-shrink: 0;
+}
+.m-section-label {
+  color: var(--fg-0);
+  font-weight: 600;
+}
+.m-section-meta {
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+}
+/* Right-aligned slot in the section head — used by the S-Meter card to
+   carry SWR + MIC dBfs chips during TX. `margin-left: auto` pushes the
+   slot to the right edge regardless of the label/meta width on its left.
+   The header inherits `text-transform: uppercase`, but `.chip .k` is
+   already uppercase and `.chip .v` is just digits so the cascade is a
+   no-op in practice. */
+.m-section-extra {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.m-section-body {
+  padding: 10px;
+}
+/* Tight modifier — used by S-Meter so the LED strip + dBm readout fill the
+   panel chrome edge to edge. SMeterLive paints its own padding:10 inline,
+   override that too. */
+.m-section--tight > .m-section-body { padding: 0; }
+.m-section--tight > .m-section-body > div { padding: 0 !important; }
+
+/* The VFO. The shared `.freq-display` panel sizes digits with
+   `clamp(38px, 26cqh, 140px)` (layout.css:607); pin a tight mobile height
+   so the digits sit inside the dark blue inset chrome and the panel doesn't
+   dominate the screen. The bottom hint label (.freq-bot) is hidden — it's
+   discoverable on first interaction; not worth the extra rows on mobile. */
+.m-vfo-wrap {
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+}
+.m-app .freq-display {
+  min-height: 56px;
+  padding: 6px 12px;
+  width: 100%;
+}
+.m-app .freq-display .freq-bot { display: none; }
+.m-app .freq-display .freq-digits { margin: 0; }
+
+/* ── Panadapter + waterfall ────────────────────────────── */
+/* The map-layer + spectrum stack share a single positioned ancestor so the
+   QRZ Leaflet world map can sit behind a transparent waterfall the same way
+   the desktop "hero" panel does (see App.tsx:818-882). */
+.m-pan-stack {
+  position: relative;
+  height: 310px;
+  background: var(--spec-bg);
+}
+.m-map-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+}
+.m-pan-spectrum {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  pointer-events: auto;
+}
+.m-pan,
+.m-wf {
+  position: relative;
+  background: transparent;
+}
+.m-pan { border-bottom: 1px solid var(--panel-border); }
+/* Both child components fill their container via absolute children */
+.m-pan > *,
+.m-wf > * { position: absolute; inset: 0; }
+
+/* When the QRZ map is rendering behind, the panadapter + waterfall
+   containers must paint transparent so the map tiles bleed through. The
+   Panadapter widget's <div class="spectrum-canvas"> sets var(--spec-bg)
+   inline (Panadapter.tsx:196); override for the mobile shell. The Waterfall
+   widget's noise floor is faded inside its WebGL fragment shader by the
+   `transparent` prop we already pass. */
+.m-app .spectrum-canvas { background: transparent !important; }
+
+/* The Panadapter widget brings its own dB scale axis pinned to the left
+   which we keep visible. The Waterfall widget brings two pieces of chrome
+   that don't belong on mobile:
+     • γ contrast slider — hidden, takes the same left rail as the dB scale.
+     • Colormap radios + dB:FIXED chip — hidden per maintainer brief, mobile
+       has no room for palette selection in this iteration. */
+.m-app [aria-label="Waterfall contrast (γ)"] { display: none !important; }
+.m-app [role="radiogroup"][aria-label="Colormap"],
+.m-app [role="radiogroup"][aria-label="Colormap"] + button { display: none !important; }
+/* Pinch-to-zoom: tell the browser we own all touch on the spectrum surface
+   so it doesn't double-tap-zoom or pinch-zoom the document instead of the
+   canvas. usePanTuneGesture handles the multi-pointer math for both pan
+   (Panadapter) and waterfall canvases. */
+.m-app .m-pan canvas,
+.m-app .m-wf canvas { touch-action: none; }
+
+/* The Panadapter section overrides the default 10px body padding so the
+   spectrum + waterfall reach the panel edges. */
+.m-section:has(.m-pan) > .m-section-body { padding: 0; }
+
+/* ── MOX block ─────────────────────────────────────────── */
+.m-mox-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Mic permission gate. Shown only when useMicUplink reports an error —
+   typically iOS Safari blocking getUserMedia over HTTP-on-LAN-IP, or a
+   prior denial that needs an explicit user-gesture re-request. */
+.m-mic-gate {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--tx-soft);
+  border: 1px solid var(--tx);
+  border-radius: var(--r-md);
+  color: var(--fg-1);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.m-mic-gate__msg strong { color: var(--tx); margin-right: 4px; }
+.m-mic-gate__btn {
+  align-self: flex-start;
+  padding: 8px 14px;
+  border-radius: var(--r-md);
+  background: var(--accent);
+  color: #06121f;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  cursor: pointer;
+  border: none;
+  min-height: 36px;
+}
+.m-mic-gate__btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.m-mox-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+}
+/* The mobile-ptt-btn already exists in src/styles/layout.css with mobile
+   sizing; we just want it full-width inside the block. The desktop CSS
+   adds `transform: translateY(1px)` on the .tx state for a press-down
+   feel — disorienting on a phone where the surrounding row stays put,
+   so we pin it. */
+.m-mox-block .mobile-ptt-btn { width: 100%; }
+.m-mox-block .mobile-ptt-btn.tx { transform: none; }
+/* Compact the secondary buttons so three fit comfortably across. */
+.m-mox-row .btn,
+.m-mox-row .tx-btn { width: 100%; padding: 10px 6px; font-size: 13px; }
+
+/* ── Mode + Band ───────────────────────────────────────── */
+.m-modeband {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.m-segmented {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 4px;
+  padding: 3px;
+  background: var(--bg-1);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-lg);
+}
+.m-seg-btn {
+  padding: 9px 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--fg-2);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.4px;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+  min-height: 36px;             /* Apple-recommended touch target */
+}
+.m-seg-btn:hover:not([disabled]) { color: var(--fg-0); }
+.m-seg-btn.on {
+  background: var(--accent);
+  color: #06121f;
+  font-weight: 700;
+}
+.m-seg-btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+
+/* Wrap the existing BandButtons row so it stays inside the panel and the
+   chunky desktop buttons get a slightly tighter mobile sizing. The exact
+   internal markup of BandButtons is owned by that component; we just give
+   it a flex container that allows wrapping if 10 buttons don't fit one line. */
+.m-band-row { display: flex; flex-wrap: wrap; gap: 4px; }
+.m-band-row > * { flex: 1 1 auto; }
+.m-band-row button { min-width: 38px; padding: 8px 6px; font-size: 12px; }
+
+/* The legacy `.hide-mobile` / `.show-mobile` classes were added for the
+   chrome-only mobile fallback (most widgets hidden, a couple of mobile
+   variants surfaced). Inside the new mobile shell we want each component's
+   *desktop* variant — full band-button row, full mode row, etc. — so we
+   neutralise both legacy classes within .m-app. show-mobile widgets that
+   set `display: none` inline (e.g. the BandButtons dropdown) stay hidden
+   because the inline style still wins. */
+.m-app .hide-mobile { display: revert !important; }
+.m-app .show-mobile { display: none !important; }
+
+/* The hide-mobile band row inside BandButtons brings its own .ctrl-group +
+   .ctrl-lbl chrome that doesn't read well in the mobile section. Hide the
+   redundant "BAND" label and let the .btn-row sit flush. */
+.m-band-row .ctrl-lbl { display: none; }
+.m-band-row .ctrl-group { padding: 0; }

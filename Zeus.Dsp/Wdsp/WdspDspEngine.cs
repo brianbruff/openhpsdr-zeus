@@ -705,14 +705,16 @@ public sealed class WdspDspEngine : IDspEngine
         public const int EmnrAeRun = 1;
         public const int Position = 1;
 
-        // post2 defaults sourced from Thetis radio.cs slider initialisation
-        // and emnr.c:1026–1056 parameter ranges. UI sliders (factor/nlevel/
-        // taper) are 0..100 in Thetis and divided by 100 before SetRXA*; the
-        // 15-on-the-slider Thetis defaults arrive at WDSP as 0.15 / 12. See
-        // docs/prd/11-nr2-gap-plan.md §2a.
+        // post2 defaults sourced from Thetis radio.cs:2103/2122/2160 (raw
+        // NumericUpDown values 0..100, default 15/15/12). The /100 scaling
+        // happens INSIDE WDSP at emnr.c:1035/1042/1050, so the wire value is
+        // the Thetis slider raw — not the post-divide internal value WDSP
+        // ends up storing. (post2Rate has no /100 in WDSP, so 5.0 is correct
+        // as-is.) Earlier Zeus defaults of 0.15 were 100× too small once WDSP
+        // divided again, leaving comfort-noise effectively silent.
         public const int EmnrPost2Run = 1;
-        public const double EmnrPost2Factor = 0.15;
-        public const double EmnrPost2Nlevel = 0.15;
+        public const double EmnrPost2Factor = 15.0;
+        public const double EmnrPost2Nlevel = 15.0;
         public const double EmnrPost2Rate = 5.0;
         public const int EmnrPost2Taper = 12;
 

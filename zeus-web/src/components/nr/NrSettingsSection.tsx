@@ -160,9 +160,9 @@ function Nr2Panel() {
         label="Factor"
         value={factor}
         min={0}
-        max={1}
-        step={0.01}
-        decimals={2}
+        max={100}
+        step={1}
+        decimals={1}
         onChange={onFactorChange}
       />
       <GaugeRow
@@ -171,9 +171,9 @@ function Nr2Panel() {
         label="Nlevel"
         value={nlevel}
         min={0}
-        max={1}
-        step={0.01}
-        decimals={2}
+        max={100}
+        step={1}
+        decimals={1}
         onChange={onNlevelChange}
       />
       <GaugeRow
@@ -200,8 +200,9 @@ function Nr2Panel() {
       />
 
       <p className="nr-settings__hint">
-        Comfort-noise injection masking residual EMNR warble. Defaults: factor 0.15,
-        nlevel 0.15, rate 5.0, taper 12. See emnr.c:981–1056.
+        Comfort-noise injection masking residual EMNR warble. Defaults: factor 15,
+        nlevel 15, rate 5.0, taper 12 (Thetis NUD scale; WDSP /100 internally).
+        See emnr.c:981–1056.
       </p>
 
       <div className="nr-settings__buttons">

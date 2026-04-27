@@ -99,8 +99,8 @@ public class Nr4SettingsPersistenceTests : IDisposable
         var cfg = new NrConfig(
             NrMode: NrMode.Emnr,
             EmnrPost2Run: false,
-            EmnrPost2Factor: 0.22,
-            EmnrPost2Nlevel: 0.18,
+            EmnrPost2Factor: 22.0,
+            EmnrPost2Nlevel: 18.0,
             EmnrPost2Rate: 4.0,
             EmnrPost2Taper: 8);
 
@@ -111,10 +111,41 @@ public class Nr4SettingsPersistenceTests : IDisposable
         Assert.NotNull(back);
         Assert.Equal(NrMode.Emnr, back!.NrMode);
         Assert.Equal(false, back.EmnrPost2Run);
-        Assert.Equal(0.22, back.EmnrPost2Factor);
-        Assert.Equal(0.18, back.EmnrPost2Nlevel);
+        Assert.Equal(22.0, back.EmnrPost2Factor);
+        Assert.Equal(18.0, back.EmnrPost2Nlevel);
         Assert.Equal(4.0, back.EmnrPost2Rate);
         Assert.Equal(8, back.EmnrPost2Taper);
+    }
+
+    // Legacy-scale migration: a row written before the post2 /100 fix stored
+    // factor/nlevel on the WDSP post-divide 0..1 scale. Get() must promote
+    // values < 1.0 by ×100 (Thetis NUD scale) and rewrite the row so the
+    // migration only runs once per stored value.
+    [Fact]
+    public void SetNr2Post2Config_LegacyScaleIsMigrated()
+    {
+        var legacy = new NrConfig(
+            NrMode: NrMode.Emnr,
+            EmnrPost2Factor: 0.15,
+            EmnrPost2Nlevel: 0.30);
+
+        using (var store = BuildStore()) store.Upsert(legacy);
+
+        using (var firstRead = BuildStore())
+        {
+            var migrated = firstRead.Get();
+            Assert.NotNull(migrated);
+            Assert.Equal(15.0, migrated!.EmnrPost2Factor);
+            Assert.Equal(30.0, migrated.EmnrPost2Nlevel);
+        }
+
+        // Second read must NOT re-multiply — the migration should have written
+        // the new-scale value back to disk.
+        using var secondRead = BuildStore();
+        var stable = secondRead.Get();
+        Assert.NotNull(stable);
+        Assert.Equal(15.0, stable!.EmnrPost2Factor);
+        Assert.Equal(30.0, stable.EmnrPost2Nlevel);
     }
 
     // Upsert path — overwrite an existing row's NR4 fields. Catches a class

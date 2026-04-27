@@ -40,6 +40,33 @@ public sealed class DspSettingsStore : IDisposable
         if (e is null)
             return null;
 
+        // Legacy scale migration: pre-fix Zeus stored EmnrPost2Factor/Nlevel
+        // on the WDSP post-divide 0..1 scale (default 0.15). The wire-correct
+        // form is the Thetis NUD 0..100 scale (default 15.0) — WDSP /100s
+        // internally at emnr.c:1035/1042. Old persisted values < 1.0 are
+        // promoted in place so the operator's saved relative position is kept.
+        // The new UI gauge has step=1 so legitimate post-fix values are always
+        // >= 1.0; this check is unambiguous.
+        bool migrated = false;
+        if (e.EmnrPost2Factor is double oldFactor && oldFactor < 1.0)
+        {
+            e.EmnrPost2Factor = oldFactor * 100.0;
+            migrated = true;
+        }
+        if (e.EmnrPost2Nlevel is double oldNlevel && oldNlevel < 1.0)
+        {
+            e.EmnrPost2Nlevel = oldNlevel * 100.0;
+            migrated = true;
+        }
+        if (migrated)
+        {
+            e.UpdatedUtc = DateTime.UtcNow;
+            _entries.Update(e);
+            _log.LogInformation(
+                "Migrated legacy NR2 post2 scale (×100) for profile {ProfileId}: factor={Factor} nlevel={Nlevel}",
+                profileId, e.EmnrPost2Factor, e.EmnrPost2Nlevel);
+        }
+
         return new NrConfig(
             NrMode: e.NrMode,
             AnfEnabled: e.AnfEnabled,

@@ -98,12 +98,13 @@ export const NR_CONFIG_DEFAULT: NrConfigDto = {
 };
 
 // Engine-side defaults for the popover. Sourced from
-// WdspDspEngine.NrDefaults / Thetis radio.cs:2350-2462. The popover seeds
-// its initial form values from these when the persisted config has nulls.
+// WdspDspEngine.NrDefaults / Thetis radio.cs:2103/2122/2160. Factor/nlevel
+// are the Thetis NumericUpDown raw values (0..100); WDSP itself divides
+// by 100 internally at emnr.c:1035/1042. Rate has no /100 in WDSP.
 export const NR2_POST2_DEFAULTS = {
   run: true,
-  factor: 0.15,
-  nlevel: 0.15,
+  factor: 15,
+  nlevel: 15,
   rate: 5.0,
   taper: 12,
 } as const;

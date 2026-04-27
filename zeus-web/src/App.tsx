@@ -631,7 +631,7 @@ export default function App() {
             </svg>
           </div>
           <div className="brand-text">
-            <div className="brand-name mono">ZEUS</div>
+            <div className="brand-name mono">OpenHpsdr Zeus</div>
             <div className="brand-sub label-xs hide-mobile">HERMES LITE 2 · 0.1–54 MHz</div>
           </div>
         </div>

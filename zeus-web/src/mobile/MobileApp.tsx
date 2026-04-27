@@ -110,7 +110,7 @@ export function MobileApp() {
             <circle cx="12" cy="12" r="7" fill="none" stroke="var(--accent)" strokeWidth="1" opacity="0.5" />
             <circle cx="12" cy="12" r="11" fill="none" stroke="var(--accent)" strokeWidth="1" opacity="0.25" />
           </svg>
-          <span className="m-brand-text">ZEUS</span>
+          <span className="m-brand-text">OpenHpsdr Zeus</span>
         </div>
         <button
           type="button"

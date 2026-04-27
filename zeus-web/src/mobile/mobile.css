@@ -38,9 +38,10 @@
 .m-brand-text {
   font-family: var(--font-display);
   font-weight: 700;
-  font-size: 14px;
-  letter-spacing: 3px;
+  font-size: 13px;
+  letter-spacing: 0.4px;
   color: var(--fg-0);
+  white-space: nowrap;
 }
 /* Topbar Connect/Disconnect button. The chip-style container doubles as the
    tap target that opens the radio selector overlay. Tinted accent when

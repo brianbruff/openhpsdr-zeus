@@ -108,7 +108,7 @@ export const DEFAULT_LAYOUT = {
         children: [
           {
             type: 'tabset',
-            weight: 15,
+            weight: 21,
             children: [
               { type: 'tab', name: 'Frequency · VFO', component: 'vfo' },
             ],

@@ -42,9 +42,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useCallback, useState } from 'react';
-import { setVfo } from '../api/client';
-import { useConnectionStore } from '../state/connection-store';
+import { useState } from 'react';
 
 type TuningStep = {
   hz: number;
@@ -70,52 +68,38 @@ const TUNING_STEPS: readonly TuningStep[] = [
 
 const DEFAULT_STEP_HZ = 500;
 
-function clampHz(hz: number): number {
-  const MAX_HZ = 60_000_000;
-  if (!Number.isFinite(hz)) return 0;
-  return Math.min(MAX_HZ, Math.max(0, Math.trunc(hz)));
-}
-
 export function TuningStepWidget() {
-  const vfoHz = useConnectionStore((s) => s.vfoHz);
-  const applyState = useConnectionStore((s) => s.applyState);
-  const [stepHz, setStepHz] = useState(DEFAULT_STEP_HZ);
-
-  const tune = useCallback(
-    (direction: 1 | -1) => {
-      const next = clampHz(vfoHz + direction * stepHz);
-      if (next === vfoHz) return;
-      useConnectionStore.setState({ vfoHz: next });
-      setVfo(next)
-        .then(applyState)
-        .catch(() => {
-          /* next state poll will reconcile */
-        });
-    },
-    [vfoHz, stepHz, applyState],
-  );
-
-  const currentStep = (TUNING_STEPS.find((s) => s.hz === stepHz) || TUNING_STEPS[5]) as TuningStep;
+  const [stepHz, setStepHz] = useState<number>(DEFAULT_STEP_HZ);
 
   return (
-    <div className="ctrl-group" style={{ minWidth: 200 }}>
-      <div className="label-xs ctrl-lbl">TUNE STEP</div>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <button
-          type="button"
-          onClick={() => tune(-1)}
-          className="btn sm"
-          style={{ width: 32 }}
-          title={`Tune down by ${currentStep.label}`}
-        >
-          ◀
-        </button>
+    <>
+      {/* Desktop: single-line grid of equal-width step buttons. Cells use
+          minmax(0, 1fr) so the row shrinks gracefully with the panel. */}
+      <div className="ctrl-group hide-mobile" style={{ width: '100%' }}>
+        <div className="label-xs ctrl-lbl">TUNE STEP</div>
+        <div className="step-grid">
+          {TUNING_STEPS.map((step) => (
+            <button
+              key={step.hz}
+              type="button"
+              onClick={() => setStepHz(step.hz)}
+              className={`btn sm ${stepHz === step.hz ? 'active' : ''}`}
+              title={`Wheel-on-digit step: ${step.label}`}
+            >
+              {step.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Mobile: dropdown */}
+      <div className="ctrl-group show-mobile" style={{ display: 'none' }}>
+        <div className="label-xs ctrl-lbl">TUNE STEP</div>
         <select
           value={stepHz}
           onChange={(e) => setStepHz(Number(e.target.value))}
           className="step-select"
           style={{
-            flex: 1,
             background: 'var(--btn-top)',
             color: 'var(--fg-0)',
             border: '1px solid var(--line)',
@@ -132,16 +116,7 @@ export function TuningStepWidget() {
             </option>
           ))}
         </select>
-        <button
-          type="button"
-          onClick={() => tune(1)}
-          className="btn sm"
-          style={{ width: 32 }}
-          title={`Tune up by ${currentStep.label}`}
-        >
-          ▶
-        </button>
       </div>
-    </div>
+    </>
   );
 }

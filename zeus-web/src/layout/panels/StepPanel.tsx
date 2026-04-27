@@ -46,7 +46,15 @@ import { TuningStepWidget } from '../../components/TuningStepWidget';
 
 export function StepPanel() {
   return (
-    <div style={{ padding: '12px', overflow: 'auto' }}>
+    <div
+      style={{
+        padding: 12,
+        height: '100%',
+        width: '100%',
+        display: 'flex',
+        alignItems: 'center',
+      }}
+    >
       <TuningStepWidget />
     </div>
   );

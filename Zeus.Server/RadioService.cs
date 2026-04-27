@@ -1051,16 +1051,32 @@ public sealed class RadioService : IDisposable
         });
     }
 
-    // Resolves the board class the PA settings UI/math should seed defaults
-    // from. P1 client wins when present (its BoardKind comes from discovery);
-    // bare P2 connections imply Orion MkII (ANAN G2 family); everything else
-    // is Unknown and falls back to 0 dB (legacy percent→byte).
+    // Resolves the board class for ALL board-specific behavior: PA settings,
+    // drive-byte encoding, ATT behavior, filter switching. Normally returns
+    // the board ID from discovery (P1) or infers OrionMkII for P2. When the
+    // operator has enabled "Override Detection" in PreferredRadioStore, returns
+    // the preferred board instead — use this for hardware combinations that
+    // report incorrect board IDs or need different behavior (e.g., Anvelina SDR
+    // + ANAN 200D PA detected as OrionMkII but needs Orion behavior).
     public HpsdrBoardKind ConnectedBoardKind
     {
         get
         {
             lock (_sync)
             {
+                // Check if operator has explicitly enabled board override.
+                // This allows forcing specific board behavior when auto-detection
+                // is wrong or incomplete (different hardware with same board ID).
+                if (_preferredRadioStore?.GetOverrideDetection() == true)
+                {
+                    var preferred = _preferredRadioStore.Get();
+                    if (preferred.HasValue && preferred.Value != HpsdrBoardKind.Unknown)
+                    {
+                        return preferred.Value;
+                    }
+                }
+
+                // Normal path: use discovery result.
                 if (_activeClient is not null) return _activeClient.BoardKind;
                 if (_p2Active) return HpsdrBoardKind.OrionMkII;
                 return HpsdrBoardKind.Unknown;
@@ -1068,11 +1084,11 @@ public sealed class RadioService : IDisposable
         }
     }
 
-    // Board used to seed PA defaults / power-math tables. Discovery is
-    // authoritative when a radio is on the wire — an operator's explicit
-    // pick can't override what the hardware actually is. Before first
-    // connect, the stored preference takes over so the PA panel shows
-    // sane values for the radio the operator is about to plug in.
+    // Board used to seed PA defaults / power-math tables. When a radio is
+    // connected, ConnectedBoardKind wins (which may be overridden by the
+    // operator). Before first connect, the stored preference takes over so
+    // the PA panel shows sane values for the radio the operator is about to
+    // plug in.
     public HpsdrBoardKind EffectiveBoardKind
     {
         get

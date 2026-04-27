@@ -12,13 +12,28 @@ Layout:
 
 ```
 native/
-  wdsp/                 # vendored upstream WDSP 1.29 .c/.h
-  wdsp/stubs/           # minimal headers + no-op rnnr/sbnr for MVP
-  wdsp/wdsp_export.h    # WDSP_EXPORT visibility macro (replaces PORT)
-  wdsp/CMakeLists.txt   # the real build
-  build.sh              # convenience wrapper -> stages .dylib into Zeus.Dsp
-  build/                # generated CMake cache (gitignored)
+  wdsp/                  # vendored upstream WDSP 1.29 .c/.h
+  wdsp/stubs/nr3/        # no-op rnnr_stub.c + rnnoise.h (used when WDSP_WITH_NR3=OFF)
+  wdsp/stubs/nr4/        # no-op sbnr_stub.c + specbleach_adenoiser.h (used when WDSP_WITH_NR4=OFF)
+  wdsp/wdsp_export.h     # WDSP_EXPORT visibility macro (replaces PORT)
+  wdsp/CMakeLists.txt    # the real build
+  libspecbleach/         # vendored libspecbleach for NR4 (Phase 1a of #162)
+  build.sh               # convenience wrapper -> stages .dylib into Zeus.Dsp
+  build/                 # generated CMake cache (gitignored)
 ```
+
+## NR3 / NR4 build flags
+
+- `WDSP_WITH_NR3` — RNNoise (NR3) support. **OFF by default**; librnnoise is
+  not yet vendored. When OFF, `stubs/nr3/rnnr_stub.c` is compiled in place of
+  `rnnr.c`, leaving `rnnr.p->run` at 0 so the NR3 branch never executes.
+- `WDSP_WITH_NR4` — libspecbleach / SBNR support. **ON by default** since
+  libspecbleach is vendored at `native/libspecbleach/`. When OFF,
+  `stubs/nr4/sbnr_stub.c` is compiled instead.
+
+libspecbleach is built as a `STATIC` sub-target with hidden symbol visibility
+and embedded into `libwdsp.{so,dylib,dll}` — no extra runtime library to ship.
+See `native/libspecbleach/VENDORING.md` for re-vendoring notes.
 
 ## Build on macOS (arm64 / x86_64)
 
@@ -33,6 +48,10 @@ into the matching `Zeus.Dsp/runtimes/<rid>/native/` directory. .NET's default
 native library resolution picks it up with no extra configuration.
 
 ## Build on Linux (x86_64 / arm64)
+
+`libfftw3-dev` ships both double (`fftw3`) and single-precision (`fftw3f`)
+variants in the same package — both are needed: `fftw3` for WDSP itself, `fftw3f`
+for libspecbleach (NR4).
 
 ```sh
 sudo apt install libfftw3-dev cmake build-essential pkg-config     # Debian/Ubuntu
@@ -110,15 +129,15 @@ Diff against upstream WDSP 1.29 is intentionally tiny:
    `wdsp_export.h` and `#define PORT WDSP_EXPORT`. This is the single change
    needed to get proper symbol export on all three OSes.
 2. `wdsp_export.h` — new file, holds the cross-platform visibility macro.
-3. `stubs/rnnoise.h` + `stubs/specbleach_adenoiser.h` — minimal opaque types
-   so `rnnr.h` / `sbnr.h` compile without Xiph RNNoise or libspecbleach
-   available. Only active when `-DWDSP_WITH_NR3_NR4=OFF` (the default).
-4. `stubs/rnnr_stub.c` + `stubs/sbnr_stub.c` — no-op replacements for
-   `rnnr.c` and `sbnr.c`. These provide the entry points RXA.c calls (with
-   `run` stuck at 0, the NR3/NR4 branches never execute) so we can build
-   without pulling in the upstream noise-reduction libraries. To enable NR3/4
-   later: vendor RNNoise and libspecbleach, then build with
-   `cmake -DWDSP_WITH_NR3_NR4=ON …`.
+3. `stubs/nr3/rnnoise.h` + `stubs/nr4/specbleach_adenoiser.h` — minimal opaque
+   types so `rnnr.h` / `sbnr.h` compile without librnnoise / libspecbleach
+   available. Each lives in its own subdirectory so the CMake gate can include
+   only the stub matching the OFF flag, avoiding header collisions with the
+   real library include path.
+4. `stubs/nr3/rnnr_stub.c` + `stubs/nr4/sbnr_stub.c` — no-op replacements for
+   `rnnr.c` / `sbnr.c`. These provide the entry points RXA.c calls (with
+   `run` stuck at 0, the NR branches never execute) so we can build without
+   pulling in the upstream noise-reduction libraries.
 
 No other files are modified. `linux_port.{c,h}` does all the Win32 → POSIX
 shimming (pthreads, aligned malloc, Sleep, `__declspec`).

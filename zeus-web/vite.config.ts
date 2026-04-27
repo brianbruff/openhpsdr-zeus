@@ -98,7 +98,7 @@ export default defineConfig({
   ],
   server: {
     port: 5173,
-    allowedHosts: ['.ngrok-free.app', '.ngrok.app', '.ngrok.io'],
+    allowedHosts: ['.ngrok-free.app', '.ngrok-free.dev', '.ngrok.app', '.ngrok.dev', '.ngrok.io'],
     proxy: {
       '/api': `http://localhost:${backendPort}`,
       '/ws': { target: `ws://localhost:${backendPort}`, ws: true },

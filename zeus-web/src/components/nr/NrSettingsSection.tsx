@@ -17,16 +17,33 @@
 // matching Thetis's Setup-form pattern.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Activity, BarChart3, Filter, RotateCcw, Target, Timer, Waves } from 'lucide-react';
+import {
+  Activity,
+  BarChart3,
+  Crosshair,
+  Filter,
+  Maximize2,
+  RotateCcw,
+  Target,
+  Timer,
+  TrendingDown,
+  Waves,
+  Wind,
+  Zap,
+} from 'lucide-react';
 import {
   GAIN_METHOD_LABELS,
   NPE_METHOD_LABELS,
   NR2_CORE_DEFAULTS,
   NR2_POST2_DEFAULTS,
+  NR4_ALGO_LABELS,
+  NR4_DEFAULTS,
   setNr2Core,
   setNr2Post2,
+  setNr4,
   type Nr2CorePatchBody,
   type Nr2Post2PatchBody,
+  type Nr4PatchBody,
   type RadioStateDto,
 } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
@@ -38,19 +55,16 @@ export type NrSettingsSectionProps = {
 };
 
 export function NrSettingsSection({ mode }: NrSettingsSectionProps) {
-  // NR4 (Sbnr) panel is intentionally not rendered here — bundled libwdsp
-  // doesn't export the SetRXASBNR* symbols (Phase 1 of issue #79), so any
-  // adjustment is silently inert. Nr4Panel is preserved below; re-enable
-  // its case in this switch once Phase 1 binaries land.
-  if (mode === 'Sbnr') return null;
   return (
     <div className="nr-settings" role="region" aria-label={`NR ${mode} settings`}>
       <h3 className="nr-settings__title">
         {mode === 'Anr' && 'NR1 — ANR'}
         {mode === 'Emnr' && 'NR2 — EMNR'}
+        {mode === 'Sbnr' && 'NR4 — SBNR'}
       </h3>
       {mode === 'Anr' && <AnrPanel />}
       {mode === 'Emnr' && <Nr2Panel />}
+      {mode === 'Sbnr' && <Nr4Panel />}
     </div>
   );
 }
@@ -378,6 +392,209 @@ function Nr2Panel() {
           className="nr-settings__button nr-settings__button--primary"
           onClick={resetDefaults}
           title="Reset Method + Post-Process to factory defaults"
+        >
+          <RotateCcw size={12} strokeWidth={2.5} />
+          <span>Defaults</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------- NR4 (SBNR / libspecbleach) tunables. -----------------------
+
+function Nr4Panel() {
+  const nr = useConnectionStore((s) => s.nr);
+  const applyState = useConnectionStore((s) => s.applyState);
+
+  const [reduction, setReduction] = useState<number>(
+    nr.nr4ReductionAmount ?? NR4_DEFAULTS.reductionAmount,
+  );
+  const [smoothing, setSmoothing] = useState<number>(
+    nr.nr4SmoothingFactor ?? NR4_DEFAULTS.smoothingFactor,
+  );
+  const [whitening, setWhitening] = useState<number>(
+    nr.nr4WhiteningFactor ?? NR4_DEFAULTS.whiteningFactor,
+  );
+  const [rescale, setRescale] = useState<number>(
+    nr.nr4NoiseRescale ?? NR4_DEFAULTS.noiseRescale,
+  );
+  const [snrThr, setSnrThr] = useState<number>(
+    nr.nr4PostFilterThreshold ?? NR4_DEFAULTS.postFilterThreshold,
+  );
+  const [algo, setAlgo] = useState<number>(
+    nr.nr4NoiseScalingType ?? NR4_DEFAULTS.noiseScalingType,
+  );
+
+  const inflight = useRef<AbortController | null>(null);
+  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      inflight.current?.abort();
+      if (debounce.current != null) clearTimeout(debounce.current);
+    },
+    [],
+  );
+
+  const persist = useCallback(
+    (body: Nr4PatchBody) => {
+      if (debounce.current != null) clearTimeout(debounce.current);
+      debounce.current = setTimeout(() => {
+        inflight.current?.abort();
+        const ac = new AbortController();
+        inflight.current = ac;
+        setNr4(body, ac.signal)
+          .then((s: RadioStateDto) => {
+            if (!ac.signal.aborted) applyState(s);
+          })
+          .catch(() => {
+            /* state poll will reconcile */
+          });
+      }, PERSIST_DEBOUNCE_MS);
+    },
+    [applyState],
+  );
+
+  const onAlgoChange = (v: number) => {
+    setAlgo(v);
+    persist({ noiseScalingType: v });
+  };
+  const onReductionChange = (v: number) => {
+    setReduction(v);
+    persist({ reductionAmount: v });
+  };
+  const onSmoothingChange = (v: number) => {
+    setSmoothing(v);
+    persist({ smoothingFactor: v });
+  };
+  const onWhiteningChange = (v: number) => {
+    setWhitening(v);
+    persist({ whiteningFactor: v });
+  };
+  const onRescaleChange = (v: number) => {
+    setRescale(v);
+    persist({ noiseRescale: v });
+  };
+  const onSnrThrChange = (v: number) => {
+    setSnrThr(v);
+    persist({ postFilterThreshold: v });
+  };
+
+  const resetDefaults = () => {
+    setAlgo(NR4_DEFAULTS.noiseScalingType);
+    setReduction(NR4_DEFAULTS.reductionAmount);
+    setSmoothing(NR4_DEFAULTS.smoothingFactor);
+    setWhitening(NR4_DEFAULTS.whiteningFactor);
+    setRescale(NR4_DEFAULTS.noiseRescale);
+    setSnrThr(NR4_DEFAULTS.postFilterThreshold);
+    persist({
+      noiseScalingType: NR4_DEFAULTS.noiseScalingType,
+      reductionAmount: NR4_DEFAULTS.reductionAmount,
+      smoothingFactor: NR4_DEFAULTS.smoothingFactor,
+      whiteningFactor: NR4_DEFAULTS.whiteningFactor,
+      noiseRescale: NR4_DEFAULTS.noiseRescale,
+      postFilterThreshold: NR4_DEFAULTS.postFilterThreshold,
+    });
+  };
+
+  return (
+    <div>
+      {/* ---- METHOD ----------------------------------------------------- */}
+      <h4 className="nr-settings__subhdr">Method</h4>
+
+      <div
+        className="nr-settings__row"
+        title="Noise scaling algorithm — 1: a-posteriori SNR scaling using the complete spectrum, 2: a-posteriori using critical bands, 3: masking thresholds."
+      >
+        <span className="nr-settings__label">Algo</span>
+        <div className="btn-row" role="radiogroup" aria-label="Noise Scaling Algorithm">
+          {NR4_ALGO_LABELS.map((lbl, i) => (
+            <button
+              key={lbl}
+              type="button"
+              role="radio"
+              aria-checked={algo === i}
+              className={`btn sm ${algo === i ? 'active' : ''}`}
+              onClick={() => onAlgoChange(i)}
+            >
+              {lbl}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ---- TUNABLES --------------------------------------------------- */}
+      <h4 className="nr-settings__subhdr">Tunables</h4>
+
+      <GaugeRow
+        accent="red"
+        icon={<TrendingDown size={14} strokeWidth={2.25} />}
+        label="Reduction"
+        value={reduction}
+        min={0}
+        max={20}
+        step={1}
+        decimals={1}
+        onChange={onReductionChange}
+      />
+      <GaugeRow
+        accent="green"
+        icon={<Wind size={14} strokeWidth={2.25} />}
+        label="Smoothing"
+        value={smoothing}
+        min={0}
+        max={100}
+        step={1}
+        decimals={1}
+        onChange={onSmoothingChange}
+      />
+      <GaugeRow
+        accent="orange"
+        icon={<Zap size={14} strokeWidth={2.25} />}
+        label="Whitening"
+        value={whitening}
+        min={0}
+        max={100}
+        step={1}
+        decimals={1}
+        onChange={onWhiteningChange}
+      />
+      <GaugeRow
+        accent="purple"
+        icon={<Maximize2 size={14} strokeWidth={2.25} />}
+        label="Rescale"
+        value={rescale}
+        min={0}
+        max={12}
+        step={1}
+        decimals={1}
+        onChange={onRescaleChange}
+      />
+      <GaugeRow
+        accent="red"
+        icon={<Crosshair size={14} strokeWidth={2.25} />}
+        label="SNRthresh"
+        value={snrThr}
+        min={-10}
+        max={10}
+        step={0.5}
+        decimals={1}
+        onChange={onSnrThrChange}
+      />
+
+      <p className="nr-settings__hint">
+        libspecbleach spectral bleaching. Defaults: Algo 1, reduction 10, others
+        0/2, SNRthresh -10. See native/wdsp/sbnr.c. Position is held at 1
+        (post-AGC) — Thetis exposes it globally with ANF/ANR; not surfaced here.
+      </p>
+
+      <div className="nr-settings__buttons">
+        <button
+          type="button"
+          className="nr-settings__button nr-settings__button--primary"
+          onClick={resetDefaults}
+          title="Reset Method + Tunables to factory defaults"
         >
           <RotateCcw size={12} strokeWidth={2.5} />
           <span>Defaults</span>

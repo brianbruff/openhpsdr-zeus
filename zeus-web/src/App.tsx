@@ -902,13 +902,17 @@ export default function App() {
             </Dockable>
           </div>
 
-          {terminatorActive ? (
+          {/* QRZ.com Lookup sits under the S-Meter when the operator has
+              the QRZ button engaged. Only renders while terminator is
+              active — when QRZ is off the slot collapses and DSP moves
+              up, matching the operator's "QRZ on demand" workflow. */}
+          {terminatorActive && (
             <div className="side-slot grow hide-mobile">
               <Dockable
                 title="QRZ.com Lookup"
                 ledOn={!!contact}
                 key={'qrz-' + lookupKey}
-                className={terminatorActive ? 't1000-panel' : ''}
+                className="t1000-panel"
                 actions={
                   <form
                     onSubmit={onCallsignSubmit}
@@ -934,12 +938,6 @@ export default function App() {
                 />
               </Dockable>
             </div>
-          ) : (
-            <div className="side-slot hide-mobile">
-              <Dockable title="Great-Circle Map" ledOn={!!contact}>
-                <AzimuthMap target={contact} myGrid="EM48" />
-              </Dockable>
-            </div>
           )}
 
           <div className="side-slot hide-mobile">
@@ -954,14 +952,27 @@ export default function App() {
             </Dockable>
           </div>
 
-          <div className="side-slot hide-mobile">
+          {/* Tuning Step — taller in classic mode + button row wraps so
+              all step values stay visible without horizontal overflow. */}
+          <div className="side-slot side-slot--tuning-step hide-mobile">
             <Dockable title="Tuning Step" ledOn>
               <TuningStepWidget />
             </Dockable>
           </div>
+
+          {/* Great-Circle Map sits at the bottom of the side stack now
+              that QRZ has moved to the bottom row alongside the Logbook.
+              Always visible. */}
+          <div className="side-slot hide-mobile">
+            <Dockable title="Great-Circle Map" ledOn={!!contact}>
+              <AzimuthMap target={contact} myGrid="EM48" />
+            </Dockable>
+          </div>
         </div>
 
-        {/* Bottom row — Logbook + TX Stage Meters on desktop; big PTT on mobile. */}
+        {/* Bottom row — Logbook + TX Stage Meters on desktop; big PTT on
+            mobile. (QRZ Lookup lives in the side-stack under the S-Meter
+            when terminator is engaged.) */}
         <div className="bottom-row">
           <div className="bottom-slot hide-mobile">
             <Dockable title={logbookTitle} ledOn actions={logbookActions}>

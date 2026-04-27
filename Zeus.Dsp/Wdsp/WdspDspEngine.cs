@@ -755,7 +755,13 @@ public sealed class WdspDspEngine : IDspEngine
         public const double Nr4SmoothingFactor = 0.0;
         public const double Nr4WhiteningFactor = 0.0;
         public const double Nr4NoiseRescale = 2.0;
-        public const double Nr4PostFilterThreshold = 0.0;
+        // Thetis Setup → DSP "SNRthresh" NUD default (setup.designer.cs:42132).
+        // The radio.cs field-init is 0.0 but Setup pushes the NUD value (-10) at
+        // first paint, so the operator's effective default is -10. WDSP's own
+        // create_sbnr also seeds -10 (sbnr.c:84), so the ON-startup state in
+        // Thetis is -10 across the board. Aligning here gives Zeus the same
+        // first-run behaviour.
+        public const double Nr4PostFilterThreshold = -10.0;
         public const int Nr4NoiseScalingType = 0;
         public const int Nr4Position = 1;
 

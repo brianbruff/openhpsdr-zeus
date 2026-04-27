@@ -24,6 +24,13 @@
     <PackageReference Include="LiteDB" Version="5.0.21" />
   </ItemGroup>
 
+  <!-- WDSP NR2 EMNR fopen()s these by bare relative name (native/wdsp/emnr.c:215,397).
+       Link= drops them at the output-dir root so the cwd-anchor in Program.cs finds them. -->
+  <ItemGroup>
+    <Content Include="wdsp-data\zetaHat.bin" Link="zetaHat.bin" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="wdsp-data\calculus" Link="calculus" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <Target Name="BuildSpa" BeforeTargets="Publish" Condition="!Exists('$(SpaBuildOutput)') Or '$(ForceSpaBuild)' == 'true'">
     <Message Importance="high" Text="Building React frontend in $(SpaRoot)" />
     <Exec Command="npm ci" WorkingDirectory="$(SpaRoot)" />

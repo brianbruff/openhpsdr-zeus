@@ -17,10 +17,15 @@
 // matching Thetis's Setup-form pattern.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Activity, BarChart3, RotateCcw, Timer, Waves } from 'lucide-react';
+import { Activity, BarChart3, Filter, RotateCcw, Target, Timer, Waves } from 'lucide-react';
 import {
+  GAIN_METHOD_LABELS,
+  NPE_METHOD_LABELS,
+  NR2_CORE_DEFAULTS,
   NR2_POST2_DEFAULTS,
+  setNr2Core,
   setNr2Post2,
+  type Nr2CorePatchBody,
   type Nr2Post2PatchBody,
   type RadioStateDto,
 } from '../../api/client';
@@ -42,7 +47,7 @@ export function NrSettingsSection({ mode }: NrSettingsSectionProps) {
     <div className="nr-settings" role="region" aria-label={`NR ${mode} settings`}>
       <h3 className="nr-settings__title">
         {mode === 'Anr' && 'NR1 — ANR'}
-        {mode === 'Emnr' && 'NR2 — EMNR POST2'}
+        {mode === 'Emnr' && 'NR2 — EMNR'}
       </h3>
       {mode === 'Anr' && <AnrPanel />}
       {mode === 'Emnr' && <Nr2Panel />}
@@ -71,30 +76,69 @@ function Nr2Panel() {
   const nr = useConnectionStore((s) => s.nr);
   const applyState = useConnectionStore((s) => s.applyState);
 
+  // Core algorithm selectors.
+  const [gainMethod, setGainMethod] = useState<number>(
+    nr.emnrGainMethod ?? NR2_CORE_DEFAULTS.gainMethod,
+  );
+  const [npeMethod, setNpeMethod] = useState<number>(
+    nr.emnrNpeMethod ?? NR2_CORE_DEFAULTS.npeMethod,
+  );
+  const [aeRun, setAeRun] = useState<boolean>(nr.emnrAeRun ?? NR2_CORE_DEFAULTS.aeRun);
+  const [trainT1, setTrainT1] = useState<number>(nr.emnrTrainT1 ?? NR2_CORE_DEFAULTS.trainT1);
+  const [trainT2, setTrainT2] = useState<number>(nr.emnrTrainT2 ?? NR2_CORE_DEFAULTS.trainT2);
+
+  // Post-Process (post2 comfort-noise) tunables — pre-existing.
   const [run, setRun] = useState<boolean>(nr.emnrPost2Run ?? NR2_POST2_DEFAULTS.run);
   const [factor, setFactor] = useState<number>(nr.emnrPost2Factor ?? NR2_POST2_DEFAULTS.factor);
   const [nlevel, setNlevel] = useState<number>(nr.emnrPost2Nlevel ?? NR2_POST2_DEFAULTS.nlevel);
   const [rate, setRate] = useState<number>(nr.emnrPost2Rate ?? NR2_POST2_DEFAULTS.rate);
   const [taper, setTaper] = useState<number>(nr.emnrPost2Taper ?? NR2_POST2_DEFAULTS.taper);
 
-  const inflight = useRef<AbortController | null>(null);
-  const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Two parallel debounce/inflight pipelines — one per endpoint. Keeps the
+  // server merges scoped: a Method change can't accidentally push a stale
+  // post2 value, and vice versa. Either response carries the full merged
+  // state, so applyState reconciles regardless of which lands second.
+  const corePending = useRef<AbortController | null>(null);
+  const coreDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const post2Pending = useRef<AbortController | null>(null);
+  const post2Debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(
     () => () => {
-      inflight.current?.abort();
-      if (debounce.current != null) clearTimeout(debounce.current);
+      corePending.current?.abort();
+      post2Pending.current?.abort();
+      if (coreDebounce.current != null) clearTimeout(coreDebounce.current);
+      if (post2Debounce.current != null) clearTimeout(post2Debounce.current);
     },
     [],
   );
 
-  const persist = useCallback(
-    (body: Nr2Post2PatchBody) => {
-      if (debounce.current != null) clearTimeout(debounce.current);
-      debounce.current = setTimeout(() => {
-        inflight.current?.abort();
+  const persistCore = useCallback(
+    (body: Nr2CorePatchBody) => {
+      if (coreDebounce.current != null) clearTimeout(coreDebounce.current);
+      coreDebounce.current = setTimeout(() => {
+        corePending.current?.abort();
         const ac = new AbortController();
-        inflight.current = ac;
+        corePending.current = ac;
+        setNr2Core(body, ac.signal)
+          .then((s: RadioStateDto) => {
+            if (!ac.signal.aborted) applyState(s);
+          })
+          .catch(() => {
+            /* state poll will reconcile */
+          });
+      }, PERSIST_DEBOUNCE_MS);
+    },
+    [applyState],
+  );
+
+  const persistPost2 = useCallback(
+    (body: Nr2Post2PatchBody) => {
+      if (post2Debounce.current != null) clearTimeout(post2Debounce.current);
+      post2Debounce.current = setTimeout(() => {
+        post2Pending.current?.abort();
+        const ac = new AbortController();
+        post2Pending.current = ac;
         setNr2Post2(body, ac.signal)
           .then((s: RadioStateDto) => {
             if (!ac.signal.aborted) applyState(s);
@@ -107,35 +151,73 @@ function Nr2Panel() {
     [applyState],
   );
 
+  // Method handlers.
+  const onGainMethodChange = (v: number) => {
+    setGainMethod(v);
+    persistCore({ gainMethod: v });
+  };
+  const onNpeMethodChange = (v: number) => {
+    setNpeMethod(v);
+    persistCore({ npeMethod: v });
+  };
+  const onAeRunChange = (v: boolean) => {
+    setAeRun(v);
+    persistCore({ aeRun: v });
+  };
+  const onTrainT1Change = (v: number) => {
+    setTrainT1(v);
+    persistCore({ trainT1: v });
+  };
+  const onTrainT2Change = (v: number) => {
+    setTrainT2(v);
+    persistCore({ trainT2: v });
+  };
+
+  // Post-Process handlers.
   const onRunChange = (v: boolean) => {
     setRun(v);
-    persist({ post2Run: v });
+    persistPost2({ post2Run: v });
   };
   const onFactorChange = (v: number) => {
     setFactor(v);
-    persist({ post2Factor: v });
+    persistPost2({ post2Factor: v });
   };
   const onNlevelChange = (v: number) => {
     setNlevel(v);
-    persist({ post2Nlevel: v });
+    persistPost2({ post2Nlevel: v });
   };
   const onRateChange = (v: number) => {
     setRate(v);
-    persist({ post2Rate: v });
+    persistPost2({ post2Rate: v });
   };
   const onTaperChange = (v: number) => {
     const r = Math.round(v);
     setTaper(r);
-    persist({ post2Taper: r });
+    persistPost2({ post2Taper: r });
   };
 
+  // Resets BOTH groups to Thetis-parity factory state. Two endpoints fire;
+  // each response reconciles independently via applyState (last write wins,
+  // and both servers' merged states agree on the reset values).
   const resetDefaults = () => {
+    setGainMethod(NR2_CORE_DEFAULTS.gainMethod);
+    setNpeMethod(NR2_CORE_DEFAULTS.npeMethod);
+    setAeRun(NR2_CORE_DEFAULTS.aeRun);
+    setTrainT1(NR2_CORE_DEFAULTS.trainT1);
+    setTrainT2(NR2_CORE_DEFAULTS.trainT2);
     setRun(NR2_POST2_DEFAULTS.run);
     setFactor(NR2_POST2_DEFAULTS.factor);
     setNlevel(NR2_POST2_DEFAULTS.nlevel);
     setRate(NR2_POST2_DEFAULTS.rate);
     setTaper(NR2_POST2_DEFAULTS.taper);
-    persist({
+    persistCore({
+      gainMethod: NR2_CORE_DEFAULTS.gainMethod,
+      npeMethod: NR2_CORE_DEFAULTS.npeMethod,
+      aeRun: NR2_CORE_DEFAULTS.aeRun,
+      trainT1: NR2_CORE_DEFAULTS.trainT1,
+      trainT2: NR2_CORE_DEFAULTS.trainT2,
+    });
+    persistPost2({
       post2Run: NR2_POST2_DEFAULTS.run,
       post2Factor: NR2_POST2_DEFAULTS.factor,
       post2Nlevel: NR2_POST2_DEFAULTS.nlevel,
@@ -146,11 +228,96 @@ function Nr2Panel() {
 
   return (
     <div>
+      {/* ---- METHOD ----------------------------------------------------- */}
+      <h4 className="nr-settings__subhdr">Method</h4>
+
+      <div
+        className="nr-settings__row"
+        title="Gain calculation method. Trained uses the zetaHat lookup table baked into libwdsp (zetaHat.bin / calculus). Defaults to Gamma."
+      >
+        <span className="nr-settings__label">Gain</span>
+        <div className="btn-row" role="radiogroup" aria-label="Gain Method">
+          {GAIN_METHOD_LABELS.map((lbl, i) => (
+            <button
+              key={lbl}
+              type="button"
+              role="radio"
+              aria-checked={gainMethod === i}
+              className={`btn sm ${gainMethod === i ? 'active' : ''}`}
+              onClick={() => onGainMethodChange(i)}
+            >
+              {lbl}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div
+        className="nr-settings__row"
+        title="Noise Power Estimation method. OSMS is Warren Pratt's tuned default; MMSE/NSTAT are alternates."
+      >
+        <span className="nr-settings__label">NPE</span>
+        <div className="btn-row" role="radiogroup" aria-label="NPE Method">
+          {NPE_METHOD_LABELS.map((lbl, i) => (
+            <button
+              key={lbl}
+              type="button"
+              role="radio"
+              aria-checked={npeMethod === i}
+              className={`btn sm ${npeMethod === i ? 'active' : ''}`}
+              onClick={() => onNpeMethodChange(i)}
+            >
+              {lbl}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div
+        className="nr-settings__toggle-row"
+        title="Artifact Eliminator — smooths the spectral mask to suppress the musical-noise warble typical of frequency-domain NR. Default ON (Thetis parity)."
+      >
+        <label className="nr-settings__label" htmlFor="nr2-ae">AE Filter</label>
+        <Switch id="nr2-ae" checked={aeRun} onChange={onAeRunChange} />
+      </div>
+
+      {/* ---- TRAINED (only when Gain Method == Trained) ---------------- */}
+      {gainMethod === 3 && (
+        <>
+          <h4 className="nr-settings__subhdr">Trained</h4>
+          <GaugeRow
+            accent="red"
+            icon={<Target size={14} strokeWidth={2.25} />}
+            label="T1"
+            value={trainT1}
+            min={-5}
+            max={5}
+            step={0.1}
+            decimals={1}
+            onChange={onTrainT1Change}
+          />
+          <GaugeRow
+            accent="green"
+            icon={<Filter size={14} strokeWidth={2.25} />}
+            label="T2"
+            value={trainT2}
+            min={0.02}
+            max={3.5}
+            step={0.01}
+            decimals={2}
+            onChange={onTrainT2Change}
+          />
+        </>
+      )}
+
+      {/* ---- POST-PROCESS ---------------------------------------------- */}
+      <h4 className="nr-settings__subhdr">Post-Process</h4>
+
       <div
         className="nr-settings__toggle-row"
         title="EMNR's post-stage comfort-noise injection (post2). Off = raw EMNR output. The NR cycle button is the master on/off; this is a sub-stage of NR2 only."
       >
-        <label className="nr-settings__label" htmlFor="nr2-run">Post-Process</label>
+        <label className="nr-settings__label" htmlFor="nr2-run">Enable</label>
         <Switch id="nr2-run" checked={run} onChange={onRunChange} />
       </div>
 
@@ -200,9 +367,9 @@ function Nr2Panel() {
       />
 
       <p className="nr-settings__hint">
-        Comfort-noise injection masking residual EMNR warble. Defaults: factor 15,
-        nlevel 15, rate 5.0, taper 12 (Thetis NUD scale; WDSP /100 internally).
-        See emnr.c:981–1056.
+        Method defaults: Gamma / OSMS / AE on (Thetis parity). Trained T1/T2 only
+        consulted when Gain Method = Trained. Post-Process defaults: factor 15,
+        nlevel 15, rate 5.0, taper 12. See emnr.c:981–1056.
       </p>
 
       <div className="nr-settings__buttons">
@@ -210,7 +377,7 @@ function Nr2Panel() {
           type="button"
           className="nr-settings__button nr-settings__button--primary"
           onClick={resetDefaults}
-          title="Reset all needles to factory defaults"
+          title="Reset Method + Post-Process to factory defaults"
         >
           <RotateCcw size={12} strokeWidth={2.5} />
           <span>Defaults</span>

@@ -327,6 +327,18 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetRXAEMNRpost2Rate(int channel, double tc);
 
+    // EMNR Trained gain-method tuning. emnr.c:1429,1436. T1 is the dB threshold
+    // against the trained zetaHat lookup table; T2 is a secondary suppression
+    // threshold. Only consulted by WDSP when SetRXAEMNRgainMethod=3 (Trained),
+    // but writing them is harmless either way.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAEMNRtrainZetaThresh(int channel, double thresh);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAEMNRtrainT2(int channel, double t2);
+
     // SBNR (NR4) — libspecbleach spectral-bleaching NR. Symbols defined in
     // native/wdsp/sbnr.c with the float / int signatures shown here.
     // IMPORTANT: requires libwdsp rebuild — Phase 1 of issue #79; the

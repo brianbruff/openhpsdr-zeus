@@ -812,6 +812,30 @@ public sealed class RadioService : IDisposable
         return SetNr(merged);
     }
 
+    // NR2 (EMNR) core algorithm selectors + Trained-method T1/T2. Same
+    // null-merge pattern as SetNr2Post2: each absent field leaves the
+    // persisted value untouched. Range-checks the enum-shaped fields so
+    // an out-of-range value can't push WDSP into an undefined branch.
+    public StateDto SetNr2Core(Nr2CoreConfigSetRequest req)
+    {
+        ArgumentNullException.ThrowIfNull(req);
+        if (req.GainMethod is int gm && (gm < 0 || gm > 3))
+            throw new ArgumentException($"GainMethod must be 0..3, got {gm}", nameof(req));
+        if (req.NpeMethod is int npm && (npm < 0 || npm > 2))
+            throw new ArgumentException($"NpeMethod must be 0..2, got {npm}", nameof(req));
+
+        var current = Snapshot().Nr ?? new NrConfig();
+        var merged = current with
+        {
+            EmnrGainMethod = req.GainMethod ?? current.EmnrGainMethod,
+            EmnrNpeMethod = req.NpeMethod ?? current.EmnrNpeMethod,
+            EmnrAeRun = req.AeRun ?? current.EmnrAeRun,
+            EmnrTrainT1 = req.TrainT1 ?? current.EmnrTrainT1,
+            EmnrTrainT2 = req.TrainT2 ?? current.EmnrTrainT2,
+        };
+        return SetNr(merged);
+    }
+
     // Right-click popover save for NR4 (SBNR) tunables — same merge-and-
     // re-push pattern as SetNr2Post2.
     public StateDto SetNr4(Nr4ConfigSetRequest req)

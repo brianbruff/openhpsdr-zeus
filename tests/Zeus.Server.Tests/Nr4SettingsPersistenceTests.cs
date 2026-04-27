@@ -172,4 +172,81 @@ public class Nr4SettingsPersistenceTests : IDisposable
         Assert.Equal(20.0, back!.Nr4ReductionAmount);
         Assert.Equal(0, back.Nr4Position);
     }
+
+    [Fact]
+    public void SetNr2CoreConfig_PersistsAllFields()
+    {
+        // Trained method (3) with both T1/T2 set — exercises the full core
+        // surface. AeRun=false flips the default (which is true) so the round
+        // trip can't accidentally pass by re-reading the default.
+        var cfg = new NrConfig(
+            NrMode: NrMode.Emnr,
+            EmnrGainMethod: 3,
+            EmnrNpeMethod: 2,
+            EmnrAeRun: false,
+            EmnrTrainT1: -1.25,
+            EmnrTrainT2: 1.5);
+
+        using (var store = BuildStore()) store.Upsert(cfg);
+
+        using var fresh = BuildStore();
+        var back = fresh.Get();
+        Assert.NotNull(back);
+        Assert.Equal(NrMode.Emnr, back!.NrMode);
+        Assert.Equal(3, back.EmnrGainMethod);
+        Assert.Equal(2, back.EmnrNpeMethod);
+        Assert.Equal(false, back.EmnrAeRun);
+        Assert.Equal(-1.25, back.EmnrTrainT1);
+        Assert.Equal(1.5, back.EmnrTrainT2);
+    }
+
+    [Fact]
+    public void GetNr2CoreConfig_NullFields_ReturnNullToCallerForDefaultFallback()
+    {
+        // Same lazy-default contract as the post2 / NR4 fields: nulls round-
+        // trip as nulls so the engine seam can apply NrDefaults at write time.
+        var cfg = new NrConfig(NrMode: NrMode.Off);
+
+        using (var store = BuildStore()) store.Upsert(cfg);
+
+        using var fresh = BuildStore();
+        var back = fresh.Get();
+        Assert.NotNull(back);
+        Assert.Null(back!.EmnrGainMethod);
+        Assert.Null(back.EmnrNpeMethod);
+        Assert.Null(back.EmnrAeRun);
+        Assert.Null(back.EmnrTrainT1);
+        Assert.Null(back.EmnrTrainT2);
+    }
+
+    [Fact]
+    public void SetNr2CoreConfig_UpsertOverwritesExistingFields()
+    {
+        var first = new NrConfig(
+            NrMode: NrMode.Emnr,
+            EmnrGainMethod: 0,
+            EmnrNpeMethod: 0,
+            EmnrAeRun: true,
+            EmnrTrainT1: -0.5,
+            EmnrTrainT2: 2.0);
+        var second = new NrConfig(
+            NrMode: NrMode.Emnr,
+            EmnrGainMethod: 3,
+            EmnrNpeMethod: 1,
+            EmnrAeRun: false,
+            EmnrTrainT1: 1.0,
+            EmnrTrainT2: 0.5);
+
+        using var store = BuildStore();
+        store.Upsert(first);
+        store.Upsert(second);
+
+        var back = store.Get();
+        Assert.NotNull(back);
+        Assert.Equal(3, back!.EmnrGainMethod);
+        Assert.Equal(1, back.EmnrNpeMethod);
+        Assert.Equal(false, back.EmnrAeRun);
+        Assert.Equal(1.0, back.EmnrTrainT1);
+        Assert.Equal(0.5, back.EmnrTrainT2);
+    }
 }

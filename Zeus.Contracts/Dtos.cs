@@ -106,7 +106,17 @@ public sealed record NrConfig(
     double? Nr4NoiseRescale = null,
     double? Nr4PostFilterThreshold = null,
     int? Nr4NoiseScalingType = null,
-    int? Nr4Position = null);
+    int? Nr4Position = null,
+    // ---- NR2 (EMNR) core algorithm selectors + trained-method tuning ----
+    // Thetis Setup → DSP tab radio groups + AE checkbox + T1/T2 NUDs. Defaults
+    // match Thetis (Gamma=2, OSMS=0, AE on, T1=-0.5, T2=2.0). T1/T2 are only
+    // consulted by WDSP when EmnrGainMethod=3 (Trained); the engine still
+    // writes them through so the channel state is coherent on mode-cycle.
+    int? EmnrGainMethod = null,
+    int? EmnrNpeMethod = null,
+    bool? EmnrAeRun = null,
+    double? EmnrTrainT1 = null,
+    double? EmnrTrainT2 = null);
 
 public sealed record StateDto(
     ConnectionStatus Status,
@@ -267,6 +277,19 @@ public sealed record Nr4ConfigSetRequest(
     double? PostFilterThreshold = null,
     int? NoiseScalingType = null,
     int? Position = null);
+
+// NR2 (EMNR) core algorithm selectors + trained-method tuning. Mirrors
+// Nr2Post2ConfigSetRequest's nullable-merge pattern: each field absent
+// from the PATCH leaves the persisted value untouched.
+//   GainMethod: 0=Linear, 1=Log, 2=Gamma (default), 3=Trained
+//   NpeMethod : 0=OSMS (default), 1=MMSE, 2=NSTAT
+//   TrainT1/T2 are only meaningful when GainMethod=3.
+public sealed record Nr2CoreConfigSetRequest(
+    int? GainMethod = null,
+    int? NpeMethod = null,
+    bool? AeRun = null,
+    double? TrainT1 = null,
+    double? TrainT2 = null);
 
 // Panadapter/waterfall zoom levels. Level=1 means the analyzer covers the full
 // sample-rate span; level=2 means VFO-centered half-span (×2 bins/Hz), and so

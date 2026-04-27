@@ -85,7 +85,12 @@ public sealed class DspSettingsStore : IDisposable
             Nr4NoiseRescale: e.Nr4NoiseRescale,
             Nr4PostFilterThreshold: e.Nr4PostFilterThreshold,
             Nr4NoiseScalingType: e.Nr4NoiseScalingType,
-            Nr4Position: e.Nr4Position);
+            Nr4Position: e.Nr4Position,
+            EmnrGainMethod: e.EmnrGainMethod,
+            EmnrNpeMethod: e.EmnrNpeMethod,
+            EmnrAeRun: e.EmnrAeRun,
+            EmnrTrainT1: e.EmnrTrainT1,
+            EmnrTrainT2: e.EmnrTrainT2);
     }
 
     // CFC (Continuous Frequency Compressor) — issue #123. Persisted globally
@@ -144,6 +149,11 @@ public sealed class DspSettingsStore : IDisposable
                 EmnrPost2Nlevel = config.EmnrPost2Nlevel,
                 EmnrPost2Rate = config.EmnrPost2Rate,
                 EmnrPost2Taper = config.EmnrPost2Taper,
+                EmnrGainMethod = config.EmnrGainMethod,
+                EmnrNpeMethod = config.EmnrNpeMethod,
+                EmnrAeRun = config.EmnrAeRun,
+                EmnrTrainT1 = config.EmnrTrainT1,
+                EmnrTrainT2 = config.EmnrTrainT2,
                 Nr4ReductionAmount = config.Nr4ReductionAmount,
                 Nr4SmoothingFactor = config.Nr4SmoothingFactor,
                 Nr4WhiteningFactor = config.Nr4WhiteningFactor,
@@ -167,6 +177,11 @@ public sealed class DspSettingsStore : IDisposable
             existing.EmnrPost2Nlevel = config.EmnrPost2Nlevel;
             existing.EmnrPost2Rate = config.EmnrPost2Rate;
             existing.EmnrPost2Taper = config.EmnrPost2Taper;
+            existing.EmnrGainMethod = config.EmnrGainMethod;
+            existing.EmnrNpeMethod = config.EmnrNpeMethod;
+            existing.EmnrAeRun = config.EmnrAeRun;
+            existing.EmnrTrainT1 = config.EmnrTrainT1;
+            existing.EmnrTrainT2 = config.EmnrTrainT2;
             existing.Nr4ReductionAmount = config.Nr4ReductionAmount;
             existing.Nr4SmoothingFactor = config.Nr4SmoothingFactor;
             existing.Nr4WhiteningFactor = config.Nr4WhiteningFactor;
@@ -261,6 +276,14 @@ public sealed class DspSettingsEntry
     public double? EmnrPost2Nlevel { get; set; }
     public double? EmnrPost2Rate { get; set; }
     public int? EmnrPost2Taper { get; set; }
+    // NR2 (EMNR) core algorithm selectors + Trained-method T1/T2. Null means
+    // "engine default" — engine falls back to NrDefaults at apply time so
+    // clearing a field reverts to the Thetis-parity baseline.
+    public int? EmnrGainMethod { get; set; }
+    public int? EmnrNpeMethod { get; set; }
+    public bool? EmnrAeRun { get; set; }
+    public double? EmnrTrainT1 { get; set; }
+    public double? EmnrTrainT2 { get; set; }
     // NR4 (SBNR) tunables. Null means "engine default".
     public double? Nr4ReductionAmount { get; set; }
     public double? Nr4SmoothingFactor { get; set; }

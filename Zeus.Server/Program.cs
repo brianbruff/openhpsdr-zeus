@@ -206,6 +206,24 @@ app.UseStaticFiles();
 
 var log = app.Services.GetRequiredService<ILogger<Program>>();
 
+// WDSP NR2 EMNR fopen()s "zetaHat.bin" and "calculus" by bare relative name
+// (native/wdsp/emnr.c:215,397). Anchor cwd to the assembly dir so those files
+// — copied next to the binary by Zeus.Server.csproj — are reachable. Without
+// this, WDSP silently falls through to the compiled-in CzetaHat / GG / GGS
+// fallback tables; numerically equivalent today, but won't pick up a future
+// retrained .bin without a libwdsp rebuild.
+{
+    var baseDir = AppContext.BaseDirectory;
+    Directory.SetCurrentDirectory(baseDir);
+    var zetaPath = Path.Combine(baseDir, "zetaHat.bin");
+    var calcPath = Path.Combine(baseDir, "calculus");
+    log.LogInformation(
+        "wdsp.nr2.models cwd={Cwd} zetaHat.bin={ZetaState} calculus={CalcState}",
+        baseDir,
+        File.Exists(zetaPath) ? "loaded" : "missing→compiled-fallback",
+        File.Exists(calcPath) ? "loaded" : "missing→compiled-fallback");
+}
+
 // Wire wisdom initializer → hub so every phase change is broadcast to all
 // connected clients. Seed the hub's cached phase with whatever the
 // initializer currently reports (Idle at first boot, Ready on restart once
@@ -710,6 +728,21 @@ app.MapPost("/api/rx/nr2/post2", (Nr2Post2ConfigSetRequest req, RadioService r) 
         "api.rx.nr2.post2 run={Run} factor={Factor} nlevel={Nlevel} rate={Rate} taper={Taper}",
         req.Post2Run, req.Post2Factor, req.Post2Nlevel, req.Post2Rate, req.Post2Taper);
     return Results.Ok(r.SetNr2Post2(req));
+});
+
+app.MapPost("/api/rx/nr2/core", (Nr2CoreConfigSetRequest req, RadioService r) =>
+{
+    log.LogInformation(
+        "api.rx.nr2.core gainMethod={Gm} npeMethod={Npm} aeRun={Ae} trainT1={T1} trainT2={T2}",
+        req.GainMethod, req.NpeMethod, req.AeRun, req.TrainT1, req.TrainT2);
+    try
+    {
+        return Results.Ok(r.SetNr2Core(req));
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
 });
 
 app.MapPost("/api/rx/nr4", (Nr4ConfigSetRequest req, RadioService r) =>

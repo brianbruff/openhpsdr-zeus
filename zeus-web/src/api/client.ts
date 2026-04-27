@@ -139,10 +139,14 @@ export const NR4_DEFAULTS = {
   smoothingFactor: 0.0,
   whiteningFactor: 0.0,
   noiseRescale: 2.0,
-  postFilterThreshold: 0.0,
+  // -10 matches Thetis's UI default + WDSP's create_sbnr seed (sbnr.c:84) — see
+  // WdspDspEngine.NrDefaults.Nr4PostFilterThreshold for the full reasoning.
+  postFilterThreshold: -10.0,
   noiseScalingType: 0,
   position: 1,
 } as const;
+
+export const NR4_ALGO_LABELS = ['Algo 1', 'Algo 2', 'Algo 3'] as const;
 
 // Integer 1..8. Backend accepts up to 16 (SyntheticDspEngine.MaxZoomLevel)
 // but anything past 8 doesn't visibly narrow the span further at current

@@ -45,10 +45,11 @@
   border-bottom: 1px solid var(--panel-edge);
 }
 
-/* Sub-section header — Method / Trained / Post-Process inside the NR2 panel.
-   Same uppercase + small-caps treatment as the panel-level title but without
-   the underline (it would compete with .nr-settings__toggle-row's border).
-   The :first-child rule prevents an unwanted top margin on the very first
+/* Sub-section header — Method / Trained / Post-Process inside the NR2
+   panel, and Method / Tunables inside the NR4 panel. Same uppercase +
+   small-caps treatment as the panel-level title but without the underline
+   (it would compete with .nr-settings__toggle-row's border). The
+   :first-child rule prevents an unwanted top margin on the very first
    subhdr inside the panel. */
 .nr-settings__subhdr {
   margin: 10px 0 4px 0;
@@ -63,9 +64,9 @@
   margin-top: 0;
 }
 
-/* Generic label-on-left, control-on-right row. Used for the Gain / NPE
-   segmented selectors. No bottom border (the next subhdr's spacing visually
-   separates sections instead). */
+/* Generic label-on-left, control-on-right row. Used for NR2's Gain / NPE
+   segmented selectors and NR4's Algo segmented selector. No bottom border
+   — the next subhdr's spacing visually separates sections instead. */
 .nr-settings__row {
   display: flex;
   align-items: center;

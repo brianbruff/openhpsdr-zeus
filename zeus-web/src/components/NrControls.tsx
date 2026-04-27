@@ -84,16 +84,17 @@ function nrButtonTitle(mode: NrMode): string {
   }
 }
 
-// Only NR1 and NR2 have a tunables panel today (NR4 is silently inert until
-// the Phase 1 libwdsp rebuild ships, so its panel is suppressed). The ⚙
-// button is hidden for modes that have no panel — see hasNrSettings below.
+// NR1 / NR2 / NR4 each have a tunables panel. NR4 was suppressed pre-#162
+// (libwdsp didn't export SetRXASBNR*); now that Phase 1 binaries ship the
+// symbols on linux-x64 + win-x64, the panel is reachable again. The ⚙
+// button stays hidden for NR Off because there's nothing to configure.
 function settingsModeFor(nrMode: NrMode): NrSettingsMode {
-  if (nrMode === 'Anr' || nrMode === 'Emnr') return nrMode;
+  if (nrMode === 'Anr' || nrMode === 'Emnr' || nrMode === 'Sbnr') return nrMode;
   return 'Emnr';
 }
 
 function hasNrSettings(nrMode: NrMode): boolean {
-  return nrMode === 'Anr' || nrMode === 'Emnr';
+  return nrMode === 'Anr' || nrMode === 'Emnr' || nrMode === 'Sbnr';
 }
 
 export function NrControls() {

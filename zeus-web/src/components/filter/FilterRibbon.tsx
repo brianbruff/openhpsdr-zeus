@@ -33,16 +33,15 @@ import {
   type RxMode,
 } from '../../api/client';
 import {
-  formatAbsFreq,
   getPresetsForMode,
   nudgeStepHz,
   type FilterPresetSlot,
 } from './filterPresets';
 import { FilterMiniPan } from './FilterMiniPan';
-import { useFilterFavoritesStore, useFavoritesForMode } from '../../state/filter-favorites-store';
+import { useFavoritesForMode } from '../../state/filter-favorites-store';
 
 const LOCAL_STORAGE_KEY = 'zeus.filter.advancedPaneOpen';
-const DRAG_MIME = 'application/x-zeus-filter-slot';
+export const FILTER_DRAG_MIME = 'application/x-zeus-filter-slot';
 
 const CUSTOM_MIN = 0;
 const CUSTOM_MAX = 10000;
@@ -106,18 +105,11 @@ export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) 
   const filterLow = useConnectionStore((s) => s.filterLowHz);
   const filterHigh = useConnectionStore((s) => s.filterHighHz);
   const filterPresetName = useConnectionStore((s) => s.filterPresetName);
-  const vfoHz = useConnectionStore((s) => s.vfoHz);
   const open = useConnectionStore((s) => s.filterAdvancedPaneOpen);
   const applyState = useConnectionStore((s) => s.applyState);
-  const loadFavorites = useFilterFavoritesStore((s) => s.load);
-  const updateFavorites = useFilterFavoritesStore((s) => s.update);
   const favoriteSlotNames = useFavoritesForMode(mode);
-
   const [serverPresets, setServerPresets] = useState<FilterPresetDto[] | null>(null);
   const [dragSlot, setDragSlot] = useState<string | null>(null);
-  const [dragOverFav, setDragOverFav] = useState<number | null>(null);
-
-  useEffect(() => { void loadFavorites(mode); }, [mode, loadFavorites]);
 
   useEffect(() => {
     let cancelled = false;
@@ -128,13 +120,6 @@ export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) 
   }, [mode]);
 
   const presets = useMemo(() => mergePresets(mode, serverPresets), [mode, serverPresets]);
-  const lowAbs = vfoHz + filterLow;
-  const highAbs = vfoHz + filterHigh;
-  const widthKHz = Math.abs(filterHigh - filterLow) / 1000;
-
-  const favoritePresets: (FilterPresetSlot | undefined)[] = favoriteSlotNames.map((name) =>
-    presets.find((p) => p.slotName === name),
-  );
 
   const selectPreset = useCallback((slot: FilterPresetSlot) => {
     useConnectionStore.setState({
@@ -152,20 +137,6 @@ export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) 
     cachePaneOpenLocal(false);
     setFilterAdvancedPaneOpen(false).catch(() => {});
   }, []);
-
-  // Drop a slot onto favorite-index `idx`. Swaps if dropped slot already
-  // exists in favorites; otherwise displaces the slot at idx.
-  const onDropFavorite = useCallback((idx: number, slotName: string) => {
-    const next = [...favoriteSlotNames];
-    const existingIdx = next.indexOf(slotName);
-    if (existingIdx === idx) return;
-    const displaced = next[idx];
-    if (existingIdx >= 0 && displaced !== undefined) {
-      next[existingIdx] = displaced;
-    }
-    next[idx] = slotName;
-    void updateFavorites(mode, next);
-  }, [favoriteSlotNames, mode, updateFavorites]);
 
   // CUSTOM Lo/Hi inputs — armed against VAR1.
   const var1 = presets.find((p) => p.slotName === 'VAR1');
@@ -236,27 +207,11 @@ export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) 
   const isLowDisabled = isSymmetricMode(mode);
 
   const startDrag = (e: React.DragEvent, slotName: string) => {
-    e.dataTransfer.setData(DRAG_MIME, slotName);
+    e.dataTransfer.setData(FILTER_DRAG_MIME, slotName);
     e.dataTransfer.effectAllowed = 'move';
     setDragSlot(slotName);
   };
-  const endDrag = () => { setDragSlot(null); setDragOverFav(null); };
-
-  const onFavDragOver = (idx: number) => (e: React.DragEvent) => {
-    if (!e.dataTransfer.types.includes(DRAG_MIME)) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    if (dragOverFav !== idx) setDragOverFav(idx);
-  };
-  const onFavDragLeave = () => setDragOverFav(null);
-  const onFavDrop = (idx: number) => (e: React.DragEvent) => {
-    const slotName = e.dataTransfer.getData(DRAG_MIME);
-    if (!slotName) return;
-    e.preventDefault();
-    onDropFavorite(idx, slotName);
-    setDragOverFav(null);
-    setDragSlot(null);
-  };
+  const endDrag = () => { setDragSlot(null); };
 
   return (
     <div
@@ -276,29 +231,10 @@ export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) 
       )}
 
       <div className="filter-ribbon__body">
-        {/* Left column: top readout row, full-width mini-pan, footer hint */}
+        {/* Left column: full-width mini-pan, footer hint. The top BW/LO/PB/HI
+            readout row was removed — its data is already shown in the topbar
+            chips and the mini-pan visualises the same passband. */}
         <div className="filter-ribbon__main">
-          <div className="filter-ribbon__topRow">
-            <div className="filter-ribbon__topCol filter-ribbon__topCol--bw">
-              <div className="filter-ribbon__label">BANDWIDTH</div>
-            </div>
-            <div className="filter-ribbon__topCol filter-ribbon__topCol--lo">
-              <div className="filter-ribbon__label">LOW CUT</div>
-              <div className="filter-ribbon__freq">{formatAbsFreq(lowAbs)}</div>
-            </div>
-            <div className="filter-ribbon__topCol filter-ribbon__topCol--pb">
-              <div className="filter-ribbon__label">PASSBAND</div>
-              <div className="filter-ribbon__passband">
-                <span className="filter-ribbon__passband-value">{widthKHz.toFixed(2)}</span>
-                <span className="filter-ribbon__passband-unit">kHz</span>
-              </div>
-            </div>
-            <div className="filter-ribbon__topCol filter-ribbon__topCol--hi">
-              <div className="filter-ribbon__label">HIGH CUT</div>
-              <div className="filter-ribbon__freq">{formatAbsFreq(highAbs)}</div>
-            </div>
-          </div>
-
           <div className="filter-ribbon__minipan">
             <FilterMiniPan />
           </div>
@@ -308,39 +244,17 @@ export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) 
           </div>
         </div>
 
-        {/* Right column: favorites + presets + custom */}
+        {/* Right column: presets + custom. The in-ribbon FAVORITES row was
+            removed — drag any preset chip below onto one of the three filter
+            buttons in the control strip to pin it (same UX as Mode/Band/Step). */}
         <div className="filter-ribbon__presets">
-          <div className="filter-ribbon__section-label">FAVORITES</div>
-          <div className="filter-ribbon__favorites">
-            {favoritePresets.map((slot, idx) => {
-              const slotName = favoriteSlotNames[idx];
-              const isActive = slot && filterPresetName === slot.slotName;
-              const slotWidth = slot ? Math.abs(slot.highHz - slot.lowHz) : -1;
-              const widthMatches = slot && Math.abs(slotWidth - currentWidth) <= 20;
-              return (
-                <button
-                  key={`fav-${idx}`}
-                  type="button"
-                  onClick={() => slot && selectPreset(slot)}
-                  onDragOver={onFavDragOver(idx)}
-                  onDragLeave={onFavDragLeave}
-                  onDrop={onFavDrop(idx)}
-                  className={`filter-ribbon__chip filter-ribbon__chip--fav ${isActive || widthMatches ? 'is-active' : ''} ${dragOverFav === idx ? 'is-drop-target' : ''}`}
-                  title={slot ? `${slot.slotName}: drag a preset here to replace` : `Empty slot — drop a preset here`}
-                  aria-label={`Favorite slot ${idx + 1}: ${slot ? slot.label : slotName}`}
-                >
-                  {slot ? slot.label : slotName}
-                </button>
-              );
-            })}
-          </div>
-
           <div className="filter-ribbon__section-label">PRESETS</div>
           <div className="filter-ribbon__preset-grid">
             {presets.map((slot) => {
               const slotWidth = Math.abs(slot.highHz - slot.lowHz);
               const isActive = filterPresetName === slot.slotName
                 || (Math.abs(slotWidth - currentWidth) <= 20 && !slot.isVar);
+              const isPinned = favoriteSlotNames.includes(slot.slotName);
               const label = slot.isVar ? slot.slotName : slot.label;
               return (
                 <button
@@ -351,7 +265,7 @@ export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) 
                   onDragEnd={endDrag}
                   onClick={() => selectPreset(slot)}
                   title={`${slot.slotName}: ${slot.lowHz >= 0 ? '+' : ''}${slot.lowHz} / ${slot.highHz >= 0 ? '+' : ''}${slot.highHz} Hz · drag onto a favorite to pin`}
-                  className={`filter-ribbon__chip ${isActive ? 'is-active' : ''} ${dragSlot === slot.slotName ? 'is-dragging' : ''}`}
+                  className={`filter-ribbon__chip ${isActive ? 'is-active' : ''} ${isPinned ? 'is-pinned' : ''} ${dragSlot === slot.slotName ? 'is-dragging' : ''}`}
                 >
                   {label}
                 </button>

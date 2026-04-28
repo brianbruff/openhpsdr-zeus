@@ -56,6 +56,9 @@ import { MicMeter } from './components/MicMeter';
 import { MobilePttButton } from './components/MobilePttButton';
 import { MobileZoomSlider } from './components/MobileZoomSlider';
 import { ModeBandwidth } from './components/ModeBandwidth';
+import { ModeFavorites } from './components/toolbar/ModeFavorites';
+import { BandFavorites } from './components/toolbar/BandFavorites';
+import { StepFavorites } from './components/toolbar/StepFavorites';
 import { FilterPanel } from './components/filter/FilterPanel';
 import { FilterRibbon, useFilterRibbonOpenSync } from './components/filter/FilterRibbon';
 import { MoxButton } from './components/MoxButton';
@@ -708,9 +711,10 @@ export default function App() {
       {/* Control strip — real wired controls rebuilt into the design's chassis */}
       <div className="control-strip">
         <div className="hide-mobile" style={{ display: 'contents' }}>
-          <ModeBandwidth />
+          <ModeFavorites />
           <FilterPanel />
-          <BandButtons />
+          <BandFavorites />
+          <StepFavorites />
         </div>
         <div className="show-mobile" style={{ display: 'none', gap: 8 }}>
           <ModeBandwidth />

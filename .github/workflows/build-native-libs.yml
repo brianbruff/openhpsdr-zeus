@@ -229,6 +229,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
@@ -260,14 +261,39 @@ jobs:
             cp -p "$artifact_dir"/* "$destDir/"
           done
 
-      - name: Commit and push
+      - name: Open or update auto-PR with rebuilt libraries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Branch protection on main blocks direct pushes by github-actions[bot]
+          # (GH006 "Changes must be made through a pull request"). Push to a
+          # stable bot branch and open / refresh a PR there instead — re-runs
+          # force-push and update the existing PR rather than spawning new ones.
+          set -eux
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Zeus.Dsp/runtimes/
           if git diff --staged --quiet; then
             echo "No changes to commit"
+            exit 0
+          fi
+
+          branch="auto/native-libs-update"
+          git checkout -b "$branch"
+          git commit -m "build: update native WDSP libraries for Windows and Linux"
+          # Force-push so re-runs replace the bot branch in place.
+          git push --force origin "$branch"
+
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [ -n "$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')" ]; then
+            echo "PR already open for $branch — branch updated by force-push"
           else
-            git commit -m "build: update native WDSP libraries for Windows and Linux"
-            git push
+            body=$(printf '%s\n\n%s\n\n%s\n' \
+              "Automated rebuild of native WDSP libraries from [build-native-libs run]($run_url)." \
+              "Merge after sanity-checking the staged binaries (size, ldd, dumpbin /EXPORTS, etc)." \
+              "The bot will force-push this branch on every native-libs rebuild — re-runs reuse this PR rather than opening a new one.")
+            gh pr create \
+              --base main --head "$branch" \
+              --title "build: update native WDSP libraries (auto)" \
+              --body "$body"
           fi

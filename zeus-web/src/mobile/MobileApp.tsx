@@ -14,6 +14,7 @@ import { setMode, type RxMode } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useQrzStore } from '../state/qrz-store';
 import { useTxStore } from '../state/tx-store';
+import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { VfoDisplay } from '../components/VfoDisplay';
 import { SMeterLive } from '../components/SMeterLive';
 import { Panadapter } from '../components/Panadapter';
@@ -102,6 +103,16 @@ export function MobileApp() {
         }
       : null;
 
+  // Panadapter background mode — same store the desktop reads from, so a
+  // setting picked on desktop (basic / beam-map / image) follows the operator
+  // to mobile via localStorage. Mobile has no Display settings entry point of
+  // its own yet; this is inheritance-only by design.
+  const panBackground = useDisplaySettingsStore((s) => s.panBackground);
+  const backgroundImage = useDisplaySettingsStore((s) => s.backgroundImage);
+  const backgroundImageFit = useDisplaySettingsStore((s) => s.backgroundImageFit);
+  const terminatorActive = panBackground === 'beam-map';
+  const imageMode = panBackground === 'image' && !!backgroundImage;
+
   return (
     <div className="m-app">
       <header className="m-topbar">
@@ -177,8 +188,14 @@ export function MobileApp() {
 
 
         <Section label="Panadapter" meta={`${freqMHz} MHz · ${bandLabel}`}>
-          <div className="m-pan-stack">
-            {effectiveHome && (
+          <div className={`m-pan-stack${imageMode ? ' image-mode' : ''}`}>
+            {imageMode && (
+              <div
+                className={`image-layer ${backgroundImageFit}`}
+                style={{ backgroundImage: `url(${backgroundImage})` }}
+              />
+            )}
+            {terminatorActive && effectiveHome && (
               // The "map-layer visible" pair pulls in the desktop sizing
               // chain in layout.css:451-470 — without it the inner Leaflet
               // .leaflet-container collapses to 0×0 and tiles never paint.
@@ -199,13 +216,11 @@ export function MobileApp() {
                 <Panadapter />
               </div>
               <div className="m-wf">
-                {/* Opaque on mobile even when QRZ is on. With a transparent
-                    waterfall + dark Esri tiles + the colormap's near-black
-                    noise floor, signal traces blended into the map and the
-                    waterfall read as solid black. The map remains visible
-                    behind the spectrum (top half), where it's primarily
-                    contextual decoration. */}
-                <Waterfall transparent={false} />
+                {/* Opaque under beam-map: dark Esri tiles + near-black noise
+                    floor blended together and the waterfall read as solid
+                    black. Transparent under imageMode so the user's picture
+                    shows through both halves (matches desktop). */}
+                <Waterfall transparent={imageMode} />
               </div>
             </div>
           </div>

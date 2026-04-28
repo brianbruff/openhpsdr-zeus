@@ -44,6 +44,13 @@
 
 import { create } from 'zustand';
 import type { ColormapId } from '../gl/colormap';
+import {
+  deleteDisplayImage,
+  displayImageUrl,
+  fetchDisplaySettings,
+  updateDisplaySettings,
+  uploadDisplayImage,
+} from '../api/display';
 
 // Fixed defaults used when autoRange is off and no user-saved range is
 // present. -140..-50 dBFS sits the noise floor where operators expect to
@@ -64,10 +71,14 @@ export const TX_FIXED_DB_MAX = 20;
 const STORAGE_KEY = 'zeus.display.dbRange';
 const TX_STORAGE_KEY = 'zeus.display.txDbRange';
 const WF_STORAGE_KEY = 'zeus.display.wfDbRange';
-const PAN_BG_KEY = 'zeus.display.panBackground';
-const BG_IMAGE_KEY = 'zeus.display.backgroundImage';
-const BG_FIT_KEY = 'zeus.display.backgroundImageFit';
 const RX_TRACE_COLOR_KEY = 'zeus.display.rxTraceColor';
+
+// Legacy localStorage keys — pre-server-side storage. Read once on first
+// load to migrate the operator's existing image up to the backend, then
+// removed. New code should never read or write these.
+const LEGACY_PAN_BG_KEY = 'zeus.display.panBackground';
+const LEGACY_BG_IMAGE_KEY = 'zeus.display.backgroundImage';
+const LEGACY_BG_FIT_KEY = 'zeus.display.backgroundImageFit';
 
 // Default RX panadapter trace colour — warm amber, matching the original
 // hardcoded constant in gl/panadapter.ts. Operators can pick another colour
@@ -89,61 +100,6 @@ export type PanBackgroundMode = 'basic' | 'beam-map' | 'image';
 // 'fill' → cover (fills the panel, may crop)
 // 'stretch' → 100% 100% (distorts to fit exactly)
 export type BackgroundImageFit = 'fit' | 'fill' | 'stretch';
-
-function readPanBackground(): PanBackgroundMode {
-  try {
-    if (typeof localStorage === 'undefined') return 'basic';
-    const raw = localStorage.getItem(PAN_BG_KEY);
-    if (raw === 'basic' || raw === 'beam-map' || raw === 'image') return raw;
-    return 'basic';
-  } catch {
-    return 'basic';
-  }
-}
-function writePanBackground(v: PanBackgroundMode): void {
-  try { if (typeof localStorage !== 'undefined') localStorage.setItem(PAN_BG_KEY, v); } catch { /* quota */ }
-}
-
-function readBackgroundImage(): string | null {
-  try {
-    if (typeof localStorage === 'undefined') return null;
-    const raw = localStorage.getItem(BG_IMAGE_KEY);
-    return raw && raw.startsWith('data:image/') ? raw : null;
-  } catch {
-    return null;
-  }
-}
-function writeBackgroundImage(dataUrl: string | null): boolean {
-  try {
-    if (typeof localStorage === 'undefined') return false;
-    if (dataUrl == null) {
-      localStorage.removeItem(BG_IMAGE_KEY);
-    } else {
-      localStorage.setItem(BG_IMAGE_KEY, dataUrl);
-    }
-    return true;
-  } catch {
-    // Image too big for localStorage quota — caller should warn the user.
-    return false;
-  }
-}
-
-// Default to 'fill' (cover): matches the Beam Map's full-bleed look so
-// portrait / square images fill the wide panadapter without letterboxing.
-// Users who want the whole image visible can pick 'fit' explicitly.
-function readBackgroundImageFit(): BackgroundImageFit {
-  try {
-    if (typeof localStorage === 'undefined') return 'fill';
-    const raw = localStorage.getItem(BG_FIT_KEY);
-    if (raw === 'fit' || raw === 'fill' || raw === 'stretch') return raw;
-    return 'fill';
-  } catch {
-    return 'fill';
-  }
-}
-function writeBackgroundImageFit(v: BackgroundImageFit): void {
-  try { if (typeof localStorage !== 'undefined') localStorage.setItem(BG_FIT_KEY, v); } catch { /* quota */ }
-}
 
 function readRxTraceColor(): string {
   try {
@@ -268,18 +224,21 @@ export type DisplaySettingsState = {
   txDbMax: number;
   colormap: ColormapId;
   // Panadapter background overlay mode + (optional) user image. See the
-  // PanBackgroundMode and BackgroundImageFit types above. The image is
-  // stored as a data:URL inside localStorage; setBackgroundImage returns
-  // false if the browser refused the write (quota exceeded).
+  // PanBackgroundMode and BackgroundImageFit types above. Persisted on the
+  // backend (zeus-prefs.db) so a single setting follows the operator across
+  // every browser pointed at the Zeus instance — phones, tablets, multiple
+  // desktops. backgroundImage is a server URL with a cache-busting query
+  // string, not a data:URL. setBackgroundImage returns false on upload
+  // failure (network or server-side rejection).
   panBackground: PanBackgroundMode;
   backgroundImage: string | null;
   backgroundImageFit: BackgroundImageFit;
   // RX panadapter trace colour as #RRGGBB. Drives both the sharp trace line
   // and the fill underneath in gl/panadapter.ts (kept in lockstep).
   rxTraceColor: string;
-  setPanBackground: (v: PanBackgroundMode) => void;
-  setBackgroundImage: (dataUrl: string | null) => boolean;
-  setBackgroundImageFit: (v: BackgroundImageFit) => void;
+  setPanBackground: (v: PanBackgroundMode) => Promise<void>;
+  setBackgroundImage: (dataUrl: string | null) => Promise<boolean>;
+  setBackgroundImageFit: (v: BackgroundImageFit) => Promise<void>;
   setRxTraceColor: (v: string) => void;
   setAutoRange: (v: boolean) => void;
   setColormap: (id: ColormapId) => void;
@@ -310,22 +269,63 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   txDbMin: initialTxRange.txDbMin,
   txDbMax: initialTxRange.txDbMax,
   colormap: 'blue',
-  panBackground: readPanBackground(),
-  backgroundImage: readBackgroundImage(),
-  backgroundImageFit: readBackgroundImageFit(),
+  // Defaults until the server-side fetch lands (see hydrateFromServer at the
+  // bottom of this file). The operator briefly sees a plain panadapter on
+  // first paint instead of their saved image — acceptable trade-off for not
+  // shipping the image on every page-load via localStorage.
+  panBackground: 'basic',
+  backgroundImage: null,
+  backgroundImageFit: 'fill',
   rxTraceColor: readRxTraceColor(),
-  setPanBackground: (panBackground) => {
-    writePanBackground(panBackground);
+  setPanBackground: async (panBackground) => {
+    const prev = get().panBackground;
     set({ panBackground });
+    try {
+      const result = await updateDisplaySettings(panBackground, get().backgroundImageFit);
+      // If the server normalised the value (unknown input → 'basic'), reflect that.
+      if (result.mode !== panBackground) set({ panBackground: result.mode });
+    } catch {
+      set({ panBackground: prev });
+    }
   },
-  setBackgroundImage: (dataUrl) => {
-    const ok = writeBackgroundImage(dataUrl);
-    set({ backgroundImage: ok ? dataUrl : get().backgroundImage });
-    return ok;
+  setBackgroundImage: async (dataUrl) => {
+    if (dataUrl == null) {
+      try {
+        const result = await deleteDisplayImage();
+        set({
+          backgroundImage: null,
+          // Server may have transitioned mode if it had been 'image' — but we
+          // only update mode if the server says so explicitly via the result.
+          panBackground: result.mode,
+          backgroundImageFit: result.fit,
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    try {
+      const blob = await dataUrlToBlob(dataUrl);
+      const result = await uploadDisplayImage(blob);
+      set({
+        backgroundImage: result.hasImage ? displayImageUrl(Date.now()) : null,
+        panBackground: result.mode,
+        backgroundImageFit: result.fit,
+      });
+      return result.hasImage;
+    } catch {
+      return false;
+    }
   },
-  setBackgroundImageFit: (backgroundImageFit) => {
-    writeBackgroundImageFit(backgroundImageFit);
+  setBackgroundImageFit: async (backgroundImageFit) => {
+    const prev = get().backgroundImageFit;
     set({ backgroundImageFit });
+    try {
+      const result = await updateDisplaySettings(get().panBackground, backgroundImageFit);
+      if (result.fit !== backgroundImageFit) set({ backgroundImageFit: result.fit });
+    } catch {
+      set({ backgroundImageFit: prev });
+    }
   },
   setRxTraceColor: (v) => {
     if (!isHexColor(v)) return;
@@ -401,3 +401,88 @@ function percentiles(arr: Float32Array): [number, number] {
   const highIdx = Math.min(n - 1, Math.max(0, Math.floor(0.95 * n)));
   return [sorted[lowIdx] ?? FIXED_DB_MIN, sorted[highIdx] ?? FIXED_DB_MAX];
 }
+
+// Decode a data:URL produced by canvas.toDataURL() into a Blob the multipart
+// upload can carry. Used by setBackgroundImage to bridge the panel's
+// canvas-based compression pipeline to the backend's byte storage.
+async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
+  const res = await fetch(dataUrl);
+  return res.blob();
+}
+
+// One-shot hydration from the backend at module load. If the server has
+// nothing yet but this browser still holds a legacy localStorage image,
+// push it up once and clear local — that's the migration path for operators
+// who set a background before the server-side store existed. Either way the
+// three legacy keys are removed afterwards so the localStorage stays clean.
+async function hydrateFromServer(): Promise<void> {
+  let server: Awaited<ReturnType<typeof fetchDisplaySettings>>;
+  try {
+    server = await fetchDisplaySettings();
+  } catch {
+    // Backend unreachable; leave defaults in place. Next call to
+    // setPanBackground / setBackgroundImage will hit the server.
+    return;
+  }
+
+  const legacy = readLegacyLocalStorage();
+  const serverHasContent =
+    server.hasImage || server.mode !== 'basic' || server.fit !== 'fill';
+
+  if (!serverHasContent && legacy && (legacy.image || legacy.mode || legacy.fit)) {
+    try {
+      if (legacy.mode || legacy.fit) {
+        const next = await updateDisplaySettings(
+          legacy.mode ?? server.mode,
+          legacy.fit ?? server.fit,
+        );
+        server = next;
+      }
+      if (legacy.image) {
+        const blob = await dataUrlToBlob(legacy.image);
+        server = await uploadDisplayImage(blob);
+      }
+    } catch {
+      // Migration failed — leave legacy keys in place so we retry next load.
+      return;
+    }
+  }
+
+  clearLegacyLocalStorage();
+
+  useDisplaySettingsStore.setState({
+    panBackground: server.mode,
+    backgroundImage: server.hasImage ? displayImageUrl(Date.now()) : null,
+    backgroundImageFit: server.fit,
+  });
+}
+
+function readLegacyLocalStorage(): { mode: PanBackgroundMode | null; fit: BackgroundImageFit | null; image: string | null } | null {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const rawMode = localStorage.getItem(LEGACY_PAN_BG_KEY);
+    const rawFit = localStorage.getItem(LEGACY_BG_FIT_KEY);
+    const rawImg = localStorage.getItem(LEGACY_BG_IMAGE_KEY);
+    const mode =
+      rawMode === 'basic' || rawMode === 'beam-map' || rawMode === 'image' ? rawMode : null;
+    const fit =
+      rawFit === 'fit' || rawFit === 'fill' || rawFit === 'stretch' ? rawFit : null;
+    const image = rawImg && rawImg.startsWith('data:image/') ? rawImg : null;
+    return { mode, fit, image };
+  } catch {
+    return null;
+  }
+}
+
+function clearLegacyLocalStorage(): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.removeItem(LEGACY_PAN_BG_KEY);
+    localStorage.removeItem(LEGACY_BG_IMAGE_KEY);
+    localStorage.removeItem(LEGACY_BG_FIT_KEY);
+  } catch {
+    /* private mode — nothing to clean up */
+  }
+}
+
+void hydrateFromServer();

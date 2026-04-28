@@ -721,6 +721,7 @@ export default function App() {
           <BandFavorites />
           <span className="strip-divider" aria-hidden="true" />
           <StepFavorites />
+          <span className="strip-divider" aria-hidden="true" />
         </div>
         <div className="show-mobile" style={{ display: 'none', gap: 8 }}>
           <ModeBandwidth />

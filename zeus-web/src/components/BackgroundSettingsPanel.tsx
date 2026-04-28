@@ -93,11 +93,11 @@ export function BackgroundSettingsPanel() {
     setBusy(true);
     try {
       const dataUrl = await fileToCompressedDataUrl(file);
-      const ok = setBackgroundImage(dataUrl);
+      const ok = await setBackgroundImage(dataUrl);
       if (!ok) {
-        setError('Browser refused to store the image (quota exceeded). Try a smaller picture.');
+        setError('Image upload failed. Check the server connection and try again.');
       } else if (panBackground !== 'image') {
-        setPanBackground('image');
+        await setPanBackground('image');
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -143,7 +143,7 @@ export function BackgroundSettingsPanel() {
                 name="pan-background"
                 value={opt.id}
                 checked={active}
-                onChange={() => setPanBackground(opt.id)}
+                onChange={() => { void setPanBackground(opt.id); }}
                 style={{ cursor: 'pointer' }}
               />
               <div style={{ flex: 1 }}>
@@ -212,7 +212,7 @@ export function BackgroundSettingsPanel() {
                     key={opt.id}
                     type="button"
                     className={`btn sm ${active ? 'active' : ''}`}
-                    onClick={() => setBackgroundImageFit(opt.id)}
+                    onClick={() => { void setBackgroundImageFit(opt.id); }}
                   >
                     {opt.label}
                   </button>
@@ -226,7 +226,7 @@ export function BackgroundSettingsPanel() {
               type="button"
               className="btn sm"
               style={{ alignSelf: 'flex-start' }}
-              onClick={() => setBackgroundImage(null)}
+              onClick={() => { void setBackgroundImage(null); }}
             >
               CLEAR IMAGE
             </button>

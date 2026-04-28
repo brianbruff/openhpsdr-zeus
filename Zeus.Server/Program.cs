@@ -171,6 +171,7 @@ builder.Services.AddSingleton<PaSettingsStore>();
 builder.Services.AddSingleton<PreferredRadioStore>();
 builder.Services.AddSingleton<PsSettingsStore>();
 builder.Services.AddSingleton<FilterPresetStore>();
+builder.Services.AddSingleton<DisplaySettingsStore>();
 builder.Services.AddSingleton<QrzService>();
 builder.Services.AddSingleton<LogService>();
 
@@ -868,6 +869,57 @@ app.MapPut("/api/pa-settings", (PaSettingsSetRequest req, PaSettingsStore store,
         return Results.BadRequest(new { error = "paMaxPowerWatts must be >= 0" });
     store.Save(new PaSettingsDto(req.Global, req.Bands));
     return Results.Ok(store.GetAll(radio.EffectiveBoardKind));
+});
+
+// Panadapter background settings — Mode + Fit are JSON; image bytes are
+// kept on a separate endpoint so the lightweight GET that the frontend
+// hits on every load doesn't drag the picture across the wire. The image
+// itself rides as raw bytes (multipart on PUT, application/<mime> on GET).
+// Persisted in zeus-prefs.db so the setting follows the operator across
+// browsers / devices instead of living in per-origin localStorage.
+app.MapGet("/api/display-settings", (DisplaySettingsStore store) => Results.Ok(store.Get()));
+
+app.MapPut("/api/display-settings", (DisplaySettingsSetRequest req, DisplaySettingsStore store) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Mode) || string.IsNullOrWhiteSpace(req.Fit))
+        return Results.BadRequest(new { error = "mode and fit required" });
+    store.SaveMode(req.Mode, req.Fit);
+    return Results.Ok(store.Get());
+});
+
+app.MapGet("/api/display-settings/image", (DisplaySettingsStore store) =>
+{
+    var img = store.GetImage();
+    if (img is null) return Results.NotFound();
+    return Results.File(img.Value.Bytes, img.Value.Mime);
+});
+
+// Multipart upload — single field "file", any image/* mime type. Capped
+// at 8 MB so a stray giant TIFF can't fill the prefs DB.
+app.MapPut("/api/display-settings/image", async (HttpContext ctx, DisplaySettingsStore store) =>
+{
+    if (!ctx.Request.HasFormContentType)
+        return Results.BadRequest(new { error = "multipart/form-data required" });
+    var form = await ctx.Request.ReadFormAsync();
+    var file = form.Files["file"] ?? form.Files.FirstOrDefault();
+    if (file is null || file.Length == 0)
+        return Results.BadRequest(new { error = "file field required" });
+    const long MaxBytes = 8 * 1024 * 1024;
+    if (file.Length > MaxBytes)
+        return Results.BadRequest(new { error = $"file too large (max {MaxBytes} bytes)" });
+    var mime = string.IsNullOrEmpty(file.ContentType) ? "application/octet-stream" : file.ContentType;
+    if (!mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+        return Results.BadRequest(new { error = "image/* content-type required" });
+    using var ms = new MemoryStream(capacity: (int)file.Length);
+    await file.CopyToAsync(ms);
+    store.SaveImage(ms.ToArray(), mime);
+    return Results.Ok(store.Get());
+});
+
+app.MapDelete("/api/display-settings/image", (DisplaySettingsStore store) =>
+{
+    store.DeleteImage();
+    return Results.Ok(store.Get());
 });
 
 // Radio selection — operator preference seeding, with discovery as the

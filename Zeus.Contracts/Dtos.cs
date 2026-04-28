@@ -384,6 +384,21 @@ public sealed record RadioSelectionSetRequest(
     string Preferred,
     bool? OverrideDetection);
 
+// Panadapter background settings — Mode is one of "basic" | "beam-map" |
+// "image"; Fit is one of "fit" | "fill" | "stretch". Image bytes are NOT
+// shipped in this DTO; HasImage signals whether GET /api/display-settings/image
+// will return content. Persisted server-side so the setting follows the
+// operator across browsers / devices.
+public sealed record DisplaySettingsDto(
+    string Mode,
+    string Fit,
+    bool HasImage,
+    string? ImageMime);
+
+public sealed record DisplaySettingsSetRequest(
+    string Mode,
+    string Fit);
+
 // ---- PureSignal request records ----
 // PsControlSetRequest = master arm (Enabled) + mode (Auto vs Single).
 // PsAdvancedSetRequest = nullable so partial updates from the settings

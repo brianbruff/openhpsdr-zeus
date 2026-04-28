@@ -64,6 +64,76 @@ export const TX_FIXED_DB_MAX = 20;
 const STORAGE_KEY = 'zeus.display.dbRange';
 const TX_STORAGE_KEY = 'zeus.display.txDbRange';
 const WF_STORAGE_KEY = 'zeus.display.wfDbRange';
+const PAN_BG_KEY = 'zeus.display.panBackground';
+const BG_IMAGE_KEY = 'zeus.display.backgroundImage';
+const BG_FIT_KEY = 'zeus.display.backgroundImageFit';
+
+// Panadapter background mode. 'basic' = no overlay (current QRZ-off
+// look). 'beam-map' = world-map overlay with terminator lines and beam
+// chrome (current QRZ-on look). 'image' = user-supplied still image
+// behind a transparent panadapter / waterfall.
+export type PanBackgroundMode = 'basic' | 'beam-map' | 'image';
+
+// CSS background-size mapping for the image background.
+// 'fit' → contain (entire image visible, may letterbox)
+// 'fill' → cover (fills the panel, may crop)
+// 'stretch' → 100% 100% (distorts to fit exactly)
+export type BackgroundImageFit = 'fit' | 'fill' | 'stretch';
+
+function readPanBackground(): PanBackgroundMode {
+  try {
+    if (typeof localStorage === 'undefined') return 'basic';
+    const raw = localStorage.getItem(PAN_BG_KEY);
+    if (raw === 'basic' || raw === 'beam-map' || raw === 'image') return raw;
+    return 'basic';
+  } catch {
+    return 'basic';
+  }
+}
+function writePanBackground(v: PanBackgroundMode): void {
+  try { if (typeof localStorage !== 'undefined') localStorage.setItem(PAN_BG_KEY, v); } catch { /* quota */ }
+}
+
+function readBackgroundImage(): string | null {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const raw = localStorage.getItem(BG_IMAGE_KEY);
+    return raw && raw.startsWith('data:image/') ? raw : null;
+  } catch {
+    return null;
+  }
+}
+function writeBackgroundImage(dataUrl: string | null): boolean {
+  try {
+    if (typeof localStorage === 'undefined') return false;
+    if (dataUrl == null) {
+      localStorage.removeItem(BG_IMAGE_KEY);
+    } else {
+      localStorage.setItem(BG_IMAGE_KEY, dataUrl);
+    }
+    return true;
+  } catch {
+    // Image too big for localStorage quota — caller should warn the user.
+    return false;
+  }
+}
+
+// Default to 'fill' (cover): matches the Beam Map's full-bleed look so
+// portrait / square images fill the wide panadapter without letterboxing.
+// Users who want the whole image visible can pick 'fit' explicitly.
+function readBackgroundImageFit(): BackgroundImageFit {
+  try {
+    if (typeof localStorage === 'undefined') return 'fill';
+    const raw = localStorage.getItem(BG_FIT_KEY);
+    if (raw === 'fit' || raw === 'fill' || raw === 'stretch') return raw;
+    return 'fill';
+  } catch {
+    return 'fill';
+  }
+}
+function writeBackgroundImageFit(v: BackgroundImageFit): void {
+  try { if (typeof localStorage !== 'undefined') localStorage.setItem(BG_FIT_KEY, v); } catch { /* quota */ }
+}
 
 function readSavedRange(): { dbMin: number; dbMax: number } {
   try {
@@ -174,6 +244,16 @@ export type DisplaySettingsState = {
   txDbMin: number;
   txDbMax: number;
   colormap: ColormapId;
+  // Panadapter background overlay mode + (optional) user image. See the
+  // PanBackgroundMode and BackgroundImageFit types above. The image is
+  // stored as a data:URL inside localStorage; setBackgroundImage returns
+  // false if the browser refused the write (quota exceeded).
+  panBackground: PanBackgroundMode;
+  backgroundImage: string | null;
+  backgroundImageFit: BackgroundImageFit;
+  setPanBackground: (v: PanBackgroundMode) => void;
+  setBackgroundImage: (dataUrl: string | null) => boolean;
+  setBackgroundImageFit: (v: BackgroundImageFit) => void;
   setAutoRange: (v: boolean) => void;
   setColormap: (id: ColormapId) => void;
   updateAutoRange: (wfDb: Float32Array) => void;
@@ -203,6 +283,22 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   txDbMin: initialTxRange.txDbMin,
   txDbMax: initialTxRange.txDbMax,
   colormap: 'blue',
+  panBackground: readPanBackground(),
+  backgroundImage: readBackgroundImage(),
+  backgroundImageFit: readBackgroundImageFit(),
+  setPanBackground: (panBackground) => {
+    writePanBackground(panBackground);
+    set({ panBackground });
+  },
+  setBackgroundImage: (dataUrl) => {
+    const ok = writeBackgroundImage(dataUrl);
+    set({ backgroundImage: ok ? dataUrl : get().backgroundImage });
+    return ok;
+  },
+  setBackgroundImageFit: (backgroundImageFit) => {
+    writeBackgroundImageFit(backgroundImageFit);
+    set({ backgroundImageFit });
+  },
   setAutoRange: (autoRange) => {
     if (autoRange) {
       set({ autoRange: true });

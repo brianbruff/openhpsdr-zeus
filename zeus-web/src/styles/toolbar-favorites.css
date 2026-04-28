@@ -1,0 +1,126 @@
+/* ============================================================
+   Toolbar favorites — Mode / Band / Step pickers in the control
+   strip. Mirrors the FilterPanel + FilterRibbon pattern: three
+   pinned slots beside a "⋯" toggle that opens a popover containing
+   every option. Drag any chip in the popover onto a favorite slot
+   to pin it.
+
+   Visual language matches `.filter-ribbon__chip` so the toolbar
+   reads as a coherent system. Palette: neutral warm gray, accent
+   blue (#4a9eff) for drop-target highlight only.
+   ============================================================ */
+
+.toolbar-fav { /* container shares ctrl-group spacing — no overrides needed */ }
+
+/* Drop-target highlight on a favorite slot button (uses .btn.sm). The same
+   rule is shared by the FilterPanel's three favorite buttons via the bare
+   `.is-drop-target` class so all four toolbar groups (Mode/Band/Step/Filter)
+   light up identically when a draggable chip hovers over them. */
+.toolbar-fav__slot.is-drop-target,
+.btn.sm.is-drop-target {
+  border-color: #4a9eff;
+  border-top-color: #6cb0ff;
+  box-shadow:
+    inset 0 0 0 1px rgba(108, 176, 255, 0.40),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+    0 0 12px rgba(74, 158, 255, 0.20),
+    0 1px 0 rgba(0, 0, 0, 0.35);
+}
+
+/* ----- Popover (portaled into <body>, anchored to the "⋯" button via
+   inline top/left set by the component on open/resize/scroll). Using
+   `position: fixed` so it escapes `.control-strip`'s `overflow: hidden`
+   clip — that's the whole reason for portaling. ----- */
+.toolbar-fav__popover {
+  position: fixed;
+  z-index: 400;
+  min-width: 240px;
+  max-width: 360px;
+  padding: 8px 10px 10px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: linear-gradient(180deg, #26292f 0%, #1e2025 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 30px 80px rgba(0, 0, 0, 0.55),
+    0 6px 18px rgba(0, 0, 0, 0.35);
+  color: #edeef1;
+}
+
+.toolbar-fav__hint {
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #7c8088;
+  margin-bottom: 6px;
+  user-select: none;
+}
+
+.toolbar-fav__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+  gap: 4px;
+}
+
+/* ----- Chip in popover (mirrors .filter-ribbon__chip) ----- */
+.toolbar-fav__chip {
+  appearance: none;
+  font-family: inherit;
+  padding: 4px 6px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: #e0e2e6;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0) 45%, rgba(0, 0, 0, 0.12) 100%),
+    linear-gradient(180deg, #3a3e45 0%, #2a2d33 100%);
+  border: 1px solid #4a4e55;
+  border-top-color: #585c63;
+  border-bottom-color: #32353b;
+  border-radius: 4px;
+  cursor: grab;
+  font-variant-numeric: tabular-nums;
+  transition: border-color 120ms ease, filter 120ms ease, color 120ms ease;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+    0 1px 0 rgba(0, 0, 0, 0.35);
+  text-align: center;
+}
+.toolbar-fav__chip:hover {
+  filter: brightness(1.12);
+  border-color: #626670;
+}
+.toolbar-fav__chip:active { cursor: grabbing; }
+
+.toolbar-fav__chip.is-active {
+  color: #ffffff;
+  border-color: #8a8e97;
+  border-top-color: #a4a8b0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0.02) 45%, rgba(0, 0, 0, 0.10) 100%),
+    linear-gradient(180deg, #52565e 0%, #3a3e45 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 0 0 1px rgba(220, 225, 232, 0.15),
+    0 0 10px rgba(200, 205, 212, 0.10),
+    0 1px 0 rgba(0, 0, 0, 0.40);
+}
+
+/* Pinned chip — subtle accent dot indicating the chip is one of the three
+   currently-pinned favorites in the toolbar slot row. Same indicator is
+   reused on the filter ribbon's PRESETS grid so the operator can see at a
+   glance which presets are already pinned in the FILTER toolbar buttons. */
+.toolbar-fav__chip.is-pinned::after,
+.filter-ribbon__chip.is-pinned::after {
+  content: '';
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: var(--accent, #4a9eff);
+  vertical-align: middle;
+  opacity: 0.75;
+}
+
+.toolbar-fav__chip.is-dragging { opacity: 0.45; }

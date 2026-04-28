@@ -42,7 +42,8 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useState } from 'react';
+import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
+import { toolbarFavDragMime } from './toolbar/ToolbarFavorites';
 
 type TuningStep = {
   hz: number;
@@ -66,10 +67,9 @@ const TUNING_STEPS: readonly TuningStep[] = [
   { hz: 1_000_000, label: '1 MHz' },
 ];
 
-const DEFAULT_STEP_HZ = 500;
-
 export function TuningStepWidget() {
-  const [stepHz, setStepHz] = useState<number>(DEFAULT_STEP_HZ);
+  const stepHz = useToolbarFavoritesStore((s) => s.stepHz);
+  const setStepHz = useToolbarFavoritesStore((s) => s.setStepHz);
 
   return (
     <>
@@ -82,9 +82,14 @@ export function TuningStepWidget() {
             <button
               key={step.hz}
               type="button"
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData(toolbarFavDragMime('step'), String(step.hz));
+                e.dataTransfer.effectAllowed = 'move';
+              }}
               onClick={() => setStepHz(step.hz)}
               className={`btn sm ${stepHz === step.hz ? 'active' : ''}`}
-              title={`Wheel-on-digit step: ${step.label}`}
+              title={`${step.label} — drag onto a toolbar favorite slot to pin`}
             >
               {step.label}
             </button>

@@ -45,6 +45,7 @@
 import { useCallback } from 'react';
 import { setMode, type RxMode } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { toolbarFavDragMime } from './toolbar/ToolbarFavorites';
 
 type ModeEntry = { value: RxMode; label: string };
 
@@ -88,8 +89,14 @@ export function ModeBandwidth() {
             <button
               key={m.value}
               type="button"
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData(toolbarFavDragMime('mode'), m.value);
+                e.dataTransfer.effectAllowed = 'move';
+              }}
               onClick={() => selectMode(m.value)}
               className={`btn sm ${mode === m.value ? 'active' : ''}`}
+              title={`${m.label} — drag onto a toolbar favorite slot to pin`}
             >
               {m.label}
             </button>

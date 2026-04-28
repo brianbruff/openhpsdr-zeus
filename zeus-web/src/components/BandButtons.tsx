@@ -53,6 +53,7 @@ import {
 } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { BANDS, bandOf } from './design/data';
+import { toolbarFavDragMime } from './toolbar/ToolbarFavorites';
 
 type BandEntry = {
   name: string;
@@ -161,8 +162,14 @@ export function BandButtons() {
             <button
               key={band.name}
               type="button"
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData(toolbarFavDragMime('band'), band.name);
+                e.dataTransfer.effectAllowed = 'move';
+              }}
               onClick={() => selectBand(band)}
               className={`btn sm ${currentBand === band.name ? 'active' : ''}`}
+              title={`${band.name} — drag onto a toolbar favorite slot to pin`}
             >
               {band.name}
             </button>

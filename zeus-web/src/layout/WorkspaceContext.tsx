@@ -44,6 +44,7 @@
 
 import { createContext, useContext, type FormEvent, type ReactNode, type RefObject } from 'react';
 import type { Contact } from '../components/design/data';
+import type { BackgroundImageFit, PanBackgroundMode } from '../state/display-settings-store';
 
 export interface EffectiveHome {
   call: string;
@@ -68,7 +69,15 @@ export interface WorkspaceCtx {
   // QRZ / Terminator
   callsign: string;
   setCallsign: (v: string) => void;
+  // terminatorActive is derived: panBackground === 'beam-map'.
   terminatorActive: boolean;
+  // imageMode: panBackground === 'image' AND a backgroundImage is loaded.
+  imageMode: boolean;
+  // bgActive: any non-basic background overlay is active (map or image).
+  bgActive: boolean;
+  panBackground: PanBackgroundMode;
+  backgroundImage: string | null;
+  backgroundImageFit: BackgroundImageFit;
   enriching: boolean;
   lookupKey: number;
   contact: Contact | null;
@@ -88,8 +97,7 @@ export interface WorkspaceCtx {
   dist: number;
   heroTitle: ReactNode;
   csInputRef: RefObject<HTMLInputElement | null>;
-  engageTerminator: (cs?: string) => void;
-  disengageTerminator: () => void;
+  runQrzLookup: (cs?: string) => void;
   onCallsignSubmit: (e: FormEvent<HTMLFormElement>) => void;
   submitBeam: (e: FormEvent<HTMLFormElement>) => void;
   handleLogQso: () => void;

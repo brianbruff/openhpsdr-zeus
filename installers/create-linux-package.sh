@@ -88,8 +88,8 @@ Command line usage:
   ./Zeus.Server    # Start Zeus server only (manual browser access)
 
 Requirements:
-- Linux x64 system
-- libfftw3 (usually installed by default on most distributions)
+- Linux x64 system (glibc-based; no system packages required — FFTW3 is
+  statically linked into libwdsp.so and the .NET runtime is bundled)
 
 For more information:
 https://github.com/brianbruff/openhpsdr-zeus

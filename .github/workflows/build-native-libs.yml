@@ -195,11 +195,32 @@ jobs:
           mkdir -p "$destDir"
           cp native/build/libwdsp.so "$destDir/libwdsp.so"
 
+      - name: Bundle FFTW3 alongside libwdsp.so (x64)
+        if: matrix.arch == 'x64'
+        run: |
+          # Ship the FFTW3 dynamic libs in the tarball so the launcher's
+          # LD_LIBRARY_PATH (set in installers/create-linux-package.sh to
+          # runtimes/linux-x64/native/) finds them and the user does NOT need
+          # libfftw3 installed system-wide. readlink -f resolves the SONAME
+          # symlink so we copy the real .so file, then rename it back to the
+          # SONAME filename libwdsp.so was linked against.
+          set -eux
+          destDir="Zeus.Dsp/runtimes/linux-x64/native"
+          for soname in libfftw3.so.3 libfftw3f.so.3; do
+            src=$(readlink -f "/usr/lib/x86_64-linux-gnu/$soname")
+            test -f "$src"
+            cp "$src" "$destDir/$soname"
+          done
+          ls -la "$destDir/"
+          ldd "$destDir/libwdsp.so"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: wdsp-linux-${{ matrix.arch }}
-          path: Zeus.Dsp/runtimes/linux-${{ matrix.arch }}/native/libwdsp.so
+          # Directory upload (not a single file) so the bundled FFTW .so.3
+          # files in the x64 build land in the artifact alongside libwdsp.so.
+          path: Zeus.Dsp/runtimes/linux-${{ matrix.arch }}/native/
 
   commit-libraries:
     name: Commit Native Libraries
@@ -218,35 +239,25 @@ jobs:
 
       - name: Stage all libraries
         run: |
-          # actions/upload-artifact@v4 strips the directory prefix when the
-          # `path:` is a single file, so each artifact arrives as a flat
-          # `<filename>` at the artifact root. Place each one explicitly
-          # under Zeus.Dsp/runtimes/<rid>/native/ — the previous
-          # `cp -r "$artifact"/* .` left them at the repo root, where the
-          # commit step's `git add Zeus.Dsp/runtimes/` could never see them.
+          # Each artifact's root contains the runtime files staged by its
+          # build job — a single .dll/.so for windows / linux-arm64, plus the
+          # bundled libfftw3.so.3 / libfftw3f.so.3 for linux-x64. Copy whole
+          # contents into the matching runtimes/<rid>/native/ destination
+          # rather than picking out a single file by name.
           set -eux
           for artifact_dir in artifacts/wdsp-*; do
             artifact_name=$(basename "$artifact_dir")  # e.g. wdsp-windows-x64
             case "$artifact_name" in
-              wdsp-windows-x64)
-                dest=Zeus.Dsp/runtimes/win-x64/native/wdsp.dll
-                src=$artifact_dir/wdsp.dll
-                ;;
-              wdsp-linux-x64)
-                dest=Zeus.Dsp/runtimes/linux-x64/native/libwdsp.so
-                src=$artifact_dir/libwdsp.so
-                ;;
-              wdsp-linux-arm64)
-                dest=Zeus.Dsp/runtimes/linux-arm64/native/libwdsp.so
-                src=$artifact_dir/libwdsp.so
-                ;;
+              wdsp-windows-x64) destDir=Zeus.Dsp/runtimes/win-x64/native ;;
+              wdsp-linux-x64)   destDir=Zeus.Dsp/runtimes/linux-x64/native ;;
+              wdsp-linux-arm64) destDir=Zeus.Dsp/runtimes/linux-arm64/native ;;
               *)
                 echo "Unrecognised artifact $artifact_name — refusing to guess destination" >&2
                 exit 1
                 ;;
             esac
-            mkdir -p "$(dirname "$dest")"
-            cp "$src" "$dest"
+            mkdir -p "$destDir"
+            cp -p "$artifact_dir"/* "$destDir/"
           done
 
       - name: Commit and push

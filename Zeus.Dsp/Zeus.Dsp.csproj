@@ -21,7 +21,9 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>runtimes/%(RecursiveDir)%(Filename)%(Extension)</Link>
     </None>
-    <None Include="runtimes/**/*.so" Pack="true" PackagePath="runtimes/">
+    <!-- *.so* (not *.so) so SONAME-versioned bundled deps like
+         libfftw3.so.3 / libfftw3f.so.3 are picked up alongside libwdsp.so. -->
+    <None Include="runtimes/**/*.so*" Pack="true" PackagePath="runtimes/">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>runtimes/%(RecursiveDir)%(Filename)%(Extension)</Link>
     </None>

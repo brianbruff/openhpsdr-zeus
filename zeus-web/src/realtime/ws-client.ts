@@ -89,12 +89,13 @@ const PA_TEMP_BYTES = 1 + 4;
 export const MSG_TYPE_PS_METERS = 0x18;
 const PS_METERS_BYTES = 1 + 4 + 4 + 1 + 1 + 4;
 
-// WDSP wisdom status: 1 type byte + 1 phase byte (0=idle, 1=building, 2=ready).
-// Pushed once on WS attach and again on every transition. The UI disables the
-// Connect button and pulses while phase=building so the user doesn't try to
-// talk to the radio while FFTW is still planning.
+// WDSP wisdom status: 1 type byte + 1 phase byte (0=idle, 1=building, 2=ready)
+// + optional UTF-8 status text trailer (e.g. "Planning COMPLEX FORWARD FFT
+// size 1024"). Pushed once on WS attach and again on every transition AND
+// every per-step status change emitted by the server's wisdom_get_status()
+// poll. Splash uses the status text to show the live build sub-step.
 export const MSG_TYPE_WISDOM_STATUS = 0x15;
-const WISDOM_STATUS_BYTES = 1 + 1;
+const WISDOM_STATUS_MIN_BYTES = 1 + 1;
 
 // Mic uplink (client → server). Payload: 960 × f32le = 3840 bytes preceded by
 // the 1-byte type, total 3841 bytes. 960 samples = 20 ms @ 48 kHz mono.
@@ -272,7 +273,7 @@ export function startRealtime(path = '/ws'): () => void {
           return;
         }
         if (peekType === MSG_TYPE_WISDOM_STATUS) {
-          if (ev.data.byteLength < WISDOM_STATUS_BYTES) {
+          if (ev.data.byteLength < WISDOM_STATUS_MIN_BYTES) {
             warnOnce(
               'ws-wisdom-short',
               `wisdom frame too short: ${ev.data.byteLength}`,
@@ -282,7 +283,15 @@ export function startRealtime(path = '/ws'): () => void {
           const raw = new DataView(ev.data).getUint8(1);
           const phase: WisdomPhase =
             raw === 1 ? 'building' : raw === 2 ? 'ready' : 'idle';
-          useConnectionStore.getState().setWisdomPhase(phase);
+          const status =
+            ev.data.byteLength > WISDOM_STATUS_MIN_BYTES
+              ? new TextDecoder('utf-8').decode(
+                  new Uint8Array(ev.data, WISDOM_STATUS_MIN_BYTES),
+                )
+              : '';
+          const store = useConnectionStore.getState();
+          store.setWisdomPhase(phase);
+          store.setWisdomStatus(status);
           return;
         }
         if (peekType === MSG_TYPE_ALERT) {

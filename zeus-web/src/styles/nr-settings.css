@@ -35,6 +35,54 @@
   border-bottom: 1px solid var(--panel-edge);
 }
 
+/* Collapsible disclosure header. Replaces the static h3 title — clicking
+   anywhere on the bar toggles the panel body. The chevron telegraphs that
+   the panel is collapsible (closed by default to keep the DSP column
+   quiet for the casual operator). */
+.nr-settings__title-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin: 0;
+  padding: 2px 0 6px 0;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--panel-edge);
+  color: var(--fg-0);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  user-select: none;
+}
+.nr-settings__title-btn:hover {
+  color: var(--accent);
+}
+.nr-settings__title-btn:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+.nr-settings__title-btn[aria-expanded='true'] {
+  margin-bottom: 6px;
+}
+.nr-settings__chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  color: var(--fg-2);
+}
+.nr-settings__title-btn:hover .nr-settings__chevron {
+  color: var(--accent);
+}
+.nr-settings__title-text {
+  flex: 1;
+}
+
 /* Post-Process toggle row — sits above the gauge rows. */
 .nr-settings__toggle-row {
   display: flex;

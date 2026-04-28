@@ -23,10 +23,19 @@ namespace Zeus.Server;
 //
 // Lives in zeus-prefs.db alongside the other non-sensitive preferences.
 //
-// Drive-byte encoding deliberately stays on ConnectedBoardKind (what's on
-// the wire), not effective. If an operator selects HL2 here while plugged
-// into a G2, we still want the G2's 8-bit drive math on the wire — the
-// preference is for *configuration seeds*, not for physics.
+// **Board Override Behavior:**
+// When OverrideDetection is false (default): preference is for *configuration
+// seeds only*, not for physics. Drive-byte encoding uses ConnectedBoardKind
+// (what's on the wire). If an operator selects HL2 while plugged into a G2,
+// we still use G2's 8-bit drive math on the wire.
+//
+// When OverrideDetection is true: preference overrides ConnectedBoardKind for
+// ALL board-specific behavior including drive-byte encoding, ATT behavior, and
+// filter switching. Use this for hardware combinations that report the wrong
+// board ID or need different behavior than auto-detection provides (e.g.,
+// Anvelina SDR + ANAN 200D PA detected as OrionMkII but needs Orion behavior).
+// **CAUTION**: Setting the wrong board can result in incorrect drive levels,
+// no output power, or hardware damage. Only use if you understand your hardware.
 public sealed class PreferredRadioStore : IDisposable
 {
     private readonly LiteDatabase _db;
@@ -63,7 +72,19 @@ public sealed class PreferredRadioStore : IDisposable
         }
     }
 
-    public void Set(HpsdrBoardKind? board)
+    // Returns whether the operator has explicitly enabled board override mode.
+    // When true, the preferred board overrides ConnectedBoardKind for ALL
+    // board-specific behavior. Default is false (safe mode).
+    public bool GetOverrideDetection()
+    {
+        lock (_sync)
+        {
+            var e = _entries.FindAll().FirstOrDefault();
+            return e?.OverrideDetection ?? false;
+        }
+    }
+
+    public void Set(HpsdrBoardKind? board, bool? overrideDetection = null)
     {
         lock (_sync)
         {
@@ -81,18 +102,38 @@ public sealed class PreferredRadioStore : IDisposable
                     _entries.Insert(new PreferredRadioEntry
                     {
                         Board = board.Value,
+                        OverrideDetection = overrideDetection ?? false,
                         UpdatedUtc = DateTime.UtcNow,
                     });
                 }
                 else
                 {
                     existing.Board = board.Value;
+                    if (overrideDetection.HasValue)
+                    {
+                        existing.OverrideDetection = overrideDetection.Value;
+                    }
                     existing.UpdatedUtc = DateTime.UtcNow;
                     _entries.Update(existing);
                 }
             }
         }
         Changed?.Invoke();
+    }
+
+    public void SetOverrideDetection(bool enabled)
+    {
+        lock (_sync)
+        {
+            var existing = _entries.FindAll().FirstOrDefault();
+            if (existing is not null)
+            {
+                existing.OverrideDetection = enabled;
+                existing.UpdatedUtc = DateTime.UtcNow;
+                _entries.Update(existing);
+                Changed?.Invoke();
+            }
+        }
     }
 
     public void Dispose() => _db.Dispose();
@@ -110,5 +151,6 @@ public sealed class PreferredRadioEntry
 {
     public int Id { get; set; }
     public HpsdrBoardKind Board { get; set; }
+    public bool OverrideDetection { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

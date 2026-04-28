@@ -107,6 +107,15 @@ cat > "${APP_BUNDLE}/Contents/MacOS/launch.sh" << 'EOF'
 #!/bin/bash
 cd "$(dirname "$0")"
 
+# Pin the bundled libwdsp.dylib so an older copy in /usr/local/lib or
+# /opt/homebrew/lib (e.g. from a piHPSDR / DeskHPSDR install) cannot
+# shadow it. macOS dlopen does not search the executable's directory by
+# default, so without this line P/Invoke can bind against a stale dylib
+# that pre-dates symbols Zeus relies on (e.g. SetRXAEMNRpost2*). Both
+# arches are listed so the same launcher works on arm64 and x64 builds;
+# the loader silently skips a path that does not exist.
+export DYLD_LIBRARY_PATH="$(pwd)/runtimes/osx-arm64/native:$(pwd)/runtimes/osx-x64/native:${DYLD_LIBRARY_PATH}"
+
 ./Zeus.Server &
 SERVER_PID=$!
 

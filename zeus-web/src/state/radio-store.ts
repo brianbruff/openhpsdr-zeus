@@ -19,7 +19,8 @@ type RadioStore = {
   inflight: boolean;
   error: string | null;
   load: () => Promise<void>;
-  setPreferred: (preferred: BoardKind) => Promise<void>;
+  setPreferred: (preferred: BoardKind, overrideDetection?: boolean) => Promise<void>;
+  setOverrideDetection: (enabled: boolean) => Promise<void>;
 };
 
 // The radio preference is persisted server-side (LiteDB) rather than in
@@ -27,7 +28,12 @@ type RadioStore = {
 // kind on the backend. Local storage would drift from the source of truth
 // across tabs.
 export const useRadioStore = create<RadioStore>((set, get) => ({
-  selection: { preferred: 'Auto', connected: 'Unknown', effective: 'Unknown' },
+  selection: {
+    preferred: 'Auto',
+    connected: 'Unknown',
+    effective: 'Unknown',
+    overrideDetection: false,
+  },
   loaded: false,
   inflight: false,
   error: null,
@@ -45,12 +51,20 @@ export const useRadioStore = create<RadioStore>((set, get) => ({
     }
   },
 
-  setPreferred: async (preferred) => {
+  setPreferred: async (preferred, overrideDetection) => {
     // Optimistic update so the dropdown feels instant; rollback on failure.
     const prev = get().selection;
-    set({ selection: { ...prev, preferred }, inflight: true, error: null });
+    set({
+      selection: {
+        ...prev,
+        preferred,
+        ...(overrideDetection !== undefined ? { overrideDetection } : {}),
+      },
+      inflight: true,
+      error: null,
+    });
     try {
-      const s = await updateRadioSelection(preferred);
+      const s = await updateRadioSelection(preferred, overrideDetection);
       set({ selection: s, inflight: false });
       // Reload the PA panel with the PREFERRED as the preview override so
       // an operator who explicitly picks G2 while an HL2 is connected sees
@@ -60,6 +74,25 @@ export const useRadioStore = create<RadioStore>((set, get) => ({
       // wins over preferred).
       const override = preferred === 'Auto' ? undefined : preferred;
       await usePaStore.getState().load(override);
+    } catch (err) {
+      set({
+        selection: prev,
+        error: err instanceof Error ? err.message : String(err),
+        inflight: false,
+      });
+    }
+  },
+
+  setOverrideDetection: async (enabled) => {
+    const prev = get().selection;
+    set({
+      selection: { ...prev, overrideDetection: enabled },
+      inflight: true,
+      error: null,
+    });
+    try {
+      const s = await updateRadioSelection(prev.preferred, enabled);
+      set({ selection: s, inflight: false });
     } catch (err) {
       set({
         selection: prev,

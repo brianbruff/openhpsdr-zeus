@@ -43,7 +43,7 @@
 // License for details.
 
 import { useEffect, useRef } from 'react';
-import { createPanRenderer } from '../gl/panadapter';
+import { createPanRenderer, hexToRgbFloats } from '../gl/panadapter';
 import { planWaterfallUpdate } from '../gl/wf-shift';
 import { useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
@@ -94,6 +94,8 @@ export function Panadapter() {
       const keyed = moxOn || tunOn;
       const dbMin = keyed ? s.txDbMin : s.dbMin;
       const dbMax = keyed ? s.txDbMax : s.dbMax;
+      const { r, g, b } = hexToRgbFloats(s.rxTraceColor);
+      renderer.setTraceColor(r, g, b);
       renderer.draw(drawPan, dbMin, dbMax, drawOffsetPx);
     };
     const requestRedraw = () => {

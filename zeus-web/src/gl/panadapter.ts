@@ -60,17 +60,38 @@ export type PanRenderer = {
     dbMax: number,
     offsetPx: number,
   ) => void;
+  // Update the trace + fill colour. Components 0..1, premultiplied alpha is
+  // applied inside draw via the FILL_ALPHA_TOP uniform; callers pass plain
+  // RGB. No GL re-init — the next draw picks up the new uniform values.
+  setTraceColor: (r: number, g: number, b: number) => void;
   dispose: () => void;
 };
 
-// Premultiplied-alpha trace colour (0xFFA028 roughly — warm amber).
-const TRACE_R = 1.0;
-const TRACE_G = 0.627;
-const TRACE_B = 0.157;
+// Convert a #RRGGBB string into the 0..1 RGB triplet the renderer wants.
+// Malformed input falls back to amber so a typo can never crash GL.
+export function hexToRgbFloats(hex: string): { r: number; g: number; b: number } {
+  const m = /^#([0-9A-Fa-f]{2})([0-9A-Fa-f]{2})([0-9A-Fa-f]{2})$/.exec(hex);
+  if (!m || m[1] === undefined || m[2] === undefined || m[3] === undefined) {
+    return { r: 1.0, g: 0.627, b: 0.157 };
+  }
+  return {
+    r: parseInt(m[1], 16) / 255,
+    g: parseInt(m[2], 16) / 255,
+    b: parseInt(m[3], 16) / 255,
+  };
+}
+
 // Fade at the trace edge; fragment alpha drops to 0 at the floor.
 const FILL_ALPHA_TOP = 0.55;
 
 export function createPanRenderer(gl: WebGL2RenderingContext): PanRenderer {
+  // Mutable trace colour, default amber. setTraceColor swaps these in place;
+  // every draw reads the current values into the fill + line uniforms so the
+  // operator's choice from the Display tab takes effect on the next frame.
+  let traceR = 1.0;
+  let traceG = 0.627;
+  let traceB = 0.157;
+
   const traceProg = buildProgram(gl, PAN_VS, PAN_FS);
   const uTraceWidth = gl.getUniformLocation(traceProg, 'uWidth');
   const uTraceDbMin = gl.getUniformLocation(traceProg, 'uDbMin');
@@ -176,7 +197,7 @@ export function createPanRenderer(gl: WebGL2RenderingContext): PanRenderer {
       gl.uniform1f(uFillDbMin, dbMin);
       gl.uniform1f(uFillDbMax, dbMax);
       gl.uniform1f(uFillOffsetPx, offsetPx);
-      gl.uniform3f(uFillColor, TRACE_R, TRACE_G, TRACE_B);
+      gl.uniform3f(uFillColor, traceR, traceG, traceB);
       gl.uniform1f(uFillAlphaTop, FILL_ALPHA_TOP);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, panDb.length * 2);
 
@@ -195,7 +216,7 @@ export function createPanRenderer(gl: WebGL2RenderingContext): PanRenderer {
       gl.uniform1f(uTraceDbMin, dbMin);
       gl.uniform1f(uTraceDbMax, dbMax);
       gl.uniform1f(uTraceOffsetPx, offsetPx);
-      gl.uniform3f(uTraceColor, TRACE_R, TRACE_G, TRACE_B);
+      gl.uniform3f(uTraceColor, traceR, traceG, traceB);
       gl.drawArrays(gl.LINE_STRIP, 0, panDb.length);
 
       gl.useProgram(cursorProg);
@@ -204,6 +225,11 @@ export function createPanRenderer(gl: WebGL2RenderingContext): PanRenderer {
       gl.drawArrays(gl.LINES, 0, 2);
 
       gl.bindVertexArray(null);
+    },
+    setTraceColor(r, g, b) {
+      traceR = r;
+      traceG = g;
+      traceB = b;
     },
     dispose() {
       gl.deleteBuffer(traceVbo);

@@ -20,6 +20,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
   BarChart3,
+  ChevronDown,
+  ChevronRight,
   Crosshair,
   Filter,
   Maximize2,
@@ -55,16 +57,40 @@ export type NrSettingsSectionProps = {
 };
 
 export function NrSettingsSection({ mode }: NrSettingsSectionProps) {
+  // Collapsed by default — the dense gauge panel is too much to keep on
+  // screen for the casual operator. The chevron in the title bar telegraphs
+  // that there's more behind the click.
+  const [expanded, setExpanded] = useState(false);
+
+  // Reset when the user cycles to a different NR algorithm — each panel's
+  // disclosure state stays local to its own session.
+  useEffect(() => {
+    setExpanded(false);
+  }, [mode]);
+
+  const title =
+    mode === 'Anr' ? 'NR1 — ANR' : mode === 'Emnr' ? 'NR2 — EMNR' : 'NR4 — SBNR';
+
   return (
     <div className="nr-settings" role="region" aria-label={`NR ${mode} settings`}>
-      <h3 className="nr-settings__title">
-        {mode === 'Anr' && 'NR1 — ANR'}
-        {mode === 'Emnr' && 'NR2 — EMNR'}
-        {mode === 'Sbnr' && 'NR4 — SBNR'}
-      </h3>
-      {mode === 'Anr' && <AnrPanel />}
-      {mode === 'Emnr' && <Nr2Panel />}
-      {mode === 'Sbnr' && <Nr4Panel />}
+      <button
+        type="button"
+        className="nr-settings__title-btn"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <span className="nr-settings__chevron" aria-hidden>
+          {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        </span>
+        <span className="nr-settings__title-text">{title}</span>
+      </button>
+      {expanded && (
+        <>
+          {mode === 'Anr' && <AnrPanel />}
+          {mode === 'Emnr' && <Nr2Panel />}
+          {mode === 'Sbnr' && <Nr4Panel />}
+        </>
+      )}
     </div>
   );
 }

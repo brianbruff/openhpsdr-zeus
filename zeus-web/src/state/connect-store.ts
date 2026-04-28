@@ -15,11 +15,15 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type { BoardKind } from '../api/radio';
 
 export type ProtocolChoice = 'P1' | 'P2';
 export type SampleRate = 48_000 | 96_000 | 192_000 | 384_000;
 export type ConnectMode = 'discover' | 'manual';
 
+// `board` is optional on saved endpoints so older persisted entries (which
+// pre-date the Manual-mode radio-type dropdown) deserialize cleanly. Treat
+// missing board as 'Auto' on read.
 export interface SavedEndpoint {
   id: string;
   label?: string;
@@ -27,6 +31,7 @@ export interface SavedEndpoint {
   port: number;
   protocol: ProtocolChoice;
   sampleRate: SampleRate;
+  board?: BoardKind;
   lastUsedUtc: string;
 }
 
@@ -35,6 +40,7 @@ export interface ManualFormDefaults {
   port: number;
   protocol: ProtocolChoice;
   sampleRate: SampleRate;
+  board: BoardKind;
   label: string;
 }
 
@@ -43,6 +49,7 @@ const DEFAULT_FORM: ManualFormDefaults = {
   port: 1024,
   protocol: 'P1',
   sampleRate: 192_000,
+  board: 'Auto',
   label: '',
 };
 
@@ -88,6 +95,7 @@ export const useConnectStore = create<ConnectState>()(
                     ...x,
                     label: e.label ?? x.label,
                     sampleRate: e.sampleRate,
+                    board: e.board ?? x.board,
                     lastUsedUtc: now,
                   }
                 : x,

@@ -162,6 +162,12 @@ public sealed record StateDto(
     // yet; when multi-RX lands this becomes the master and the per-RX
     // values layer on top.
     double RxAfGainDb = 0.0,
+    // Auto-AGC control loop. When on, the server automatically adjusts
+    // AgcTopDb based on signal conditions. Similar to Auto-ATT but for AGC.
+    // Default is OFF — operator must explicitly enable. The control loop
+    // adjusts AgcOffsetDb, which is added to the user baseline AgcTopDb.
+    bool AutoAgcEnabled = false,
+    double AgcOffsetDb = 0.0,
 
     // ---- PureSignal predistortion (TXA-side; WDSP calcc/iqc stages) ----
     // PsEnabled is the master arm bit. Deliberately NOT persisted server-side
@@ -299,6 +305,8 @@ public sealed record ZoomSetRequest(int Level);
 
 public sealed record AutoAttSetRequest(bool Enabled);
 
+public sealed record AutoAgcSetRequest(bool Enabled);
+
 public sealed record TunSetRequest(bool On);
 
 public sealed record MicGainSetRequest(int Db);
@@ -363,13 +371,33 @@ public sealed record PaSettingsSetRequest(
 // explicit pick ("Auto" = no override); `Connected` is what discovery found
 // on the wire ("Unknown" when nothing's connected); `Effective` is the board
 // whose defaults the PA / per-band tables seed from. Discovery wins whenever
-// a radio is actually connected — the preference is a before-connect hint.
+// a radio is actually connected **unless** `OverrideDetection` is true — the
+// preference is normally a before-connect hint, but with override it forces
+// specific board behavior even when a different board is detected.
 public sealed record RadioSelectionDto(
     string Preferred,
     string Connected,
-    string Effective);
+    string Effective,
+    bool OverrideDetection);
 
-public sealed record RadioSelectionSetRequest(string Preferred);
+public sealed record RadioSelectionSetRequest(
+    string Preferred,
+    bool? OverrideDetection);
+
+// Panadapter background settings — Mode is one of "basic" | "beam-map" |
+// "image"; Fit is one of "fit" | "fill" | "stretch". Image bytes are NOT
+// shipped in this DTO; HasImage signals whether GET /api/display-settings/image
+// will return content. Persisted server-side so the setting follows the
+// operator across browsers / devices.
+public sealed record DisplaySettingsDto(
+    string Mode,
+    string Fit,
+    bool HasImage,
+    string? ImageMime);
+
+public sealed record DisplaySettingsSetRequest(
+    string Mode,
+    string Fit);
 
 // ---- PureSignal request records ----
 // PsControlSetRequest = master arm (Enabled) + mode (Auto vs Single).

@@ -56,10 +56,16 @@ namespace Zeus.Dsp.Wdsp;
 /// </summary>
 public sealed class WdspWisdomInitializer
 {
+    // 250 ms is fast enough that the splash text never feels stale, slow enough
+    // that we're not P/Invoking 40×/s into wisdom_get_status() while FFTW is
+    // doing real work on a background thread.
+    private static readonly TimeSpan StatusPollInterval = TimeSpan.FromMilliseconds(250);
+
     private readonly ILogger _log;
     private readonly object _gate = new();
     private Task? _task;
     private int _phase = (int)WisdomPhase.Idle;
+    private string _status = string.Empty;
 
     public WdspWisdomInitializer(ILogger<WdspWisdomInitializer>? logger = null)
     {
@@ -68,7 +74,19 @@ public sealed class WdspWisdomInitializer
 
     public WisdomPhase Phase => (WisdomPhase)Volatile.Read(ref _phase);
 
+    /// <summary>
+    /// Live WDSP wisdom status text (e.g. "Planning COMPLEX FORWARD FFT size
+    /// 1024"), updated at <see cref="StatusPollInterval"/> while
+    /// <see cref="Phase"/> is <see cref="WisdomPhase.Building"/>. Empty until
+    /// the first poll lands.
+    /// </summary>
+    public string Status => Volatile.Read(ref _status) ?? string.Empty;
+
     public event Action<WisdomPhase>? PhaseChanged;
+
+    /// <summary>Fires when the WDSP status string changes during a build,
+    /// so the UI can stream sub-step progress without polling.</summary>
+    public event Action<string>? StatusChanged;
 
     /// <summary>
     /// Idempotent. First call kicks off the WDSPwisdom P/Invoke on a worker
@@ -82,6 +100,7 @@ public sealed class WdspWisdomInitializer
             if (_task is not null) return _task;
             SetPhase(WisdomPhase.Building);
             WdspNativeLoader.EnsureResolverRegistered();
+            _ = Task.Run(PollStatusUntilReady);
             _task = Task.Run(RunWisdom);
             return _task;
         }
@@ -118,6 +137,33 @@ public sealed class WdspWisdomInitializer
         finally
         {
             SetPhase(WisdomPhase.Ready);
+        }
+    }
+
+    // Polls the native status buffer on a separate thread. When WDSPwisdom
+    // loaded a cached file the whole call finishes before we ever poll —
+    // that's fine: we exit on the Ready transition with no status update,
+    // which is the right behaviour (no build happened, nothing to narrate).
+    private void PollStatusUntilReady()
+    {
+        try
+        {
+            while (Phase == WisdomPhase.Building)
+            {
+                var s = Marshal.PtrToStringUTF8(NativeMethods.wisdom_get_status()) ?? string.Empty;
+                s = s.TrimEnd('\r', '\n', ' ', '\t');
+                if (!string.Equals(s, Volatile.Read(ref _status), StringComparison.Ordinal))
+                {
+                    Volatile.Write(ref _status, s);
+                    try { StatusChanged?.Invoke(s); }
+                    catch (Exception ex) { _log.LogDebug(ex, "wdsp.wisdom StatusChanged subscriber threw"); }
+                }
+                Thread.Sleep(StatusPollInterval);
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "wdsp.wisdom status poller exited unexpectedly");
         }
     }
 

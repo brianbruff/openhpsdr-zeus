@@ -38,13 +38,19 @@ export function RadioSelector() {
   const error = useRadioStore((s) => s.error);
   const load = useRadioStore((s) => s.load);
   const setPreferred = useRadioStore((s) => s.setPreferred);
+  const setOverrideDetection = useRadioStore((s) => s.setOverrideDetection);
 
   useEffect(() => {
     load();
   }, [load]);
 
   const connectedKnown = selection.connected !== 'Unknown';
+  const overrideOn = selection.overrideDetection && selection.preferred !== 'Auto';
+  // "Mismatch" without override = discovery wins, badge is a warning.
+  // With override = the operator deliberately chose this; the OVERRIDE badge
+  // takes the warning slot instead.
   const mismatch =
+    !overrideOn &&
     selection.preferred !== 'Auto' &&
     connectedKnown &&
     selection.preferred !== selection.connected;
@@ -131,9 +137,55 @@ export function RadioSelector() {
             padding: '2px 6px',
             borderRadius: 2,
           }}
-          title="Discovery disagrees with your selection. Discovery always wins for drive-byte math and PA defaults while connected."
+          title="Discovery disagrees with your selection. Discovery always wins for drive-byte math and PA defaults while connected — flip Override Detection on if you really want the selected board to win."
         >
           MISMATCH
+        </span>
+      )}
+
+      {selection.preferred !== 'Auto' && (
+        <label
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: 11,
+            color: 'var(--fg-2)',
+            cursor: loaded && !inflight ? 'pointer' : 'default',
+          }}
+          title={
+            'Override Detection (Advanced)\n\n' +
+            'When ON, Zeus uses the selected board for ALL behavior — drive-byte\n' +
+            'encoding, ATT, filter switching, PA defaults — ignoring what discovery\n' +
+            'reports on the wire.\n\n' +
+            'Use this for hardware combinations that report a misleading board ID\n' +
+            '(e.g. Anvelina SDR + ANAN 200D PA detected as ANAN G2). A wrong choice\n' +
+            'here can produce incorrect drive levels or no output power. Test at low\n' +
+            'power first.'
+          }
+        >
+          <input
+            type="checkbox"
+            checked={selection.overrideDetection}
+            disabled={!loaded || inflight}
+            onChange={(e) => setOverrideDetection(e.target.checked)}
+          />
+          <span>Override detection</span>
+        </label>
+      )}
+
+      {overrideOn && (
+        <span
+          style={{
+            fontSize: 10,
+            color: 'var(--tx)',
+            background: 'var(--tx-soft)',
+            padding: '2px 6px',
+            borderRadius: 2,
+          }}
+          title="Override is active. Zeus uses the selected board for drive-byte math, ATT, filters, and PA defaults — discovery is ignored."
+        >
+          OVERRIDE ACTIVE
         </span>
       )}
 
@@ -147,9 +199,11 @@ export function RadioSelector() {
           fontSize: 10,
           color: 'var(--fg-3)',
         }}
-        title="Changing the radio only reseeds defaults for bands you haven't calibrated. Your saved per-band PA Gain values are not touched."
+        title="Without override, changing the radio only reseeds defaults for bands you haven't calibrated. Your saved per-band PA Gain values are not touched."
       >
-        Seeds PA defaults. Saved calibration is preserved.
+        {overrideOn
+          ? 'Selected board wins for drive / ATT / filters.'
+          : 'Seeds PA defaults. Saved calibration is preserved.'}
       </span>
     </div>
   );

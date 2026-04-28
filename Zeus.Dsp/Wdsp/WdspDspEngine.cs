@@ -577,13 +577,13 @@ public sealed class WdspDspEngine : IDspEngine
                 // pre-dates Phase 1 (no SBNR exports) leaves the channel in
                 // NR-off rather than crashing the worker.
                 NativeMethods.SetRXAANRRun(channelId, 0);
-                NativeMethods.SetRXAEMNRpost2Run(channelId, 0);
+                TrySetEmnrPost2Run(channelId, 0);
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
                 ApplyNr4Sbnr(channelId, cfg);
                 break;
             default:
                 NativeMethods.SetRXAANRRun(channelId, 0);
-                NativeMethods.SetRXAEMNRpost2Run(channelId, 0);
+                TrySetEmnrPost2Run(channelId, 0);
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
                 TrySetSbnrRun(channelId, 0);
                 break;
@@ -665,15 +665,27 @@ public sealed class WdspDspEngine : IDspEngine
     // before flipping post2Run so the post-processing stage starts coherent.
     // Null fields fall back to NrDefaults so the operator's "leave it default"
     // choice (cleared field) is honoured at write time without baking the
-    // current default into the persisted config.
-    private static void ApplyNr2Post2(int channelId, NrConfig cfg)
+    // current default into the persisted config. Wrapped in try/catch so a
+    // libwdsp.so built before the post2 exports landed (or a stale system
+    // copy shadowing the bundled one) leaves NR2 running without comfort-noise
+    // instead of crashing the worker.
+    private void ApplyNr2Post2(int channelId, NrConfig cfg)
     {
-        NativeMethods.SetRXAEMNRpost2Factor(channelId, cfg.EmnrPost2Factor ?? NrDefaults.EmnrPost2Factor);
-        NativeMethods.SetRXAEMNRpost2Nlevel(channelId, cfg.EmnrPost2Nlevel ?? NrDefaults.EmnrPost2Nlevel);
-        NativeMethods.SetRXAEMNRpost2Rate(channelId, cfg.EmnrPost2Rate ?? NrDefaults.EmnrPost2Rate);
-        NativeMethods.SetRXAEMNRpost2Taper(channelId, cfg.EmnrPost2Taper ?? NrDefaults.EmnrPost2Taper);
-        bool runOn = cfg.EmnrPost2Run ?? (NrDefaults.EmnrPost2Run != 0);
-        NativeMethods.SetRXAEMNRpost2Run(channelId, runOn ? 1 : 0);
+        try
+        {
+            NativeMethods.SetRXAEMNRpost2Factor(channelId, cfg.EmnrPost2Factor ?? NrDefaults.EmnrPost2Factor);
+            NativeMethods.SetRXAEMNRpost2Nlevel(channelId, cfg.EmnrPost2Nlevel ?? NrDefaults.EmnrPost2Nlevel);
+            NativeMethods.SetRXAEMNRpost2Rate(channelId, cfg.EmnrPost2Rate ?? NrDefaults.EmnrPost2Rate);
+            NativeMethods.SetRXAEMNRpost2Taper(channelId, cfg.EmnrPost2Taper ?? NrDefaults.EmnrPost2Taper);
+            bool runOn = cfg.EmnrPost2Run ?? (NrDefaults.EmnrPost2Run != 0);
+            NativeMethods.SetRXAEMNRpost2Run(channelId, runOn ? 1 : 0);
+        }
+        catch (EntryPointNotFoundException ex)
+        {
+            _log.LogWarning(
+                "wdsp.emnr.post2.unavailable channel={Id} reason=\"libwdsp does not export SetRXAEMNRpost2* — bundled .so is being shadowed by an older system copy, or the build pre-dates post2 support\" detail={Msg}",
+                channelId, ex.Message);
+        }
     }
 
     // NR4 (SBNR / libspecbleach) parameter push + Run=1. Native setters take
@@ -708,6 +720,16 @@ public sealed class WdspDspEngine : IDspEngine
     {
         try { NativeMethods.SetRXASBNRRun(channelId, run); }
         catch (EntryPointNotFoundException) { /* libwdsp pre-Phase-1; SBNR is a no-op */ }
+    }
+
+    // Same shape as TrySetSbnrRun for the post2 Run=0 calls we issue when
+    // switching away from NR2. A stale libwdsp.so on the operator's machine
+    // (e.g. an older copy in /usr/local/lib shadowing the bundled .so) would
+    // otherwise throw EntryPointNotFoundException straight up the worker.
+    private void TrySetEmnrPost2Run(int channelId, int run)
+    {
+        try { NativeMethods.SetRXAEMNRpost2Run(channelId, run); }
+        catch (EntryPointNotFoundException) { /* libwdsp lacks post2; nothing to turn off */ }
     }
 
     // Post-RXA NR defaults — sourced from Thetis setup.designer.cs + radio.cs.

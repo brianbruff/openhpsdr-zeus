@@ -269,6 +269,13 @@
    `transparent` prop we already pass. */
 .m-app .spectrum-canvas { background: transparent !important; }
 
+/* Image-mode also needs the waterfall wrapper transparent so the picture
+   shows through the bottom half. The wrapper sets background:var(--wf-0)
+   inline (Waterfall.tsx:174); the WebGL canvas inside already fades its
+   noise floor when transparent={imageMode}. Beam-map mode keeps the
+   wrapper opaque on purpose — see the Section render comment. */
+.m-pan-stack.image-mode .waterfall-canvas { background: transparent !important; }
+
 /* The Panadapter widget brings its own dB scale axis pinned to the left
    which we keep visible. The Waterfall widget brings two pieces of chrome
    that don't belong on mobile:

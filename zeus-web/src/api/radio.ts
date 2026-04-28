@@ -23,6 +23,7 @@ export interface RadioSelection {
   preferred: BoardKind;
   connected: BoardKind;
   effective: BoardKind;
+  overrideDetection: boolean;
 }
 
 // Operator-facing labels per board. Keep in sync with BOARD_OPTIONS in
@@ -60,29 +61,46 @@ function normalizeBoard(v: unknown): BoardKind {
 export async function fetchRadioSelection(signal?: AbortSignal): Promise<RadioSelection> {
   const res = await fetch('/api/radio/selection', { signal });
   if (!res.ok) throw new Error(`GET /api/radio/selection → ${res.status}`);
-  const raw = (await res.json()) as { preferred?: unknown; connected?: unknown; effective?: unknown };
+  const raw = (await res.json()) as {
+    preferred?: unknown;
+    connected?: unknown;
+    effective?: unknown;
+    overrideDetection?: unknown;
+  };
   return {
     preferred: normalizeBoard(raw.preferred),
     connected: normalizeBoard(raw.connected),
     effective: normalizeBoard(raw.effective),
+    overrideDetection: typeof raw.overrideDetection === 'boolean' ? raw.overrideDetection : false,
   };
 }
 
 export async function updateRadioSelection(
   preferred: BoardKind,
+  overrideDetection?: boolean,
   signal?: AbortSignal,
 ): Promise<RadioSelection> {
+  const body: { preferred: string; overrideDetection?: boolean } = { preferred };
+  if (overrideDetection !== undefined) {
+    body.overrideDetection = overrideDetection;
+  }
   const res = await fetch('/api/radio/selection', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ preferred }),
+    body: JSON.stringify(body),
     signal,
   });
   if (!res.ok) throw new Error(`PUT /api/radio/selection → ${res.status}`);
-  const raw = (await res.json()) as { preferred?: unknown; connected?: unknown; effective?: unknown };
+  const raw = (await res.json()) as {
+    preferred?: unknown;
+    connected?: unknown;
+    effective?: unknown;
+    overrideDetection?: unknown;
+  };
   return {
     preferred: normalizeBoard(raw.preferred),
     connected: normalizeBoard(raw.connected),
     effective: normalizeBoard(raw.effective),
+    overrideDetection: typeof raw.overrideDetection === 'boolean' ? raw.overrideDetection : false,
   };
 }

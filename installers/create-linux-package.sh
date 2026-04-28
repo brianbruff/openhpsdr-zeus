@@ -36,6 +36,14 @@ cat > "${PACKAGE_DIR}/zeus" << 'EOF'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
+# Pin the bundled libwdsp.so so an older system copy in /usr/lib or
+# /usr/local/lib (e.g. left by a piHPSDR build) cannot shadow it. Linux
+# does NOT search the executable's directory by default; without this
+# line, dlopen("libwdsp.so") goes straight to LD_LIBRARY_PATH +
+# /etc/ld.so.cache and may bind P/Invoke calls against a stale lib that
+# pre-dates symbols Zeus relies on (e.g. SetRXAEMNRpost2*).
+export LD_LIBRARY_PATH="${SCRIPT_DIR}/runtimes/linux-x64/native:${SCRIPT_DIR}/runtimes/linux-arm64/native:${LD_LIBRARY_PATH}"
+
 # Check if running in a display environment
 if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
     echo "Starting Zeus server on http://localhost:6060"

@@ -138,6 +138,23 @@
 .btn-row { display: flex; gap: 3px; align-items: center; }
 .btn-row.wrap { flex-wrap: wrap; width: 290px; }
 
+/* Thin vertical separator between control-strip groups
+   (Mode | Filter | Band | Step). Faded at top/bottom so it
+   blends with the panel chrome instead of clipping hard. */
+.strip-divider {
+  align-self: stretch;
+  width: 1px;
+  margin: 6px 4px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    var(--panel-edge) 20%,
+    var(--panel-edge) 80%,
+    transparent 100%
+  );
+  flex: 0 0 auto;
+}
+
 /* TuningStepWidget — auto-fit grid of equal-width step buttons. Each
    button stays at least 56px wide; when the panel is too narrow to fit
    all 13 buttons in a single row at that floor, the row wraps. Wide
@@ -418,13 +435,32 @@
 .spectrum-canvas { display: block; width: 100%; background: #081228; transition: opacity 400ms ease, background 400ms ease; }
 .waterfall-canvas { display: block; width: 100%; background: var(--wf-0); transition: opacity 400ms ease, background 400ms ease; }
 
-/* When QRZ engaged, canvases render with genuine alpha (panadapter clears to
-   0,0,0,0; waterfall shader fades noise floor to transparent via uBgAlpha),
-   so the Leaflet map beneath is untouched except where actual signal energy
-   is drawn. No opacity/blend-mode hacks needed. */
-.hero.qrz-mode .spectrum-wrap { background: transparent; }
-.hero.qrz-mode .spectrum-canvas { background: transparent !important; }
-.hero.qrz-mode .waterfall-canvas { background: transparent !important; }
+/* Background-overlay mode (panBackground !== 'basic'): canvases render
+   with genuine alpha (panadapter clears to 0,0,0,0; waterfall shader
+   fades noise floor to transparent via uBgAlpha), so the map / image
+   beneath is untouched except where actual signal energy is drawn. No
+   opacity/blend-mode hacks needed. */
+.hero.bg-active .spectrum-wrap { background: transparent; }
+.hero.bg-active .spectrum-canvas { background: transparent !important; }
+.hero.bg-active .waterfall-canvas { background: transparent !important; }
+
+/* User-supplied still image rendered behind the panadapter when
+   panBackground === 'image'. Sized via the variant class set by
+   backgroundImageFit. */
+.image-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-repeat: no-repeat;
+  background-position: center center;
+  /* Letterbox area in 'fit' mode reads as a deliberate cinematic frame
+     rather than the blue-gray app surface peeking through. */
+  background-color: #000;
+}
+.image-layer.fit { background-size: contain; }
+.image-layer.fill { background-size: cover; }
+.image-layer.stretch { background-size: 100% 100%; }
 
 /* ===== World-map layer (behind spectrum in QRZ mode) ===== */
 .map-layer {

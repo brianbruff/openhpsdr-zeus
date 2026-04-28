@@ -171,6 +171,7 @@ builder.Services.AddSingleton<PaSettingsStore>();
 builder.Services.AddSingleton<PreferredRadioStore>();
 builder.Services.AddSingleton<PsSettingsStore>();
 builder.Services.AddSingleton<FilterPresetStore>();
+builder.Services.AddSingleton<DisplaySettingsStore>();
 builder.Services.AddSingleton<QrzService>();
 builder.Services.AddSingleton<LogService>();
 
@@ -260,15 +261,18 @@ var log = app.Services.GetRequiredService<ILogger<Program>>();
         File.Exists(calcPath) ? "loaded" : "missing→compiled-fallback");
 }
 
-// Wire wisdom initializer → hub so every phase change is broadcast to all
-// connected clients. Seed the hub's cached phase with whatever the
-// initializer currently reports (Idle at first boot, Ready on restart once
-// the file is cached).
+// Wire wisdom initializer → hub so every phase change AND every per-step
+// status update from WDSP's wisdom_get_status() poll is broadcast to all
+// connected clients. Seed the hub's cached phase + status with whatever
+// the initializer currently reports (Idle/empty at first boot, Ready on
+// restart once the file is cached).
 {
     var wisdom = app.Services.GetRequiredService<WdspWisdomInitializer>();
     var hub = app.Services.GetRequiredService<StreamingHub>();
     hub.SetWisdomPhase(wisdom.Phase);
-    wisdom.PhaseChanged += phase => hub.Broadcast(new WisdomStatusFrame(phase));
+    hub.SetWisdomStatus(wisdom.Status);
+    wisdom.PhaseChanged += phase => hub.Broadcast(new WisdomStatusFrame(phase, wisdom.Status));
+    wisdom.StatusChanged += status => hub.Broadcast(new WisdomStatusFrame(wisdom.Phase, status));
 }
 
 app.MapGet("/api/version", () =>
@@ -580,6 +584,12 @@ app.MapPost("/api/auto-att", (AutoAttSetRequest req, RadioService r) =>
     return r.SetAutoAtt(req.Enabled);
 });
 
+app.MapPost("/api/auto-agc", (AutoAgcSetRequest req, RadioService r) =>
+{
+    log.LogInformation("api.auto-agc enabled={Enabled}", req.Enabled);
+    return r.SetAutoAgc(req.Enabled);
+});
+
 app.MapPost("/api/tx/mox", (MoxSetRequest req, TxService tx) =>
 {
     log.LogInformation("api.tx.mox on={On}", req.On);
@@ -864,17 +874,71 @@ app.MapPut("/api/pa-settings", (PaSettingsSetRequest req, PaSettingsStore store,
     return Results.Ok(store.GetAll(radio.EffectiveBoardKind));
 });
 
+// Panadapter background settings — Mode + Fit are JSON; image bytes are
+// kept on a separate endpoint so the lightweight GET that the frontend
+// hits on every load doesn't drag the picture across the wire. The image
+// itself rides as raw bytes (multipart on PUT, application/<mime> on GET).
+// Persisted in zeus-prefs.db so the setting follows the operator across
+// browsers / devices instead of living in per-origin localStorage.
+app.MapGet("/api/display-settings", (DisplaySettingsStore store) => Results.Ok(store.Get()));
+
+app.MapPut("/api/display-settings", (DisplaySettingsSetRequest req, DisplaySettingsStore store) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Mode) || string.IsNullOrWhiteSpace(req.Fit))
+        return Results.BadRequest(new { error = "mode and fit required" });
+    store.SaveMode(req.Mode, req.Fit);
+    return Results.Ok(store.Get());
+});
+
+app.MapGet("/api/display-settings/image", (DisplaySettingsStore store) =>
+{
+    var img = store.GetImage();
+    if (img is null) return Results.NotFound();
+    return Results.File(img.Value.Bytes, img.Value.Mime);
+});
+
+// Multipart upload — single field "file", any image/* mime type. Capped
+// at 8 MB so a stray giant TIFF can't fill the prefs DB.
+app.MapPut("/api/display-settings/image", async (HttpContext ctx, DisplaySettingsStore store) =>
+{
+    if (!ctx.Request.HasFormContentType)
+        return Results.BadRequest(new { error = "multipart/form-data required" });
+    var form = await ctx.Request.ReadFormAsync();
+    var file = form.Files["file"] ?? form.Files.FirstOrDefault();
+    if (file is null || file.Length == 0)
+        return Results.BadRequest(new { error = "file field required" });
+    const long MaxBytes = 8 * 1024 * 1024;
+    if (file.Length > MaxBytes)
+        return Results.BadRequest(new { error = $"file too large (max {MaxBytes} bytes)" });
+    var mime = string.IsNullOrEmpty(file.ContentType) ? "application/octet-stream" : file.ContentType;
+    if (!mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+        return Results.BadRequest(new { error = "image/* content-type required" });
+    using var ms = new MemoryStream(capacity: (int)file.Length);
+    await file.CopyToAsync(ms);
+    store.SaveImage(ms.ToArray(), mime);
+    return Results.Ok(store.Get());
+});
+
+app.MapDelete("/api/display-settings/image", (DisplaySettingsStore store) =>
+{
+    store.DeleteImage();
+    return Results.Ok(store.Get());
+});
+
 // Radio selection — operator preference seeding, with discovery as the
 // tiebreaker. Preferred=="Auto" removes the override (stored as absence,
-// not a sentinel enum value). Effective = Connected when connected,
-// Preferred when not, Unknown otherwise.
+// not a sentinel enum value). Effective = Connected when connected (which
+// may itself be overridden if OverrideDetection is true), Preferred when
+// not connected, Unknown otherwise.
 app.MapGet("/api/radio/selection", (PreferredRadioStore prefs, RadioService radio) =>
 {
     var preferred = prefs.Get();
+    var overrideDetection = prefs.GetOverrideDetection();
     return Results.Ok(new RadioSelectionDto(
         Preferred: preferred?.ToString() ?? "Auto",
         Connected: radio.ConnectedBoardKind.ToString(),
-        Effective: radio.EffectiveBoardKind.ToString()));
+        Effective: radio.EffectiveBoardKind.ToString(),
+        OverrideDetection: overrideDetection));
 });
 
 app.MapPut("/api/radio/selection", (RadioSelectionSetRequest req, PreferredRadioStore prefs, RadioService radio) =>
@@ -897,11 +961,13 @@ app.MapPut("/api/radio/selection", (RadioSelectionSetRequest req, PreferredRadio
         return Results.BadRequest(new { error = $"unknown board '{req.Preferred}'" });
     }
 
-    prefs.Set(chosen);
+    prefs.Set(chosen, req.OverrideDetection);
+    var overrideDetection = prefs.GetOverrideDetection();
     return Results.Ok(new RadioSelectionDto(
         Preferred: chosen?.ToString() ?? "Auto",
         Connected: radio.ConnectedBoardKind.ToString(),
-        Effective: radio.EffectiveBoardKind.ToString()));
+        Effective: radio.EffectiveBoardKind.ToString(),
+        OverrideDetection: overrideDetection));
 });
 
 static HpsdrBoardKind? ParseBoardKind(string? raw)

@@ -109,6 +109,17 @@ public sealed class RadioService : IDisposable
     private long _lastTickMs = long.MinValue;
     private int _lastAppliedEffectiveDb = -1;   // so the first send always fires
 
+    // Auto-AGC control-loop state. Adjusts AGC-T (the WDSP max-gain cap) so
+    // the band noise floor lands near a fixed reference, mirroring Thetis'
+    // noise-floor calibration. Closed-looping on the live S-meter (the prior
+    // implementation) ramped to max gain on quiet bands and clipped when
+    // signal returned.
+    private double _agcOffsetDb;
+    private long _lastAgcTickMs = long.MinValue;
+    private readonly double[] _noiseFloorWindow = new double[10]; // 10 × 500 ms = 5 s
+    private int _noiseFloorWindowIdx;
+    private int _noiseFloorWindowFill;
+
     // 100 ms between 1-dB steps. Events arrive at ~1.2 kHz (192 kSps), so
     // without throttling the offset would saturate at 31 dB in ~30 ms. At 10 Hz
     // the full-range ramp takes ~3 s — matches Thetis' feel.
@@ -659,6 +670,114 @@ public sealed class RadioService : IDisposable
         return snap;
     }
 
+    public StateDto SetAutoAgc(bool enabled)
+    {
+        lock (_sync)
+        {
+            if (_state.AutoAgcEnabled == enabled) return _state;
+            _state = _state with { AutoAgcEnabled = enabled };
+            if (!enabled)
+            {
+                // Turning auto off: reset the offset to zero so AGC-T returns
+                // to the user's baseline immediately.
+                _agcOffsetDb = 0.0;
+                _lastAgcTickMs = long.MinValue;
+                _noiseFloorWindowFill = 0;
+                _noiseFloorWindowIdx = 0;
+                _state = _state with { AgcOffsetDb = 0.0 };
+            }
+            else
+            {
+                // Turning auto on: reset timer + window so we recalibrate.
+                _lastAgcTickMs = long.MinValue;
+                _noiseFloorWindowFill = 0;
+                _noiseFloorWindowIdx = 0;
+            }
+        }
+        var snap = Snapshot();
+        StateChanged?.Invoke(snap);
+        return snap;
+    }
+
+    /// <summary>
+    /// Auto-AGC control loop. Estimates the band noise floor from a sliding
+    /// window of S-meter samples and chooses an absolute effective AGC-T that
+    /// places that floor near TargetAudioDb at the WDSP output, then derives
+    /// AgcOffsetDb = target − AgcTopDb so the same noise floor converges to
+    /// the same effective value regardless of where the user parked the
+    /// slider baseline. Slew-limited so adjustments are inaudibly gradual.
+    /// </summary>
+    internal void HandleRxMeterForAutoAgc(double signalDbm, long nowMs)
+    {
+        bool changedOffset = false;
+        double newOffset = 0.0;
+        double noiseFloor = double.NaN;
+
+        lock (_sync)
+        {
+            if (!_state.AutoAgcEnabled) return;
+            if (_mox) return;   // Pause during TX
+            if (!double.IsFinite(signalDbm) || signalDbm <= -250.0) return;
+
+            // If we paused for >5 s (TX, just-toggled-on, RX dropout) the
+            // window may hold stale samples — clear before re-accumulating.
+            if (_lastAgcTickMs != long.MinValue && nowMs - _lastAgcTickMs > 5000)
+            {
+                _noiseFloorWindowFill = 0;
+                _noiseFloorWindowIdx = 0;
+            }
+
+            if (_lastAgcTickMs != long.MinValue && nowMs - _lastAgcTickMs < 500)
+                return;
+            _lastAgcTickMs = nowMs;
+
+            _noiseFloorWindow[_noiseFloorWindowIdx] = signalDbm;
+            _noiseFloorWindowIdx = (_noiseFloorWindowIdx + 1) % _noiseFloorWindow.Length;
+            if (_noiseFloorWindowFill < _noiseFloorWindow.Length) _noiseFloorWindowFill++;
+
+            // Wait for ~3 s of samples before adjusting so the minimum is meaningful.
+            if (_noiseFloorWindowFill < 6) return;
+
+            noiseFloor = double.PositiveInfinity;
+            for (int i = 0; i < _noiseFloorWindowFill; i++)
+            {
+                double v = _noiseFloorWindow[i];
+                if (v < noiseFloor) noiseFloor = v;
+            }
+
+            // Auto-AGC chooses an *absolute* effective AGC-T from the noise
+            // floor: place the band noise at TargetAudioDb after WDSP's
+            // max-gain stage, so a quiet band lands at ~80 dB and a noisy
+            // band lands at ~50 dB regardless of where the user parked the
+            // slider baseline. The offset is whatever it takes to reach that
+            // absolute target on top of the current AgcTopDb baseline.
+            const double TargetAudioDb = -40.0;     // desired audio-output noise level
+            const double MinEffectiveAgcT = 20.0;
+            const double MaxEffectiveAgcT = 100.0;
+            double targetEffective = Math.Clamp(
+                TargetAudioDb - noiseFloor, MinEffectiveAgcT, MaxEffectiveAgcT);
+            double desiredOffset = targetEffective - _state.AgcTopDb;
+
+            double delta = desiredOffset - _agcOffsetDb;
+            if (Math.Abs(delta) < 0.5) return;
+
+            const double SlewPerTickDb = 1.0;
+            _agcOffsetDb = delta > 0
+                ? Math.Min(desiredOffset, _agcOffsetDb + SlewPerTickDb)
+                : Math.Max(desiredOffset, _agcOffsetDb - SlewPerTickDb);
+
+            _state = _state with { AgcOffsetDb = _agcOffsetDb };
+            newOffset = _agcOffsetDb;
+            changedOffset = true;
+        }
+
+        if (changedOffset)
+        {
+            StateChanged?.Invoke(Snapshot());
+            _log.LogDebug("auto-agc offset={Offset}dB noisefloor={Floor}dBm", newOffset, noiseFloor);
+        }
+    }
+
     // MOX is transient — it belongs on the wire (CcState.Mox → C0 LSB), not in
     // the persisted RX StateDto. TxService owns the latched bool that the UI
     // reads back; this method is the P1-side fan-out only. We also stash the
@@ -1075,16 +1194,32 @@ public sealed class RadioService : IDisposable
         });
     }
 
-    // Resolves the board class the PA settings UI/math should seed defaults
-    // from. P1 client wins when present (its BoardKind comes from discovery);
-    // bare P2 connections imply Orion MkII (ANAN G2 family); everything else
-    // is Unknown and falls back to 0 dB (legacy percent→byte).
+    // Resolves the board class for ALL board-specific behavior: PA settings,
+    // drive-byte encoding, ATT behavior, filter switching. Normally returns
+    // the board ID from discovery (P1) or infers OrionMkII for P2. When the
+    // operator has enabled "Override Detection" in PreferredRadioStore, returns
+    // the preferred board instead — use this for hardware combinations that
+    // report incorrect board IDs or need different behavior (e.g., Anvelina SDR
+    // + ANAN 200D PA detected as OrionMkII but needs Orion behavior).
     public HpsdrBoardKind ConnectedBoardKind
     {
         get
         {
             lock (_sync)
             {
+                // Check if operator has explicitly enabled board override.
+                // This allows forcing specific board behavior when auto-detection
+                // is wrong or incomplete (different hardware with same board ID).
+                if (_preferredRadioStore?.GetOverrideDetection() == true)
+                {
+                    var preferred = _preferredRadioStore.Get();
+                    if (preferred.HasValue && preferred.Value != HpsdrBoardKind.Unknown)
+                    {
+                        return preferred.Value;
+                    }
+                }
+
+                // Normal path: use discovery result.
                 if (_activeClient is not null) return _activeClient.BoardKind;
                 if (_p2Active) return HpsdrBoardKind.OrionMkII;
                 return HpsdrBoardKind.Unknown;
@@ -1092,11 +1227,11 @@ public sealed class RadioService : IDisposable
         }
     }
 
-    // Board used to seed PA defaults / power-math tables. Discovery is
-    // authoritative when a radio is on the wire — an operator's explicit
-    // pick can't override what the hardware actually is. Before first
-    // connect, the stored preference takes over so the PA panel shows
-    // sane values for the radio the operator is about to plug in.
+    // Board used to seed PA defaults / power-math tables. When a radio is
+    // connected, ConnectedBoardKind wins (which may be overridden by the
+    // operator). Before first connect, the stored preference takes over so
+    // the PA panel shows sane values for the radio the operator is about to
+    // plug in.
     public HpsdrBoardKind EffectiveBoardKind
     {
         get

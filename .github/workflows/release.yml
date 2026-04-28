@@ -201,7 +201,8 @@ jobs:
           ### Linux (x64)
           - **zeus-${{ steps.version.outputs.version }}-linux-x64.tar.gz** - Linux x64 tarball
             - Extract and run `./zeus` from the extracted directory
-            - Requires libfftw3 (usually pre-installed)
+            - Self-contained: bundles the .NET runtime and statically embeds
+              FFTW3 into libwdsp.so, so no system packages are required
 
           ## Changes
 

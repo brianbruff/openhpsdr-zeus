@@ -135,6 +135,7 @@ export function ConnectPanel() {
     (s) => s.setLastConnectedEndpoint,
   );
   const wisdomPhase = useConnectionStore((s) => s.wisdomPhase);
+  const wisdomStatus = useConnectionStore((s) => s.wisdomStatus);
   const dspPreparing = wisdomPhase === 'building';
 
   const mode = useConnectStore((s) => s.mode);
@@ -387,7 +388,7 @@ export function ConnectPanel() {
   }
 
   const statusRight = dspPreparing
-    ? 'Preparing DSP…'
+    ? 'Building…'
     : status === 'Connecting'
       ? 'Connecting…'
       : inflight
@@ -487,7 +488,7 @@ export function ConnectPanel() {
         }}
       >
         <span className="label-xs" style={{ fontSize: 11, letterSpacing: '0.14em' }}>
-          Discover Radio
+          {dspPreparing ? 'First-run setup' : 'Discover Radio'}
         </span>
         <span className="label-xs" style={{ color: 'var(--fg-3)' }}>
           {scanning && <span aria-hidden>· </span>}
@@ -496,6 +497,10 @@ export function ConnectPanel() {
       </div>
 
       <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12, background: 'var(--bg-1)' }}>
+        {dspPreparing ? (
+          <WisdomBuildingBody status={wisdomStatus} />
+        ) : (
+          <>
         <div
           role="tablist"
           aria-label="Connect mode"
@@ -607,25 +612,21 @@ export function ConnectPanel() {
                       <button
                         type="button"
                         onClick={() => handleConnect(r)}
-                        disabled={r.busy || inflight || dspPreparing}
+                        disabled={r.busy || inflight}
                         title={
                           r.busy
                             ? 'Radio is busy (in use by another client)'
-                            : dspPreparing
-                              ? 'DSP is preparing FFTW plans — first-run only. Please leave the app open and wait.'
-                              : isP2
-                                ? 'Protocol 2 path — experimental, RX only'
-                                : undefined
+                            : isP2
+                              ? 'Protocol 2 path — experimental, RX only'
+                              : undefined
                         }
-                        className={`btn sm ${r.busy ? '' : 'active'} ${dspPreparing ? 'pulsing' : ''}`}
+                        className={`btn sm ${r.busy ? '' : 'active'}`}
                       >
                         {r.busy
                           ? 'Busy'
-                          : dspPreparing
-                            ? 'Preparing DSP…'
-                            : inflight
-                              ? 'Connecting…'
-                              : 'Connect'}
+                          : inflight
+                            ? 'Connecting…'
+                            : 'Connect'}
                       </button>
                     </li>
                   );
@@ -650,7 +651,6 @@ export function ConnectPanel() {
             error={manualError}
             onConnect={() => handleManualConnect()}
             inflight={inflight}
-            dspPreparing={dspPreparing}
             savedEndpoints={sortedSaved}
             lastConnectedId={lastConnectedId}
             onReconnect={(e) => {
@@ -665,74 +665,93 @@ export function ConnectPanel() {
             onRemove={removeEndpoint}
           />
         )}
+          </>
+        )}
       </div>
       </div>
-      {dspPreparing && (
-        <div
-          role="status"
-          aria-live="polite"
-          aria-label="First-run DSP setup in progress"
+    </div>
+  );
+}
+
+function WisdomBuildingBody({ status }: { status: string }) {
+  const trimmed = status.trim();
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      aria-label="First-run DSP setup in progress"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'stretch',
+        gap: 12,
+        padding: '6px 2px 4px',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span
+          className="mono"
           style={{
-            position: 'absolute',
-            inset: 0,
-            zIndex: 3,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 14,
-            padding: '24px 28px',
-            textAlign: 'center',
-            background: 'var(--bg-1)',
-            boxShadow: 'inset 0 0 0 1px var(--panel-border)',
+            color: 'var(--fg-0)',
+            fontSize: 16,
+            fontWeight: 700,
+            letterSpacing: '0.02em',
+            flex: 1,
           }}
         >
-          <span
-            className="label-xs"
-            style={{
-              color: 'var(--accent)',
-              fontSize: 11,
-              letterSpacing: '0.18em',
-            }}
-          >
-            First-run setup
-          </span>
-          <span
-            className="mono"
-            style={{
-              color: 'var(--fg-0)',
-              fontSize: 20,
-              fontWeight: 700,
-              letterSpacing: '0.04em',
-            }}
-          >
-            Preparing DSP…
-          </span>
-          <span
-            style={{
-              color: 'var(--fg-1)',
-              fontSize: 12,
-              lineHeight: 1.5,
-              maxWidth: 380,
-            }}
-          >
-            Zeus is building FFTW plans for WDSP. This is a one-time step
-            the first time Zeus runs on this machine and may take several
-            minutes — please leave the app open and wait. Subsequent
-            startups are fast.
-          </span>
-          <span
-            className="label-xs"
-            style={{
-              color: 'var(--fg-3)',
-              fontSize: 10,
-              letterSpacing: '0.14em',
-            }}
-          >
-            Connect will become available automatically when DSP is ready
-          </span>
-        </div>
-      )}
+          Preparing wisdom file…
+        </span>
+        <span
+          aria-label="Why is this happening?"
+          title="Wisdom precalculates FFTW transforms (forward and inverse, across every FFT size WDSP uses) so noise reduction, filters, and the panadapter respond instantly once you connect. Runs once per machine; subsequent startups skip this step."
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 18,
+            height: 18,
+            borderRadius: '50%',
+            border: '1px solid var(--panel-border)',
+            background: 'var(--bg-0)',
+            color: 'var(--fg-2)',
+            fontSize: 11,
+            fontWeight: 700,
+            cursor: 'help',
+            flexShrink: 0,
+          }}
+        >
+          i
+        </span>
+      </div>
+      <div
+        className="mono"
+        style={{
+          minHeight: 18,
+          padding: '8px 10px',
+          background: 'var(--bg-0)',
+          border: '1px solid var(--panel-border)',
+          borderRadius: 'var(--r-sm)',
+          color: 'var(--accent)',
+          fontSize: 11,
+          letterSpacing: '0.02em',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {trimmed || 'Starting FFTW planner…'}
+      </div>
+      <span
+        style={{
+          color: 'var(--fg-1)',
+          fontSize: 11,
+          lineHeight: 1.5,
+        }}
+      >
+        Helps noise reduction and filters respond faster by precalculating
+        DSP transforms. One-time, first-run only — please leave the app open
+        and wait. Connect will become available automatically.
+      </span>
     </div>
   );
 }
@@ -747,7 +766,6 @@ interface ManualModeProps {
   error: string | null;
   onConnect: () => void;
   inflight: boolean;
-  dspPreparing: boolean;
   savedEndpoints: SavedEndpoint[];
   lastConnectedId: string | undefined;
   onReconnect: (e: SavedEndpoint) => void;
@@ -773,7 +791,7 @@ const fieldLabelStyle: React.CSSProperties = {
 };
 
 function ManualMode(p: ManualModeProps) {
-  const canConnect = !p.inflight && !p.dspPreparing;
+  const canConnect = !p.inflight;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div
@@ -918,19 +936,10 @@ function ManualMode(p: ManualModeProps) {
         type="button"
         onClick={p.onConnect}
         disabled={!canConnect}
-        title={
-          p.dspPreparing
-            ? 'DSP is preparing FFTW plans — first-run only. Please leave the app open and wait.'
-            : undefined
-        }
-        className={`btn lg ${canConnect ? 'active' : ''} ${p.dspPreparing ? 'pulsing' : ''}`}
+        className={`btn lg ${canConnect ? 'active' : ''}`}
         style={{ alignSelf: 'stretch' }}
       >
-        {p.inflight
-          ? 'Connecting…'
-          : p.dspPreparing
-            ? 'Preparing DSP…'
-            : 'Connect'}
+        {p.inflight ? 'Connecting…' : 'Connect'}
       </button>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>

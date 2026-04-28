@@ -43,6 +43,7 @@
 // License for details.
 
 using System.Buffers;
+using System.Text;
 
 namespace Zeus.Contracts;
 
@@ -53,25 +54,54 @@ public enum WisdomPhase : byte
     Ready = 2,
 }
 
-// [0x15][phase:u8] = 2 bytes. Latest value wins; no seq/timestamp needed.
-public readonly record struct WisdomStatusFrame(WisdomPhase Phase)
+// [0x15][phase:u8][statusUtf8…]. Phase byte is mandatory; status string is
+// optional UTF-8 trailer carrying the live WDSP wisdom_get_status() string
+// (e.g. "Planning COMPLEX FORWARD FFT size 1024") so the splash can show
+// what's actually happening during the multi-minute first-run build. The
+// status buffer is sized to match the 128-byte fixed buffer in WDSP's
+// wisdom.c; longer strings are truncated to keep the frame bounded.
+public readonly record struct WisdomStatusFrame(WisdomPhase Phase, string Status = "")
 {
-    public const int ByteLength = 1 + 1;
+    public const int MinByteLength = 1 + 1;
+    public const int MaxStatusBytes = 128;
+    public const int MaxByteLength = MinByteLength + MaxStatusBytes;
 
     public void Serialize(IBufferWriter<byte> writer)
     {
-        var span = writer.GetSpan(ByteLength);
+        var statusBytes = string.IsNullOrEmpty(Status)
+            ? Array.Empty<byte>()
+            : Encoding.UTF8.GetBytes(Status);
+        var trimmedLen = Math.Min(statusBytes.Length, MaxStatusBytes);
+        int total = MinByteLength + trimmedLen;
+
+        var span = writer.GetSpan(total);
         span[0] = (byte)MsgType.WisdomStatus;
         span[1] = (byte)Phase;
-        writer.Advance(ByteLength);
+        if (trimmedLen > 0)
+            statusBytes.AsSpan(0, trimmedLen).CopyTo(span.Slice(2));
+        writer.Advance(total);
+    }
+
+    public int ByteLength
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(Status)) return MinByteLength;
+            var len = Encoding.UTF8.GetByteCount(Status);
+            return MinByteLength + Math.Min(len, MaxStatusBytes);
+        }
     }
 
     public static WisdomStatusFrame Deserialize(ReadOnlySpan<byte> bytes)
     {
-        if (bytes.Length < ByteLength)
-            throw new InvalidDataException($"WisdomStatusFrame requires {ByteLength} bytes, got {bytes.Length}");
+        if (bytes.Length < MinByteLength)
+            throw new InvalidDataException($"WisdomStatusFrame requires {MinByteLength} bytes, got {bytes.Length}");
         if (bytes[0] != (byte)MsgType.WisdomStatus)
             throw new InvalidDataException($"expected WisdomStatus (0x{(byte)MsgType.WisdomStatus:X2}), got 0x{bytes[0]:X2}");
-        return new WisdomStatusFrame((WisdomPhase)bytes[1]);
+        var phase = (WisdomPhase)bytes[1];
+        var status = bytes.Length > MinByteLength
+            ? Encoding.UTF8.GetString(bytes.Slice(MinByteLength))
+            : string.Empty;
+        return new WisdomStatusFrame(phase, status);
     }
 }

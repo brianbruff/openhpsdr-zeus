@@ -261,15 +261,18 @@ var log = app.Services.GetRequiredService<ILogger<Program>>();
         File.Exists(calcPath) ? "loaded" : "missing→compiled-fallback");
 }
 
-// Wire wisdom initializer → hub so every phase change is broadcast to all
-// connected clients. Seed the hub's cached phase with whatever the
-// initializer currently reports (Idle at first boot, Ready on restart once
-// the file is cached).
+// Wire wisdom initializer → hub so every phase change AND every per-step
+// status update from WDSP's wisdom_get_status() poll is broadcast to all
+// connected clients. Seed the hub's cached phase + status with whatever
+// the initializer currently reports (Idle/empty at first boot, Ready on
+// restart once the file is cached).
 {
     var wisdom = app.Services.GetRequiredService<WdspWisdomInitializer>();
     var hub = app.Services.GetRequiredService<StreamingHub>();
     hub.SetWisdomPhase(wisdom.Phase);
-    wisdom.PhaseChanged += phase => hub.Broadcast(new WisdomStatusFrame(phase));
+    hub.SetWisdomStatus(wisdom.Status);
+    wisdom.PhaseChanged += phase => hub.Broadcast(new WisdomStatusFrame(phase, wisdom.Status));
+    wisdom.StatusChanged += status => hub.Broadcast(new WisdomStatusFrame(wisdom.Phase, status));
 }
 
 app.MapGet("/api/version", () =>

@@ -100,6 +100,9 @@ export type ConnectionState = {
   // Intentionally in-memory only — no localStorage yet.
   lastConnectedEndpoint: string | null;
   wisdomPhase: WisdomPhase;
+  // Live WDSP wisdom_get_status() text streamed by the server while
+  // wisdomPhase === 'building'. Empty otherwise.
+  wisdomStatus: string;
   applyState: (s: RadioStateDto) => void;
   setInflight: (v: boolean) => void;
   setBoardId: (id: string | null) => void;
@@ -109,6 +112,7 @@ export type ConnectionState = {
   setZoomLevel: (level: ZoomLevel) => void;
   setLastConnectedEndpoint: (ep: string | null) => void;
   setWisdomPhase: (phase: WisdomPhase) => void;
+  setWisdomStatus: (status: string) => void;
 };
 
 export const useConnectionStore = create<ConnectionState>((set) => ({
@@ -141,6 +145,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   // Default to 'ready' so a page-load before the WS attach doesn't show the
   // pulse spuriously. The server overrides on attach with the real phase.
   wisdomPhase: 'ready',
+  wisdomStatus: '',
   applyState: (s) =>
     set({
       status: s.status,
@@ -174,4 +179,5 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   setLastConnectedEndpoint: (lastConnectedEndpoint) =>
     set({ lastConnectedEndpoint }),
   setWisdomPhase: (wisdomPhase) => set({ wisdomPhase }),
+  setWisdomStatus: (wisdomStatus) => set({ wisdomStatus }),
 }));

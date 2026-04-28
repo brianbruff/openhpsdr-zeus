@@ -65,11 +65,13 @@ public sealed class StreamingHub
 
     private readonly ILogger<StreamingHub> _log;
     private readonly ConcurrentDictionary<Guid, ClientSession> _clients = new();
-    // Latest WDSP wisdom phase. Set by StreamingHubWisdomBridge on phase-changed
-    // events; read on every AttachClientAsync so late joiners see the current
-    // state without waiting for the next transition. Volatile because the
-    // writer is on a worker thread and readers can be on any hub caller.
+    // Latest WDSP wisdom phase + status string. Set by Program.cs wiring on
+    // phase- and status-changed events; read on every AttachClientAsync so
+    // late joiners see the current state without waiting for the next
+    // transition. Volatile because the writer is on a worker thread and
+    // readers can be on any hub caller.
     private volatile byte _wisdomPhase;
+    private volatile string _wisdomStatus = string.Empty;
 
     public StreamingHub(ILogger<StreamingHub> log) { _log = log; }
 
@@ -80,6 +82,13 @@ public sealed class StreamingHub
     public void SetWisdomPhase(Zeus.Contracts.WisdomPhase phase)
     {
         _wisdomPhase = (byte)phase;
+    }
+
+    /// <summary>Updates the hub's cached wisdom status string so clients
+    /// attaching mid-build receive the current sub-step text immediately.</summary>
+    public void SetWisdomStatus(string status)
+    {
+        _wisdomStatus = status ?? string.Empty;
     }
 
     /// <summary>
@@ -97,10 +106,12 @@ public sealed class StreamingHub
         _clients[id] = session;
         _log.LogInformation("ws.client.connected id={Id} total={Count}", id, _clients.Count);
 
-        // Prime the new client with the current wisdom phase. Without this a
-        // client that joins after the ready event would sit at default (Idle)
-        // and render the pulsing Connect button indefinitely.
-        session.TryEnqueue(BuildWisdomPayload((Zeus.Contracts.WisdomPhase)_wisdomPhase));
+        // Prime the new client with the current wisdom phase + status text.
+        // Without this a client that joins after the ready event would sit
+        // at default (Idle) and render the splash indefinitely; a client
+        // joining mid-build needs both the phase byte and any status string
+        // already accumulated so the body shows the current step.
+        session.TryEnqueue(BuildWisdomPayload((Zeus.Contracts.WisdomPhase)_wisdomPhase, _wisdomStatus));
 
         try
         {
@@ -270,16 +281,19 @@ public sealed class StreamingHub
     public void Broadcast(in WisdomStatusFrame frame)
     {
         SetWisdomPhase(frame.Phase);
+        SetWisdomStatus(frame.Status);
         if (_clients.IsEmpty) return;
-        var payload = BuildWisdomPayload(frame.Phase);
+        var payload = BuildWisdomPayload(frame.Phase, frame.Status);
         foreach (var client in _clients.Values) client.TryEnqueue(payload);
     }
 
-    private static byte[] BuildWisdomPayload(Zeus.Contracts.WisdomPhase phase)
+    private static byte[] BuildWisdomPayload(Zeus.Contracts.WisdomPhase phase, string status)
     {
-        var buf = new byte[WisdomStatusFrame.ByteLength];
-        var writer = new FixedBufferWriter(buf, buf.Length);
-        new WisdomStatusFrame(phase).Serialize(writer);
+        var frame = new WisdomStatusFrame(phase, status ?? string.Empty);
+        int total = frame.ByteLength;
+        var buf = new byte[total];
+        var writer = new FixedBufferWriter(buf, total);
+        frame.Serialize(writer);
         return buf;
     }
 

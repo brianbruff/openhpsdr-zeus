@@ -109,10 +109,16 @@ public sealed class RadioService : IDisposable
     private long _lastTickMs = long.MinValue;
     private int _lastAppliedEffectiveDb = -1;   // so the first send always fires
 
-    // Auto-AGC control-loop state. Similar to Auto-ATT but adjusts AGC-T
-    // instead of attenuator. Tracks signal strength meter readings.
+    // Auto-AGC control-loop state. Adjusts AGC-T (the WDSP max-gain cap) so
+    // the band noise floor lands near a fixed reference, mirroring Thetis'
+    // noise-floor calibration. Closed-looping on the live S-meter (the prior
+    // implementation) ramped to max gain on quiet bands and clipped when
+    // signal returned.
     private double _agcOffsetDb;
     private long _lastAgcTickMs = long.MinValue;
+    private readonly double[] _noiseFloorWindow = new double[10]; // 10 × 500 ms = 5 s
+    private int _noiseFloorWindowIdx;
+    private int _noiseFloorWindowFill;
 
     // 100 ms between 1-dB steps. Events arrive at ~1.2 kHz (192 kSps), so
     // without throttling the offset would saturate at 31 dB in ~30 ms. At 10 Hz
@@ -676,12 +682,16 @@ public sealed class RadioService : IDisposable
                 // to the user's baseline immediately.
                 _agcOffsetDb = 0.0;
                 _lastAgcTickMs = long.MinValue;
+                _noiseFloorWindowFill = 0;
+                _noiseFloorWindowIdx = 0;
                 _state = _state with { AgcOffsetDb = 0.0 };
             }
             else
             {
-                // Turning auto on: reset timer
+                // Turning auto on: reset timer + window so we recalibrate.
                 _lastAgcTickMs = long.MinValue;
+                _noiseFloorWindowFill = 0;
+                _noiseFloorWindowIdx = 0;
             }
         }
         var snap = Snapshot();
@@ -690,58 +700,76 @@ public sealed class RadioService : IDisposable
     }
 
     /// <summary>
-    /// Auto-AGC control loop handler. Called periodically with RX meter readings
-    /// (signal strength in dBm). Adjusts AgcOffsetDb to maintain optimal signal
-    /// levels. Throttled to avoid excessive AGC adjustments.
+    /// Auto-AGC control loop. Estimates the band noise floor from a sliding
+    /// window of S-meter samples and trims AgcOffsetDb so the floor lands near
+    /// ReferenceFloorDbm — mirroring Thetis, where AGC-T is calibrated to the
+    /// noise floor rather than chasing the live signal. Slew-limited and
+    /// asymmetrically capped (more headroom to cut gain than to add it) so a
+    /// quiet band can't ramp the WDSP max-gain cap into clipping territory.
     /// </summary>
     internal void HandleRxMeterForAutoAgc(double signalDbm, long nowMs)
     {
         bool changedOffset = false;
         double newOffset = 0.0;
+        double noiseFloor = double.NaN;
 
         lock (_sync)
         {
             if (!_state.AutoAgcEnabled) return;
             if (_mox) return;   // Pause during TX
+            if (!double.IsFinite(signalDbm) || signalDbm <= -250.0) return;
 
-            // Throttle adjustments - check every 500ms (slower than Auto-ATT)
+            // If we paused for >5 s (TX, just-toggled-on, RX dropout) the
+            // window may hold stale samples — clear before re-accumulating.
+            if (_lastAgcTickMs != long.MinValue && nowMs - _lastAgcTickMs > 5000)
+            {
+                _noiseFloorWindowFill = 0;
+                _noiseFloorWindowIdx = 0;
+            }
+
             if (_lastAgcTickMs != long.MinValue && nowMs - _lastAgcTickMs < 500)
                 return;
             _lastAgcTickMs = nowMs;
 
-            // Target range: -80 to -40 dBm (typical S-meter range for comfortable listening)
-            // If signal is too strong (> -40 dBm), reduce AGC gain (negative offset)
-            // If signal is too weak (< -80 dBm), increase AGC gain (positive offset)
-            const double TargetHigh = -40.0;
-            const double TargetLow = -80.0;
-            const double StepDb = 2.0;  // Larger steps than Auto-ATT for more responsive AGC
+            _noiseFloorWindow[_noiseFloorWindowIdx] = signalDbm;
+            _noiseFloorWindowIdx = (_noiseFloorWindowIdx + 1) % _noiseFloorWindow.Length;
+            if (_noiseFloorWindowFill < _noiseFloorWindow.Length) _noiseFloorWindowFill++;
 
-            double currentAgcTop = _state.AgcTopDb + _agcOffsetDb;
+            // Wait for ~3 s of samples before adjusting so the minimum is meaningful.
+            if (_noiseFloorWindowFill < 6) return;
 
-            if (signalDbm > TargetHigh && _agcOffsetDb > -40.0)
+            noiseFloor = double.PositiveInfinity;
+            for (int i = 0; i < _noiseFloorWindowFill; i++)
             {
-                // Signal too strong - reduce AGC gain
-                _agcOffsetDb = Math.Max(-40.0, _agcOffsetDb - StepDb);
-                changedOffset = true;
-            }
-            else if (signalDbm < TargetLow && _agcOffsetDb < 40.0)
-            {
-                // Signal too weak - increase AGC gain
-                _agcOffsetDb = Math.Min(40.0, _agcOffsetDb + StepDb);
-                changedOffset = true;
+                double v = _noiseFloorWindow[i];
+                if (v < noiseFloor) noiseFloor = v;
             }
 
-            if (changedOffset)
-            {
-                _state = _state with { AgcOffsetDb = _agcOffsetDb };
-                newOffset = _agcOffsetDb;
-            }
+            // Quiet band → headroom to add gain. Noisy band → cut gain harder.
+            // Asymmetric caps prevent the runaway-loud failure mode.
+            const double ReferenceFloorDbm = -110.0;
+            const double MaxOffsetUp = 10.0;
+            const double MaxOffsetDown = 20.0;
+            double desiredOffset = Math.Clamp(
+                ReferenceFloorDbm - noiseFloor, -MaxOffsetDown, MaxOffsetUp);
+
+            double delta = desiredOffset - _agcOffsetDb;
+            if (Math.Abs(delta) < 0.5) return;
+
+            const double SlewPerTickDb = 1.0;
+            _agcOffsetDb = delta > 0
+                ? Math.Min(desiredOffset, _agcOffsetDb + SlewPerTickDb)
+                : Math.Max(desiredOffset, _agcOffsetDb - SlewPerTickDb);
+
+            _state = _state with { AgcOffsetDb = _agcOffsetDb };
+            newOffset = _agcOffsetDb;
+            changedOffset = true;
         }
 
         if (changedOffset)
         {
             StateChanged?.Invoke(Snapshot());
-            _log.LogDebug("auto-agc offset={Offset}dB signal={Signal}dBm", newOffset, signalDbm);
+            _log.LogDebug("auto-agc offset={Offset}dB noisefloor={Floor}dBm", newOffset, noiseFloor);
         }
     }
 

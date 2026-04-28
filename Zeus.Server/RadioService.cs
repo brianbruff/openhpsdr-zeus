@@ -109,6 +109,11 @@ public sealed class RadioService : IDisposable
     private long _lastTickMs = long.MinValue;
     private int _lastAppliedEffectiveDb = -1;   // so the first send always fires
 
+    // Auto-AGC control-loop state. Similar to Auto-ATT but adjusts AGC-T
+    // instead of attenuator. Tracks signal strength meter readings.
+    private double _agcOffsetDb;
+    private long _lastAgcTickMs = long.MinValue;
+
     // 100 ms between 1-dB steps. Events arrive at ~1.2 kHz (192 kSps), so
     // without throttling the offset would saturate at 31 dB in ~30 ms. At 10 Hz
     // the full-range ramp takes ~3 s — matches Thetis' feel.
@@ -657,6 +662,87 @@ public sealed class RadioService : IDisposable
         var snap = Snapshot();
         StateChanged?.Invoke(snap);
         return snap;
+    }
+
+    public StateDto SetAutoAgc(bool enabled)
+    {
+        lock (_sync)
+        {
+            if (_state.AutoAgcEnabled == enabled) return _state;
+            _state = _state with { AutoAgcEnabled = enabled };
+            if (!enabled)
+            {
+                // Turning auto off: reset the offset to zero so AGC-T returns
+                // to the user's baseline immediately.
+                _agcOffsetDb = 0.0;
+                _lastAgcTickMs = long.MinValue;
+                _state = _state with { AgcOffsetDb = 0.0 };
+            }
+            else
+            {
+                // Turning auto on: reset timer
+                _lastAgcTickMs = long.MinValue;
+            }
+        }
+        var snap = Snapshot();
+        StateChanged?.Invoke(snap);
+        return snap;
+    }
+
+    /// <summary>
+    /// Auto-AGC control loop handler. Called periodically with RX meter readings
+    /// (signal strength in dBm). Adjusts AgcOffsetDb to maintain optimal signal
+    /// levels. Throttled to avoid excessive AGC adjustments.
+    /// </summary>
+    internal void HandleRxMeterForAutoAgc(double signalDbm, long nowMs)
+    {
+        bool changedOffset = false;
+        double newOffset = 0.0;
+
+        lock (_sync)
+        {
+            if (!_state.AutoAgcEnabled) return;
+            if (_mox) return;   // Pause during TX
+
+            // Throttle adjustments - check every 500ms (slower than Auto-ATT)
+            if (_lastAgcTickMs != long.MinValue && nowMs - _lastAgcTickMs < 500)
+                return;
+            _lastAgcTickMs = nowMs;
+
+            // Target range: -80 to -40 dBm (typical S-meter range for comfortable listening)
+            // If signal is too strong (> -40 dBm), reduce AGC gain (negative offset)
+            // If signal is too weak (< -80 dBm), increase AGC gain (positive offset)
+            const double TargetHigh = -40.0;
+            const double TargetLow = -80.0;
+            const double StepDb = 2.0;  // Larger steps than Auto-ATT for more responsive AGC
+
+            double currentAgcTop = _state.AgcTopDb + _agcOffsetDb;
+
+            if (signalDbm > TargetHigh && _agcOffsetDb > -40.0)
+            {
+                // Signal too strong - reduce AGC gain
+                _agcOffsetDb = Math.Max(-40.0, _agcOffsetDb - StepDb);
+                changedOffset = true;
+            }
+            else if (signalDbm < TargetLow && _agcOffsetDb < 40.0)
+            {
+                // Signal too weak - increase AGC gain
+                _agcOffsetDb = Math.Min(40.0, _agcOffsetDb + StepDb);
+                changedOffset = true;
+            }
+
+            if (changedOffset)
+            {
+                _state = _state with { AgcOffsetDb = _agcOffsetDb };
+                newOffset = _agcOffsetDb;
+            }
+        }
+
+        if (changedOffset)
+        {
+            StateChanged?.Invoke(Snapshot());
+            _log.LogDebug("auto-agc offset={Offset}dB signal={Signal}dBm", newOffset, signalDbm);
+        }
     }
 
     // MOX is transient — it belongs on the wire (CcState.Mox → C0 LSB), not in

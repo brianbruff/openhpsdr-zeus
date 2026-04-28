@@ -171,14 +171,15 @@ export type RadioStateDto = {
   txFilterHighHz: number;
   sampleRate: number;
   agcTopDb: number;
+  autoAgcEnabled: boolean;
+  agcOffsetDb: number;
+  rxAfGainDb: number;
   attenDb: number;
   autoAttEnabled: boolean;
   attOffsetDb: number;
   adcOverloadWarning: boolean;
   nr: NrConfigDto;
   zoomLevel: ZoomLevel;
-  // Master RX AF gain in dB — 0 = unity (WDSP SetRXAPanelGain1(1.0) default).
-  rxAfGainDb: number;
   // PureSignal persisted tunings — server is the source of truth, hydrated
   // into tx-store on connect so a fresh browser (no localStorage) sees the
   // operator's last dial-in. PsEnabled, PsSingle, TwoToneEnabled (master-arm
@@ -400,6 +401,9 @@ export function normalizeState(raw: unknown): RadioStateDto {
     // Default 80 matches WdspDspEngine.ApplyAgcDefaults and the Thetis
     // AGC_MEDIUM preset. Missing from older servers — tolerate absence.
     agcTopDb: typeof r.agcTopDb === 'number' ? r.agcTopDb : 80,
+    autoAgcEnabled: typeof r.autoAgcEnabled === 'boolean' ? r.autoAgcEnabled : false,
+    agcOffsetDb: typeof r.agcOffsetDb === 'number' ? r.agcOffsetDb : 0,
+    rxAfGainDb: typeof r.rxAfGainDb === 'number' ? r.rxAfGainDb : 0,
     // Attenuator value in dB, range 0..31 (HpsdrAtten.MaxDb). 4-button UI
     // sends 0/10/20/30 today; #23 will unlock the full fine-grained range.
     attenDb: typeof r.attenDb === 'number' ? r.attenDb : 0,
@@ -414,9 +418,6 @@ export function normalizeState(raw: unknown): RadioStateDto {
     // the engine's declared defaults so the UI has something to render.
     nr: normalizeNr(r.nr),
     zoomLevel: normalizeZoomLevel(r.zoomLevel),
-    // 0 dB matches the pre-#77 unity-gain default — older servers without
-    // the field behave identically to a fresh-install slider at centre.
-    rxAfGainDb: typeof r.rxAfGainDb === 'number' ? r.rxAfGainDb : 0,
     // PureSignal persisted tunings. Defaults match RadioService.cs init and
     // PsSettingsEntry — older servers without the fields fall back cleanly.
     psAuto: typeof r.psAuto === 'boolean' ? r.psAuto : true,
@@ -886,6 +887,22 @@ export function setAutoAtt(
 ): Promise<RadioStateDto> {
   return jsonFetch(
     '/api/auto-att',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+export function setAutoAgc(
+  enabled: boolean,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/auto-agc',
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

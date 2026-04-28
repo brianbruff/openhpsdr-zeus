@@ -108,6 +108,7 @@ public class DspPipelineService : BackgroundService
     private int _appliedTxLowHz;
     private int _appliedTxHighHz;
     private double _appliedAgcTopDb;
+    private double _appliedAgcOffsetDb;
     private double _appliedRxAfGainDb;
     private NrConfig _appliedNr = new();
     private int _appliedZoomLevel = 1;
@@ -190,6 +191,8 @@ public class DspPipelineService : BackgroundService
         _radio.MoxChanged += OnRadioMoxChanged;
         _radio.TunActiveChanged += OnRadioTunActiveChanged;
         _radio.PreampChanged += OnRadioPreampChanged;
+        // Wire up Auto-AGC: feed RX meter readings to RadioService control loop
+        RxMeterUpdated += (channelId, dbm) => _radio.HandleRxMeterForAutoAgc(dbm, Environment.TickCount64);
 
         var panBuf = new float[Width];
         var wfBuf = new float[Width];
@@ -352,10 +355,12 @@ public class DspPipelineService : BackgroundService
             _appliedTxLowHz = s.TxFilterLowHz;
             _appliedTxHighHz = s.TxFilterHighHz;
         }
-        if (s.AgcTopDb != _appliedAgcTopDb)
+        if (s.AgcTopDb != _appliedAgcTopDb || s.AgcOffsetDb != _appliedAgcOffsetDb)
         {
-            engine.SetAgcTop(channel, s.AgcTopDb);
+            double effectiveAgc = s.AgcTopDb + s.AgcOffsetDb;
+            engine.SetAgcTop(channel, effectiveAgc);
             _appliedAgcTopDb = s.AgcTopDb;
+            _appliedAgcOffsetDb = s.AgcOffsetDb;
         }
         if (s.RxAfGainDb != _appliedRxAfGainDb)
         {
@@ -571,7 +576,8 @@ public class DspPipelineService : BackgroundService
         engine.SetFilter(channelId, s.FilterLowHz, s.FilterHighHz);
         engine.SetTxFilter(s.TxFilterLowHz, s.TxFilterHighHz);
         engine.SetVfoHz(channelId, s.VfoHz);
-        engine.SetAgcTop(channelId, s.AgcTopDb);
+        double effectiveAgc = s.AgcTopDb + s.AgcOffsetDb;
+        engine.SetAgcTop(channelId, effectiveAgc);
         engine.SetRxAfGainDb(channelId, s.RxAfGainDb);
         engine.SetNoiseReduction(channelId, nr);
         engine.SetZoom(channelId, s.ZoomLevel);
@@ -581,6 +587,7 @@ public class DspPipelineService : BackgroundService
         _appliedTxLowHz = s.TxFilterLowHz;
         _appliedTxHighHz = s.TxFilterHighHz;
         _appliedAgcTopDb = s.AgcTopDb;
+        _appliedAgcOffsetDb = s.AgcOffsetDb;
         _appliedRxAfGainDb = s.RxAfGainDb;
         _appliedNr = nr;
         _appliedZoomLevel = s.ZoomLevel;

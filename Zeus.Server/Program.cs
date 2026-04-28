@@ -580,6 +580,12 @@ app.MapPost("/api/auto-att", (AutoAttSetRequest req, RadioService r) =>
     return r.SetAutoAtt(req.Enabled);
 });
 
+app.MapPost("/api/auto-agc", (AutoAgcSetRequest req, RadioService r) =>
+{
+    log.LogInformation("api.auto-agc enabled={Enabled}", req.Enabled);
+    return r.SetAutoAgc(req.Enabled);
+});
+
 app.MapPost("/api/tx/mox", (MoxSetRequest req, TxService tx) =>
 {
     log.LogInformation("api.tx.mox on={On}", req.On);

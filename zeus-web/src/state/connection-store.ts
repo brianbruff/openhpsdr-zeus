@@ -72,6 +72,8 @@ export type ConnectionState = {
   txFilterHighHz: number;
   sampleRate: number;
   agcTopDb: number;
+  autoAgcEnabled: boolean;
+  agcOffsetDb: number;
   rxAfGainDb: number;
   attenDb: number;
   autoAttEnabled: boolean;
@@ -122,6 +124,8 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   txFilterHighHz: 2850,
   sampleRate: 192_000,
   agcTopDb: 80,
+  autoAgcEnabled: false,
+  agcOffsetDb: 0,
   rxAfGainDb: 0,
   attenDb: 0,
   autoAttEnabled: true,
@@ -151,6 +155,8 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
       txFilterHighHz: s.txFilterHighHz,
       sampleRate: s.sampleRate,
       agcTopDb: s.agcTopDb,
+      autoAgcEnabled: s.autoAgcEnabled,
+      agcOffsetDb: s.agcOffsetDb,
       rxAfGainDb: s.rxAfGainDb,
       attenDb: s.attenDb,
       autoAttEnabled: s.autoAttEnabled,

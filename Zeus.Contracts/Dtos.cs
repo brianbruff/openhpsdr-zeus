@@ -162,6 +162,12 @@ public sealed record StateDto(
     // yet; when multi-RX lands this becomes the master and the per-RX
     // values layer on top.
     double RxAfGainDb = 0.0,
+    // Auto-AGC control loop. When on, the server automatically adjusts
+    // AgcTopDb based on signal conditions. Similar to Auto-ATT but for AGC.
+    // Default is OFF — operator must explicitly enable. The control loop
+    // adjusts AgcOffsetDb, which is added to the user baseline AgcTopDb.
+    bool AutoAgcEnabled = false,
+    double AgcOffsetDb = 0.0,
 
     // ---- PureSignal predistortion (TXA-side; WDSP calcc/iqc stages) ----
     // PsEnabled is the master arm bit. Deliberately NOT persisted server-side
@@ -298,6 +304,8 @@ public sealed record Nr2CoreConfigSetRequest(
 public sealed record ZoomSetRequest(int Level);
 
 public sealed record AutoAttSetRequest(bool Enabled);
+
+public sealed record AutoAgcSetRequest(bool Enabled);
 
 public sealed record TunSetRequest(bool On);
 

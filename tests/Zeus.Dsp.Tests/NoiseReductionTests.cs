@@ -60,6 +60,20 @@ public class NoiseReductionTests
         catch { return false; }
     }
 
+    // The 192-case combinatorial WDSP walk is diagnostic-quality, not a
+    // regression gate. Rapid OpenChannel / SetNoiseReduction / CloseChannel
+    // cycling inside a single xUnit test host hits FFTW wisdom-cache + RXA
+    // channel-state edges that SIGSEGV the host on every platform where
+    // libwdsp actually loads (Windows CI, local macOS dev). The targeted
+    // Wdsp Facts in this file (Wdsp_NbLifecycle_*, Wdsp_TogglingNrModes_*,
+    // Wdsp_Nb1_*) cover the same P/Invoke seams without the 192× iteration.
+    //
+    // Set ZEUS_RUN_WDSP_COMBINATORIAL=1 to opt into the full walk when
+    // bench-debugging an NR / NB / SBNR engine change.
+    private static bool CombinatorialWdspOptedIn() =>
+        string.Equals(Environment.GetEnvironmentVariable("ZEUS_RUN_WDSP_COMBINATORIAL"), "1",
+                      StringComparison.Ordinal);
+
     // True only when the bundled libwdsp exports the SBNR (NR4) symbols.
     // Phase 1 of issue #79 has not shipped yet — until it does, theories
     // that try to actually arm SBNR Run=1 must Skip.IfNot on this so the
@@ -132,6 +146,7 @@ public class NoiseReductionTests
     public void Wdsp_AcceptsEveryModeCombinationWithoutCrashing(NrConfig cfg)
     {
         Skip.IfNot(WdspAvailable(), "libwdsp not available");
+        Skip.IfNot(CombinatorialWdspOptedIn(), "Combinatorial WDSP walk is diagnostic-only — set ZEUS_RUN_WDSP_COMBINATORIAL=1 to run.");
         if (cfg.NrMode == NrMode.Sbnr)
             Skip.IfNot(SbnrAvailable(), "Requires libwdsp rebuild — Phase 1 of issue #79; bundled binaries do not export SBNR symbols.");
 

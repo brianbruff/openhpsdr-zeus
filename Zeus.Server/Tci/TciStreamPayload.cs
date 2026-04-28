@@ -104,4 +104,20 @@ internal static class TciStreamPayload
             channels: 2,
             samplePayload: MemoryMarshal.AsBytes(floats.AsSpan()));
     }
+
+    /// <summary>
+    /// Builds an RX audio frame from mono FLOAT32 samples. TCI audio streams
+    /// are mono (channels=1), matching Thetis RxAudioStream framing.
+    /// </summary>
+    public static byte[] BuildAudioFromFloats(int receiver, int sampleRate, ReadOnlySpan<float> samples)
+    {
+        return Build(
+            receiver,
+            sampleRate,
+            TciSampleType.Float32,
+            length: samples.Length,
+            streamType: TciStreamType.RxAudioStream,
+            channels: 1,
+            samplePayload: MemoryMarshal.AsBytes(samples));
+    }
 }

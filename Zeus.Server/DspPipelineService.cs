@@ -79,6 +79,14 @@ public class DspPipelineService : BackgroundService
     /// </summary>
     public event Action<int, int, ReadOnlyMemory<double>>? RxIqAvailable;
 
+    /// <summary>
+    /// Raised when demodulated RX audio samples are available (~30 Hz ticks,
+    /// 48 kHz mono FLOAT32). Arguments: (receiver, sampleRateHz, samples).
+    /// The memory references a local buffer and is only valid for the
+    /// duration of the synchronous handler — copy if retention is needed.
+    /// </summary>
+    public event Action<int, int, ReadOnlyMemory<float>>? RxAudioAvailable;
+
     private readonly object _engineLock = new();
     private IDspEngine? _engine;
     private int _channelId;
@@ -1063,6 +1071,7 @@ public class DspPipelineService : BackgroundService
                 SampleCount: (ushort)audioSampleCount,
                 Samples: new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
             _hub.Broadcast(audioFrame);
+            RxAudioAvailable?.Invoke(0, AudioOutputRateHz, new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
         }
 
         if (++_rxMeterTickMod >= RxMeterTickModulus)

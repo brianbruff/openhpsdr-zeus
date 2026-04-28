@@ -108,6 +108,7 @@ public sealed class TciServer : IHostedService, IDisposable
         _radio.Disconnected += OnRadioDisconnected;
         _pipeline.RxMeterUpdated += OnRxMeterUpdated;
         _pipeline.RxIqAvailable += OnRxIqAvailable;
+        _pipeline.RxAudioAvailable += OnRxAudioAvailable;
         _txMeters.TxMetersUpdated += OnTxMetersUpdated;
         _subscribed = true;
 
@@ -124,6 +125,7 @@ public sealed class TciServer : IHostedService, IDisposable
             _radio.Disconnected -= OnRadioDisconnected;
             _pipeline.RxMeterUpdated -= OnRxMeterUpdated;
             _pipeline.RxIqAvailable -= OnRxIqAvailable;
+            _pipeline.RxAudioAvailable -= OnRxAudioAvailable;
             _txMeters.TxMetersUpdated -= OnTxMetersUpdated;
             _subscribed = false;
         }
@@ -242,6 +244,25 @@ public sealed class TciServer : IHostedService, IDisposable
         foreach (var session in _clients.Values)
         {
             if (session.WantsIqStream(receiver))
+                session.SendBinary(payload);
+        }
+    }
+
+    private void OnRxAudioAvailable(int receiver, int sampleRateHz, ReadOnlyMemory<float> samples)
+    {
+        if (_clients.IsEmpty) return;
+
+        bool anyWants = false;
+        foreach (var session in _clients.Values)
+        {
+            if (session.WantsAudioStream(receiver)) { anyWants = true; break; }
+        }
+        if (!anyWants) return;
+
+        var payload = TciStreamPayload.BuildAudioFromFloats(receiver, sampleRateHz, samples.Span);
+        foreach (var session in _clients.Values)
+        {
+            if (session.WantsAudioStream(receiver))
                 session.SendBinary(payload);
         }
     }

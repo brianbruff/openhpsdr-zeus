@@ -107,4 +107,41 @@ public class TciStreamPayloadTests
             Assert.Equal(expected, actual);
         }
     }
+
+    [Fact]
+    public void BuildAudioFromFloats_HeaderTypedAsFloat32RxAudioWithOneChannel()
+    {
+        ReadOnlySpan<float> samples = stackalloc float[] { 0.1f, -0.2f, 0.3f, -0.4f };
+        var frame = TciStreamPayload.BuildAudioFromFloats(0, 48000, samples);
+
+        Assert.Equal((uint)TciSampleType.Float32, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(8)));
+        Assert.Equal((uint)TciStreamType.RxAudioStream, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(24)));
+        // channels = 1 (mono)
+        Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(28)));
+        // length = sample count
+        Assert.Equal((uint)samples.Length, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(20)));
+    }
+
+    [Fact]
+    public void BuildAudioFromFloats_PayloadBytesMatchInput()
+    {
+        ReadOnlySpan<float> samples = stackalloc float[] { 0.1f, -0.2f, 0.3f };
+        var frame = TciStreamPayload.BuildAudioFromFloats(0, 48000, samples);
+
+        Assert.Equal(64 + samples.Length * 4, frame.Length);
+        for (int i = 0; i < samples.Length; i++)
+        {
+            float actual = BitConverter.ToSingle(frame, 64 + i * 4);
+            Assert.Equal(samples[i], actual);
+        }
+    }
+
+    [Fact]
+    public void BuildAudioFromFloats_SampleRateWrittenToHeader()
+    {
+        ReadOnlySpan<float> samples = stackalloc float[] { 0.0f };
+        var frame = TciStreamPayload.BuildAudioFromFloats(0, 48000, samples);
+
+        Assert.Equal(48000u, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(4)));
+    }
 }

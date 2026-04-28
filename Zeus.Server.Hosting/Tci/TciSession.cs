@@ -47,6 +47,7 @@ using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text;
 using Zeus.Contracts;
+using Zeus.Protocol1;
 
 namespace Zeus.Server.Tci;
 
@@ -84,10 +85,12 @@ public sealed class TciSession : IDisposable
     private int _lastDrivePercent = 50;
 
     // Per-session binary stream subscriptions. Producers (TciServer publish
-    // path) check WantsIqStream(rx) before building/dispatching frames.
+    // path) check WantsIqStream/WantsAudioStream(rx) before building/dispatching frames.
     private readonly object _streamLock = new();
     private readonly HashSet<int> _iqStreamEnabled = new();
     private int _iqSampleRate = 48000;
+    private readonly HashSet<int> _audioStreamEnabled = new();
+    private int _audioSampleRate = 48000;
 
     public Guid Id => _id;
 
@@ -107,6 +110,24 @@ public sealed class TciSession : IDisposable
     public int IqSampleRate
     {
         get { lock (_streamLock) return _iqSampleRate; }
+    }
+
+    /// <summary>True if this session has subscribed to RX audio for the given receiver.</summary>
+    public bool WantsAudioStream(int receiver)
+    {
+        lock (_streamLock) return _audioStreamEnabled.Contains(receiver);
+    }
+
+    /// <summary>True if this session has subscribed to RX audio for any receiver.</summary>
+    public bool WantsAnyAudioStream()
+    {
+        lock (_streamLock) return _audioStreamEnabled.Count > 0;
+    }
+
+    /// <summary>Last client-requested audio sample rate, clamped to [8000, 48000].</summary>
+    public int AudioSampleRate
+    {
+        get { lock (_streamLock) return _audioSampleRate; }
     }
 
     public TciSession(
@@ -485,6 +506,28 @@ public sealed class TciSession : IDisposable
                     HandleSpotClear(args);
                     break;
 
+                // --- Noise reduction / blanking ---
+                case "nr_enable":
+                    HandleNrEnable(args);
+                    break;
+                case "nb_enable":
+                    HandleNbEnable(args);
+                    break;
+                case "anf_enable":
+                    HandleAnfEnable(args);
+                    break;
+                case "anc_enable":
+                    HandleAncEnable(args);
+                    break;
+
+                // --- Preamp / attenuator ---
+                case "preamp":
+                    HandlePreamp(args);
+                    break;
+                case "attenuator":
+                    HandleAttenuator(args);
+                    break;
+
                 // --- Binary streams ---
                 case "iq_start":
                     HandleIqStart(args);
@@ -496,9 +539,13 @@ public sealed class TciSession : IDisposable
                     HandleIqSampleRate(args);
                     break;
                 case "audio_start":
+                    HandleAudioStart(args);
+                    break;
                 case "audio_stop":
+                    HandleAudioStop(args);
+                    break;
                 case "audio_samplerate":
-                    _log.LogDebug("tci command not implemented: {Cmd}", command);
+                    HandleAudioSampleRate(args);
                     break;
 
                 // --- Unknown ---
@@ -908,6 +955,136 @@ public sealed class TciSession : IDisposable
             else _iqStreamEnabled.Remove(rx);
         }
         Send(TciProtocol.Command("iq_start", rx, enable));
+    }
+
+    private void HandleAudioStart(string[] args)
+    {
+        // audio_start:<rx>,<bool>  — start (true) or stop (false) per-receiver audio stream
+        if (args.Length < 1) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+        bool enable = true;
+        if (args.Length >= 2 && TciProtocol.TryParseBool(args[1], out bool parsed))
+            enable = parsed;
+        SetAudioStream(rx, enable);
+    }
+
+    private void HandleAudioStop(string[] args)
+    {
+        // audio_stop:<rx>  — alias of audio_start:<rx>,false
+        if (args.Length < 1) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+        SetAudioStream(rx, false);
+    }
+
+    private void HandleAudioSampleRate(string[] args)
+    {
+        // audio_samplerate:<rate>  or  audio_samplerate (query)
+        // Range: [8000, 48000]. Zeus emits audio at 48 kHz; the requested rate
+        // is stored and echoed. Down-sampling is not yet implemented.
+        if (args.Length == 0)
+        {
+            Send(TciProtocol.Command("audio_samplerate", AudioSampleRate));
+            return;
+        }
+        if (TciProtocol.TryParseInt(args[0], out int rate))
+        {
+            rate = Math.Clamp(rate, 8000, 48000);
+            lock (_streamLock) _audioSampleRate = rate;
+            Send(TciProtocol.Command("audio_samplerate", rate));
+        }
+    }
+
+    private void SetAudioStream(int rx, bool enable)
+    {
+        lock (_streamLock)
+        {
+            if (enable) _audioStreamEnabled.Add(rx);
+            else _audioStreamEnabled.Remove(rx);
+        }
+        Send(TciProtocol.Command("audio_start", rx, enable));
+    }
+
+    private void HandleNrEnable(string[] args)
+    {
+        // nr_enable:<rx>,<bool>  — enable/disable noise reduction (NR1/ANR)
+        // Maps bool true → NrMode.Anr (NR1), false → NrMode.Off.
+        // Use the full NrConfig API if you need NR2/NR4 — this is the TCI primitive.
+        if (args.Length < 2) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+        if (!TciProtocol.TryParseBool(args[1], out bool enable)) return;
+
+        var current = _radio.Snapshot().Nr ?? new NrConfig();
+        var updated = current with { NrMode = enable ? NrMode.Anr : NrMode.Off };
+        _radio.SetNr(updated);
+    }
+
+    private void HandleNbEnable(string[] args)
+    {
+        // nb_enable:<rx>,<bool>  — enable/disable noise blanker (NB1)
+        // Maps bool true → NbMode.Nb1, false → NbMode.Off.
+        if (args.Length < 2) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+        if (!TciProtocol.TryParseBool(args[1], out bool enable)) return;
+
+        var current = _radio.Snapshot().Nr ?? new NrConfig();
+        var updated = current with { NbMode = enable ? NbMode.Nb1 : NbMode.Off };
+        _radio.SetNr(updated);
+    }
+
+    private void HandleAnfEnable(string[] args)
+    {
+        // anf_enable:<rx>,<bool>  — enable/disable automatic notch filter
+        if (args.Length < 2) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+        if (!TciProtocol.TryParseBool(args[1], out bool enable)) return;
+
+        var current = _radio.Snapshot().Nr ?? new NrConfig();
+        _radio.SetNr(current with { AnfEnabled = enable });
+    }
+
+    private void HandleAncEnable(string[] args)
+    {
+        // anc_enable:<rx>,<bool>  — enable/disable spectral noise blanker (SNB/ANC)
+        // Maps to SnbEnabled in NrConfig.
+        if (args.Length < 2) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+        if (!TciProtocol.TryParseBool(args[1], out bool enable)) return;
+
+        var current = _radio.Snapshot().Nr ?? new NrConfig();
+        _radio.SetNr(current with { SnbEnabled = enable });
+    }
+
+    private void HandlePreamp(string[] args)
+    {
+        // preamp:<rx>,<bool>  or  preamp:<rx> (query)
+        if (args.Length < 1) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+
+        if (args.Length == 1)
+        {
+            Send(TciProtocol.Command("preamp", rx, _radio.PreampOn));
+        }
+        else if (args.Length >= 2 && TciProtocol.TryParseBool(args[1], out bool on))
+        {
+            _radio.SetPreamp(on);
+        }
+    }
+
+    private void HandleAttenuator(string[] args)
+    {
+        // attenuator:<rx>,<db>  or  attenuator:<rx> (query)
+        // Range: 0..31 dB (HPSDR hardware limit).
+        if (args.Length < 1) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+
+        if (args.Length == 1)
+        {
+            Send(TciProtocol.Command("attenuator", rx, _radio.EffectiveAttenDb));
+        }
+        else if (args.Length >= 2 && TciProtocol.TryParseInt(args[1], out int db))
+        {
+            _radio.SetAttenuator(new HpsdrAtten(db));
+        }
     }
 
     public void Dispose()

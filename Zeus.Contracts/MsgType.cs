@@ -94,4 +94,14 @@ public enum MsgType : byte
     // and the GetPSMaxTX envelope peak. Bare-payload like TxMetersV2 (no
     // 16-byte header) — same 10 Hz rate logic.
     PsMeters = 0x18,
+
+    // VST plugin-host event. UTF-8 text payload carrying a small notification
+    // tag that the browser maps to a /api/plughost/state re-fetch (e.g.
+    // "snapshot", "slotEditorClosed:0", "slotStateChanged:2",
+    // "chainEnabledChanged:1", "parameterChanged:0:42:0.500000",
+    // "sidecarExited:1"). Plain string keeps the format flexible while
+    // Wave 6b figures out exactly what the UI wants to consume; the browser
+    // can split on ':' to extract slot index / value. Sent from
+    // VstHostHostedService via StreamingHub.BroadcastVstHostEvent.
+    VstHostEvent = 0x19,
 }

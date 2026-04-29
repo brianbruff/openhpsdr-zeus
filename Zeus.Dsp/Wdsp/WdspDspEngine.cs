@@ -271,22 +271,33 @@ public sealed class WdspDspEngine : IDspEngine
     // Drop alongside the wdsp.psSeed log once PS is confirmed stable.
     private int _psInfoLogCounter;
 
-    // VST plugin-host seam (Phase 1). The chain is always disabled — the
-    // out-of-process PluginHost wiring lives in Zeus.Server and lands in a
-    // later phase. ProcessRxVstChain / ProcessTxVstChain read this flag and
-    // return false immediately when it is false, so the call costs one
-    // virtual dispatch and one boolean read on the hot RX/TX paths.
-    // Volatile so the eventual host wiring can flip it without taking a lock
-    // on the audio thread; no struct tearing concerns for a single bool.
+    // VST plugin-host seam. Wave 6a wires the out-of-process plugin sidecar
+    // through Zeus.Server's PluginHostManager via the
+    // <see cref="VstChainHandler"/> delegate below. ProcessRxVstChain /
+    // ProcessTxMicVstChain read the volatile-bool flag first; if it is
+    // false the seam short-circuits with a single boolean read — no
+    // virtual dispatch into the host, no IPC.
+    // Volatile so the host wiring can flip it without taking a lock on the
+    // audio thread; no struct tearing concerns for a single bool.
     private volatile bool _vstChainEnabled;
 
-    // Phase 2 entry point — Zeus.Server's PluginHost wiring will flip this
-    // when a chain becomes available. `internal` so it stays out of the
-    // IDspEngine surface; the host integration sits one layer up. Also
-    // exercised by Zeus.Dsp.Tests via InternalsVisibleTo to assert the
-    // bypass path is bit-identical to the seam-absent path.
+    // The handler — wired by Zeus.Server at startup once PluginHostManager
+    // is in DI. Never accessed under _txaLock so the audio thread doesn't
+    // serialise with handler installation; null check is the trivial guard.
+    // We deliberately do NOT take a hard reference to PluginHost from
+    // Zeus.Dsp; the delegate keeps that boundary clean.
+    private VstChainHandler? _vstChainHandler;
+
+    // Wave 6a entry points — Zeus.Server's PluginHost wiring flips the flag
+    // when a chain becomes available, and installs the handler delegate at
+    // process start. `internal` so they stay out of the IDspEngine surface;
+    // the host integration sits one layer up. Also exercised by
+    // Zeus.Dsp.Tests via InternalsVisibleTo to assert the bypass path is
+    // bit-identical to the seam-absent path.
     internal void SetVstChainEnabled(bool enabled) => _vstChainEnabled = enabled;
     internal bool VstChainEnabled => _vstChainEnabled;
+    internal void SetVstChainHandler(VstChainHandler? handler) => _vstChainHandler = handler;
+    internal VstChainHandler? VstChainHandler => _vstChainHandler;
 
     public WdspDspEngine(ILogger<WdspDspEngine>? logger = null)
     {
@@ -1992,27 +2003,28 @@ public sealed class WdspDspEngine : IDspEngine
             cfg.Enabled, cfg.PostEqEnabled, cfg.PreCompDb, cfg.PrePeqDb);
     }
 
-    // VST plugin-host seam (Phase 1). Both methods short-circuit on the
-    // disabled flag with a single volatile read — no allocation, no copy, no
-    // syscall — so the bypass path adds a virtual call and a boolean check
-    // to ProcessTxBlock / DspPipelineService.Tick. When _vstChainEnabled
-    // flips true (Phase 2 wiring lives in Zeus.Server), these methods will
-    // dispatch to the out-of-process PluginHostManager and route audio
-    // through the loaded VST chain. We deliberately do NOT take a dependency
-    // on Zeus.PluginHost here; the host integration sits one layer up so
+    // VST plugin-host seam. Both methods short-circuit on the disabled flag
+    // with a single volatile read — no allocation, no copy, no syscall — so
+    // the bypass path adds a virtual call and a boolean check to ProcessTxBlock
+    // / DspPipelineService.Tick. When the chain is enabled and a handler is
+    // installed, dispatch through the delegate (Zeus.Server's PluginHost
+    // wiring lives there). We deliberately do NOT take a dependency on
+    // Zeus.PluginHost here; the host integration sits one layer up so
     // Zeus.Dsp stays free of IPC / sandboxing concerns.
     public bool ProcessRxVstChain(Span<float> audio, int frames, int sampleRateHz)
     {
         if (!_vstChainEnabled) return false;
-        // TODO Phase 2: dispatch to PluginHostManager (out-of-process VST sidecar).
-        return false;
+        var handler = _vstChainHandler;
+        if (handler is null) return false;
+        return handler(audio, frames, sampleRateHz);
     }
 
-    public bool ProcessTxVstChain(Span<float> audio, int frames, int sampleRateHz)
+    public bool ProcessTxMicVstChain(Span<float> audio, int frames, int sampleRateHz)
     {
         if (!_vstChainEnabled) return false;
-        // TODO Phase 2: dispatch to PluginHostManager (out-of-process VST sidecar).
-        return false;
+        var handler = _vstChainHandler;
+        if (handler is null) return false;
+        return handler(audio, frames, sampleRateHz);
     }
 
     private DateTime _lastTxMeterLogUtc;
@@ -2045,31 +2057,27 @@ public sealed class WdspDspEngine : IDspEngine
         Span<float> iout = stackalloc float[outSize];
         Span<float> qout = stackalloc float[outSize];
 
+        // VST plugin-host seam — TX side, on the 48 kHz mono mic buffer
+        // BEFORE WDSP's fexchange2 chain. This placement keeps WDSP CFC last
+        // (after the plugin chain) so the operator's preferred final-stage
+        // compressor remains the gain-limiting authority. See
+        // docs/proposals/vst-host-phase2-wire.md "TX seam location".
+        // When the chain is disabled or no handler is installed, the seam
+        // short-circuits on a volatile-bool read and the buffer flows through
+        // bit-identical to the seam-absent code path. When the chain is
+        // enabled, the handler may mutate `iin` in place; downstream
+        // fexchange2 sees the post-plugin audio.
+        if (_vstChainEnabled)
+        {
+            // _txaInputRateHz is always 48 kHz (mic side) for both P1 and P2
+            // profiles; use it explicitly for clarity.
+            ProcessTxMicVstChain(iin, inSize, _txaInputRateHz);
+        }
+
         NativeMethods.fexchange2(txa, ref iin[0], ref qin[0], ref iout[0], ref qout[0], out int err);
         if (err != 0 && ++_txFexchangeErrLogged <= 8)
         {
             _log.LogWarning("wdsp.fexchange2 tx err={Err} (suppressed after 8 occurrences)", err);
-        }
-
-        // VST plugin-host seam — TX side, post-Leveler / pre-CFC per
-        // docs/proposals/vst-host.md. Phase 1: _vstChainEnabled is always
-        // false, ProcessTxVstChain returns false on the first volatile read,
-        // and the `iout` buffer flows through unchanged — bit-identical to
-        // the seam-absent code path. Phase 2 will split the WDSP TXA chain
-        // (Leveler emits a siphon tap, CFC consumes it) so this hook can
-        // route the inter-stage audio through the out-of-process plugin
-        // chain. The lock is acquired for Phase 2's sake (the eventual
-        // dispatch must serialize with OpenTxChannel / SetMox / TXA
-        // teardown); on Phase 1 it is uncontended and adds a single
-        // monitor-enter / -exit per block.
-        lock (_txaLock)
-        {
-            if (ProcessTxVstChain(iout, outSize, _txaOutputRateHz))
-            {
-                // Phase 2: chain was applied to `iout` in place. No further
-                // re-routing needed here — the existing IQ-out copy below
-                // picks up the modified samples.
-            }
         }
 
         for (int i = 0; i < outSize; i++)

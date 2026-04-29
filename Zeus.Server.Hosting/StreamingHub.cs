@@ -317,6 +317,23 @@ public sealed class StreamingHub
         }
     }
 
+    /// <summary>
+    /// Broadcast a small VST plugin-host event tag (utf-8 text). Used by
+    /// <see cref="VstHostHostedService"/> to nudge connected clients to
+    /// re-fetch <c>/api/plughost/state</c> or refresh a single slot. See
+    /// <see cref="VstHostEventFrame"/> for the wire format.
+    /// </summary>
+    public void BroadcastVstHostEvent(string ev)
+    {
+        if (_clients.IsEmpty) return;
+        var frame = new VstHostEventFrame(ev ?? string.Empty);
+        int total = frame.ByteLength;
+        var buf = new byte[total];
+        var writer = new FixedBufferWriter(buf, total);
+        frame.Serialize(writer);
+        foreach (var client in _clients.Values) client.TryEnqueue(buf);
+    }
+
     private sealed class ClientSession
     {
         public Guid Id { get; }

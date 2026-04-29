@@ -17,16 +17,17 @@ using Xunit;
 
 namespace Zeus.Dsp.Tests;
 
-// VST plugin-host seam — Phase 1 invariant: when the chain is bypassed
-// (the only Phase 1 state), the output must be byte-identical to the
-// seam-absent flow. The seam adds one virtual call and one volatile-bool
-// read; nothing in the audio buffer changes.
+// VST plugin-host seam — bit-identity invariant: when the chain is disabled
+// (master flag false) OR no handler is installed (Wave 6a default), the
+// output must be byte-identical to the seam-absent flow. The seam adds one
+// virtual call and one volatile-bool read; nothing in the audio buffer
+// changes.
 //
 // Test strategy
 // -------------
 // We exercise the seam at the IDspEngine surface directly — generate a
 // deterministic input buffer, hash it (SHA-256), invoke ProcessRxVstChain /
-// ProcessTxVstChain, hash the buffer again, and assert the digests match.
+// ProcessTxMicVstChain, hash the buffer again, and assert the digests match.
 // A non-bypassed implementation would mutate `audio` in place and the
 // hashes would diverge.
 //
@@ -39,17 +40,15 @@ namespace Zeus.Dsp.Tests;
 //   * WdspDspEngine — the production engine. Native libwdsp is NOT required
 //     for these tests because the seam methods short-circuit on the
 //     `_vstChainEnabled` volatile read before touching anything WDSP-y.
-//     We use the internal SetVstChainEnabled helper (exposed via
-//     InternalsVisibleTo) to confirm both states:
-//       - disabled  → returns false, buffer untouched (the Phase 1 default)
-//       - enabled   → still returns false in Phase 1 (TODO Phase 2:
-//         dispatch to PluginHostManager), buffer untouched.
+//     We use the internal SetVstChainEnabled / SetVstChainHandler helpers
+//     (exposed via InternalsVisibleTo) to assert all three states:
+//       - disabled, no handler         → returns false, buffer untouched
+//       - enabled, no handler          → returns false, buffer untouched
+//       - enabled, handler returns false → returns false, buffer untouched
 //
-// We deliberately do NOT exercise WdspDspEngine.ProcessTxBlock here — that
-// path requires libwdsp + an open TXA channel, which only the
-// WdspDspEngineTests collection's SkippableFact pattern can provide. The
-// bit-identity invariant we prove is specifically for the seam method
-// itself: when the chain is disabled, the seam is a no-op.
+// The renamed TX seam (ProcessTxMicVstChain) operates on the 48 kHz mono
+// mic buffer pre-fexchange2; the bit-identity test stays at the seam
+// method itself, which is identical in shape to the RX seam.
 public class VstSeamBypassBitIdentityTests
 {
     // 1024 samples of a deterministic linear sweep — one cycle from -1 to +1.
@@ -99,7 +98,7 @@ public class VstSeamBypassBitIdentityTests
     }
 
     [Fact]
-    public void SyntheticEngine_TxSeam_BypassIsBitIdentical()
+    public void SyntheticEngine_TxMicSeam_BypassIsBitIdentical()
     {
         using var engine = new SyntheticDspEngine();
 
@@ -110,7 +109,7 @@ public class VstSeamBypassBitIdentityTests
         byte[] baselineDigest = HashFloats(baseline);
 
         var withSeam = BuildDeterministicInput(frames);
-        bool processed = engine.ProcessTxVstChain(withSeam, frames, sampleRateHz);
+        bool processed = engine.ProcessTxMicVstChain(withSeam, frames, sampleRateHz);
         byte[] withSeamDigest = HashFloats(withSeam);
 
         Assert.False(processed);
@@ -128,8 +127,9 @@ public class VstSeamBypassBitIdentityTests
     public void WdspEngine_RxSeam_BypassIsBitIdentical_WhenChainDisabled()
     {
         using var engine = new WdspDspEngine();
-        // Default state — _vstChainEnabled is false (Phase 1 default).
+        // Default state — _vstChainEnabled is false (Wave 6a default).
         Assert.False(engine.VstChainEnabled);
+        Assert.Null(engine.VstChainHandler);
 
         const int frames = 1024;
         const int sampleRateHz = 48_000;
@@ -146,38 +146,38 @@ public class VstSeamBypassBitIdentityTests
     }
 
     [Fact]
-    public void WdspEngine_TxSeam_BypassIsBitIdentical_WhenChainDisabled()
+    public void WdspEngine_TxMicSeam_BypassIsBitIdentical_WhenChainDisabled()
     {
         using var engine = new WdspDspEngine();
         Assert.False(engine.VstChainEnabled);
 
-        // P2 profile sample rate per IDspEngine.ProcessTxVstChain doc.
+        // TX-mic seam runs at 48 kHz on the mono mic buffer pre-fexchange2.
+        // Both P1 and P2 profiles feed mic at 48 kHz.
         const int frames = 1024;
-        const int sampleRateHz = 192_000;
+        const int sampleRateHz = 48_000;
 
         var baseline = BuildDeterministicInput(frames);
         byte[] baselineDigest = HashFloats(baseline);
 
         var withSeam = BuildDeterministicInput(frames);
-        bool processed = engine.ProcessTxVstChain(withSeam, frames, sampleRateHz);
+        bool processed = engine.ProcessTxMicVstChain(withSeam, frames, sampleRateHz);
         byte[] withSeamDigest = HashFloats(withSeam);
 
         Assert.False(processed);
         Assert.Equal(baselineDigest, withSeamDigest);
     }
 
-    // Phase 2 wiring will set the flag to true; Phase 1 still returns false
-    // (the host project hasn't shipped) and continues to leave the buffer
-    // untouched. This nails down the contract: a "true" flag value is NOT a
-    // licence for the engine to mutate the buffer until the host actually
-    // wires up — TODO Phase 2 will replace these no-op returns with real
-    // dispatch.
+    // Wave 6a contract: even when the master flag is enabled, if no handler
+    // is installed the seam still returns false and leaves the buffer
+    // untouched. This is the safety net for "operator enabled the chain
+    // before the host wired up" — the bypass path holds.
     [Fact]
-    public void WdspEngine_RxSeam_StillBypassesEvenWhenFlagFlipped_InPhase1()
+    public void WdspEngine_RxSeam_BypassesWhenFlagOnButNoHandler()
     {
         using var engine = new WdspDspEngine();
         engine.SetVstChainEnabled(true);
         Assert.True(engine.VstChainEnabled);
+        Assert.Null(engine.VstChainHandler);
 
         const int frames = 1024;
         const int sampleRateHz = 48_000;
@@ -189,26 +189,69 @@ public class VstSeamBypassBitIdentityTests
         bool processed = engine.ProcessRxVstChain(withSeam, frames, sampleRateHz);
         byte[] withSeamDigest = HashFloats(withSeam);
 
-        // Phase 1: even with the flag flipped, the TODO-stubbed dispatch
-        // returns false and leaves the buffer untouched.
         Assert.False(processed);
         Assert.Equal(baselineDigest, withSeamDigest);
     }
 
     [Fact]
-    public void WdspEngine_TxSeam_StillBypassesEvenWhenFlagFlipped_InPhase1()
+    public void WdspEngine_TxMicSeam_BypassesWhenFlagOnButNoHandler()
     {
         using var engine = new WdspDspEngine();
         engine.SetVstChainEnabled(true);
 
         const int frames = 1024;
-        const int sampleRateHz = 192_000;
+        const int sampleRateHz = 48_000;
 
         var baseline = BuildDeterministicInput(frames);
         byte[] baselineDigest = HashFloats(baseline);
 
         var withSeam = BuildDeterministicInput(frames);
-        bool processed = engine.ProcessTxVstChain(withSeam, frames, sampleRateHz);
+        bool processed = engine.ProcessTxMicVstChain(withSeam, frames, sampleRateHz);
+        byte[] withSeamDigest = HashFloats(withSeam);
+
+        Assert.False(processed);
+        Assert.Equal(baselineDigest, withSeamDigest);
+    }
+
+    // Wave 6a contract: when the handler returns false (host not running,
+    // ring full, or block size mismatch), the engine MUST NOT touch the
+    // buffer. The handler signature lets it short-circuit without copying.
+    [Fact]
+    public void WdspEngine_RxSeam_BitIdentical_WhenHandlerReturnsFalse()
+    {
+        using var engine = new WdspDspEngine();
+        engine.SetVstChainEnabled(true);
+        engine.SetVstChainHandler((_, _, _) => false);
+
+        const int frames = 1024;
+        const int sampleRateHz = 48_000;
+
+        var baseline = BuildDeterministicInput(frames);
+        byte[] baselineDigest = HashFloats(baseline);
+
+        var withSeam = BuildDeterministicInput(frames);
+        bool processed = engine.ProcessRxVstChain(withSeam, frames, sampleRateHz);
+        byte[] withSeamDigest = HashFloats(withSeam);
+
+        Assert.False(processed);
+        Assert.Equal(baselineDigest, withSeamDigest);
+    }
+
+    [Fact]
+    public void WdspEngine_TxMicSeam_BitIdentical_WhenHandlerReturnsFalse()
+    {
+        using var engine = new WdspDspEngine();
+        engine.SetVstChainEnabled(true);
+        engine.SetVstChainHandler((_, _, _) => false);
+
+        const int frames = 1024;
+        const int sampleRateHz = 48_000;
+
+        var baseline = BuildDeterministicInput(frames);
+        byte[] baselineDigest = HashFloats(baseline);
+
+        var withSeam = BuildDeterministicInput(frames);
+        bool processed = engine.ProcessTxMicVstChain(withSeam, frames, sampleRateHz);
         byte[] withSeamDigest = HashFloats(withSeam);
 
         Assert.False(processed);

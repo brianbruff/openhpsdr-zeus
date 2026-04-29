@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Zeus.Contracts;
 using Zeus.Dsp.Wdsp;
+using Zeus.PluginHost;
 using Zeus.Protocol1;
 using Zeus.Protocol1.Discovery;
 using Zeus.Server.Tci;
@@ -191,6 +192,17 @@ public static class ZeusHost
         // requests; hosted-service registration runs ExecuteAsync.
         builder.Services.AddSingleton<RotctldService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<RotctldService>());
+
+        // VST plugin-host (Wave 6a). PluginHostManager owns the sidecar
+        // lifecycle; VstHostHostedService bridges it to the WDSP TX-mic seam,
+        // LiteDB persistence, REST surface (/api/plughost/*), and the
+        // SignalR-style VstHostEvent broadcasts. Sidecar is launched lazily
+        // — VstHostHostedService.StartAsync only starts it when the persisted
+        // master flag is true.
+        builder.Services.AddZeusPluginHost();
+        builder.Services.AddSingleton<IVstChainPersistence, LiteDbVstChainPersistence>();
+        builder.Services.AddSingleton<VstHostHostedService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<VstHostHostedService>());
 
         // TCI (Transceiver Control Interface) — ExpertSDR3-compatible WebSocket server
         // for remote control by loggers (Log4OM, N1MM+), digital-mode apps (JTDX, WSJT-X),

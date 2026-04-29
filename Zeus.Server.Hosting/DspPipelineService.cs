@@ -255,6 +255,21 @@ public class DspPipelineService : BackgroundService
         get { lock (_engineLock) return _engine; }
     }
 
+    /// <summary>Raised after the engine instance is swapped (Synthetic ↔ WDSP).
+    /// VstHostHostedService subscribes and re-installs its chain handler on
+    /// the new engine. Subscribers receive the new <see cref="IDspEngine"/>
+    /// (never null).</summary>
+    public event Action<IDspEngine>? EngineChanged;
+
+    private void RaiseEngineChanged(IDspEngine engine)
+    {
+        try { EngineChanged?.Invoke(engine); }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "dsp.pipeline EngineChanged subscriber threw");
+        }
+    }
+
     /// <summary>Snapshot of the active Protocol2 client, or null on P1 / no
     /// connection. Exposed for the PS auto-attenuate service which needs to
     /// call <c>SetTxAttenuationDb</c> on the same client this pipeline is
@@ -274,6 +289,7 @@ public class DspPipelineService : BackgroundService
             _sampleRateHz = SyntheticSampleRateHz;
         }
         _log.LogInformation("dsp.pipeline engine=synthetic channel={Id}", channelId);
+        RaiseEngineChanged(engine);
     }
 
     private void OnRadioConnected(IProtocol1Client client)
@@ -301,6 +317,7 @@ public class DspPipelineService : BackgroundService
 
         TeardownEngine(old, oldChannel);
         _log.LogInformation("dsp.pipeline engine=wdsp channel={Id} rate={Rate}", channelId, rate);
+        RaiseEngineChanged(wdsp);
 
         StartIqPump(client);
     }
@@ -326,6 +343,7 @@ public class DspPipelineService : BackgroundService
 
         TeardownEngine(old, oldChannel);
         _log.LogInformation("dsp.pipeline engine=synthetic channel={Id}", channelId);
+        RaiseEngineChanged(synth);
     }
 
     private void OnRadioStateChanged(StateDto s)
@@ -786,6 +804,7 @@ public class DspPipelineService : BackgroundService
         }
         TeardownEngine(old, oldChannel);
         _log.LogInformation("dsp.pipeline p2 engine={Engine} rate={Rate}", newEngine.GetType().Name, rateHz);
+        RaiseEngineChanged(newEngine);
 
         _p2Client = client;
         // Sync the change-detect cache with the values we just seeded so the
@@ -900,6 +919,7 @@ public class DspPipelineService : BackgroundService
             _sampleRateHz = SyntheticSampleRateHz;
         }
         TeardownEngine(old, oldChannel);
+        RaiseEngineChanged(synth);
         // Mark PS state for forced re-push on the next ConnectP2Async. The
         // change-detect cache (`_appliedPs*`) is preserved across disconnect
         // — by design, so a reconnect with unchanged operator state doesn't
@@ -1070,12 +1090,12 @@ public class DspPipelineService : BackgroundService
         if (audioSampleCount > 0)
         {
             // VST plugin-host seam — RX side, between WDSP audio drain and
-            // hub broadcast (docs/proposals/vst-host.md). Phase 1: the chain
-            // is always disabled inside the engine, so ProcessRxVstChain
-            // short-circuits on a volatile-bool read and returns false —
-            // `audioBuf` is bit-identical to the seam-absent flow. Phase 2
-            // wires the out-of-process VST sidecar via Zeus.PluginHost (DI
-            // in Zeus.Server) and routes audio through the loaded chain.
+            // hub broadcast (docs/proposals/vst-host.md). When the chain is
+            // disabled inside the engine, ProcessRxVstChain short-circuits on
+            // a volatile-bool read and returns false — `audioBuf` is
+            // bit-identical to the seam-absent flow. When the chain is
+            // enabled, the engine dispatches through the VstChainHandler
+            // delegate that VstHostHostedService installed at startup.
             engine.ProcessRxVstChain(
                 audioBuf.AsSpan(0, audioSampleCount), audioSampleCount, AudioOutputRateHz);
 

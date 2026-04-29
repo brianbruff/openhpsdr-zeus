@@ -930,6 +930,266 @@ public static class ZeusEndpoints
             await hub.AttachClientAsync(ws, ctx.RequestAborted);
         });
 
+        // ----------------------------------------------------------------
+        //  VST plugin host (Wave 6a — backend only; Wave 6b ships UI)
+        // ----------------------------------------------------------------
+        // All endpoints group under /api/plughost. Async ones use the
+        // request-aborted token so a navigating browser stops waiting.
+        // 8 slots, 0..7; bad slot → 400. Sidecar lifecycle is owned by
+        // VstHostHostedService — REST handlers never poke PluginHostManager
+        // directly so persistence and SignalR pushes stay coherent.
+        app.MapPost("/api/plughost/master", async (
+            VstHostMasterRequest req, VstHostHostedService svc, HttpContext ctx) =>
+        {
+            try
+            {
+                await svc.SetMasterEnabledAsync(req.Enabled, ctx.RequestAborted);
+                return Results.Ok(svc.GetState());
+            }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "api.plughost.master set failed enabled={En}", req.Enabled);
+                return Results.Problem(detail: ex.Message, statusCode: 409);
+            }
+        });
+
+        app.MapGet("/api/plughost/state",
+            (VstHostHostedService svc) => Results.Ok(svc.GetState()));
+
+        app.MapGet("/api/plughost/catalog", async (
+            bool? rescan,
+            Zeus.PluginHost.Discovery.IPluginScanner scanner,
+            VstHostHostedService svc,
+            HttpContext ctx) =>
+        {
+            // Default-paths-only unless rescan=true (then include custom).
+            var roots = new List<string>(
+                Zeus.PluginHost.Discovery.DefaultPluginPaths.ForCurrentPlatform());
+            if (rescan == true)
+            {
+                foreach (var p in svc.CustomSearchPaths)
+                {
+                    if (Directory.Exists(p) && !roots.Contains(p)) roots.Add(p);
+                }
+            }
+            var manifests = await scanner.ScanAsync(roots, ctx.RequestAborted);
+            var dtos = manifests.Select(m => new
+            {
+                filePath = m.FilePath,
+                displayName = m.DisplayName,
+                format = m.Format.ToString(),
+                platform = m.Platform.ToString(),
+                bitness = m.Bitness.ToString(),
+                bundlePath = m.BundlePath,
+                warnings = m.ScanWarnings,
+            });
+            return Results.Ok(new { plugins = dtos });
+        });
+
+        app.MapGet("/api/plughost/searchPaths",
+            (VstHostHostedService svc) =>
+                Results.Ok(new { paths = svc.CustomSearchPaths }));
+
+        app.MapPost("/api/plughost/searchPaths", (
+            VstHostSearchPathRequest req, VstHostHostedService svc) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.Path))
+                return Results.BadRequest(new { error = "path is required" });
+            if (!Directory.Exists(req.Path))
+                return Results.BadRequest(new { error = "directory does not exist" });
+            var added = svc.AddCustomSearchPath(req.Path);
+            return Results.Ok(new { added, paths = svc.CustomSearchPaths });
+        });
+
+        // DELETE doesn't allow inferred body params on minimal API; the path
+        // travels as a query string (?path=...) so the URL-encoded path is
+        // self-contained.
+        app.MapDelete("/api/plughost/searchPaths", (
+            string? path, VstHostHostedService svc) =>
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return Results.BadRequest(new { error = "path is required" });
+            var removed = svc.RemoveCustomSearchPath(path);
+            return Results.Ok(new { removed, paths = svc.CustomSearchPaths });
+        });
+
+        app.MapGet("/api/plughost/slots/{idx:int}", (
+            int idx, VstHostHostedService svc, Zeus.PluginHost.IPluginHost host) =>
+        {
+            if (idx < 0 || idx >= host.MaxChainSlots)
+                return Results.BadRequest(new { error = "slot index out of range" });
+            var slot = host.Slots[idx];
+            var path = svc.GetSlotPath(idx);
+            var paramDtos = slot.Parameters.Select(p => new
+            {
+                id = p.Id,
+                name = p.Name,
+                units = p.Units,
+                defaultValue = p.DefaultValue,
+                currentValue = p.CurrentValue,
+                stepCount = p.StepCount,
+                flags = (byte)p.Flags,
+            });
+            return Results.Ok(new
+            {
+                index = slot.Index,
+                plugin = slot.Plugin is null ? null : new
+                {
+                    name = slot.Plugin.Name,
+                    vendor = slot.Plugin.Vendor,
+                    version = slot.Plugin.Version,
+                    path = path,
+                },
+                bypass = slot.Bypass,
+                parameters = paramDtos,
+            });
+        });
+
+        app.MapPost("/api/plughost/slots/{idx:int}/load", async (
+            int idx, VstHostSlotLoadRequest req,
+            VstHostHostedService svc, Zeus.PluginHost.IPluginHost host,
+            HttpContext ctx) =>
+        {
+            if (idx < 0 || idx >= host.MaxChainSlots)
+                return Results.BadRequest(new { error = "slot index out of range" });
+            if (string.IsNullOrWhiteSpace(req.Path))
+                return Results.BadRequest(new { error = "path is required" });
+            try
+            {
+                var outcome = await svc.LoadSlotAsync(idx, req.Path, ctx.RequestAborted);
+                if (!outcome.Ok)
+                {
+                    return Results.Problem(
+                        detail: outcome.Error ?? "load failed",
+                        statusCode: 409);
+                }
+                return Results.Ok(new
+                {
+                    index = idx,
+                    plugin = outcome.Info is null ? null : new
+                    {
+                        name = outcome.Info.Name,
+                        vendor = outcome.Info.Vendor,
+                        version = outcome.Info.Version,
+                        path = req.Path,
+                    },
+                });
+            }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "api.plughost.slots.load slot={Slot}", idx);
+                return Results.Problem(detail: ex.Message, statusCode: 500);
+            }
+        });
+
+        app.MapPost("/api/plughost/slots/{idx:int}/unload", async (
+            int idx, VstHostHostedService svc, Zeus.PluginHost.IPluginHost host,
+            HttpContext ctx) =>
+        {
+            if (idx < 0 || idx >= host.MaxChainSlots)
+                return Results.BadRequest(new { error = "slot index out of range" });
+            try
+            {
+                await svc.UnloadSlotAsync(idx, ctx.RequestAborted);
+                return Results.Ok(new { index = idx });
+            }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "api.plughost.slots.unload slot={Slot}", idx);
+                return Results.Problem(detail: ex.Message, statusCode: 500);
+            }
+        });
+
+        app.MapPost("/api/plughost/slots/{idx:int}/bypass", async (
+            int idx, VstHostBypassRequest req,
+            VstHostHostedService svc, Zeus.PluginHost.IPluginHost host,
+            HttpContext ctx) =>
+        {
+            if (idx < 0 || idx >= host.MaxChainSlots)
+                return Results.BadRequest(new { error = "slot index out of range" });
+            try
+            {
+                await svc.SetSlotBypassAsync(idx, req.Bypass, ctx.RequestAborted);
+                return Results.Ok(new { index = idx, bypass = req.Bypass });
+            }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "api.plughost.slots.bypass slot={Slot}", idx);
+                return Results.Problem(detail: ex.Message, statusCode: 500);
+            }
+        });
+
+        app.MapGet("/api/plughost/slots/{idx:int}/parameters", async (
+            int idx, VstHostHostedService svc, Zeus.PluginHost.IPluginHost host,
+            HttpContext ctx) =>
+        {
+            if (idx < 0 || idx >= host.MaxChainSlots)
+                return Results.BadRequest(new { error = "slot index out of range" });
+            var list = await svc.ListSlotParametersAsync(idx, ctx.RequestAborted);
+            var dtos = list.Select(p => new
+            {
+                id = p.Id,
+                name = p.Name,
+                units = p.Units,
+                defaultValue = p.DefaultValue,
+                currentValue = p.CurrentValue,
+                stepCount = p.StepCount,
+                flags = (byte)p.Flags,
+            });
+            return Results.Ok(new { parameters = dtos });
+        });
+
+        app.MapPost("/api/plughost/slots/{idx:int}/parameters/{paramId:long}", async (
+            int idx, long paramId, VstHostParameterRequest req,
+            VstHostHostedService svc, Zeus.PluginHost.IPluginHost host,
+            HttpContext ctx) =>
+        {
+            if (idx < 0 || idx >= host.MaxChainSlots)
+                return Results.BadRequest(new { error = "slot index out of range" });
+            if (paramId < 0 || paramId > uint.MaxValue)
+                return Results.BadRequest(new { error = "paramId out of range" });
+            if (req.Value < 0.0 || req.Value > 1.0)
+                return Results.BadRequest(new { error = "value must be in [0,1]" });
+            try
+            {
+                await svc.SetSlotParameterAsync(idx, (uint)paramId, req.Value,
+                    ctx.RequestAborted);
+                return Results.Ok(new { index = idx, paramId, value = req.Value });
+            }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex,
+                    "api.plughost.slots.parameter slot={Slot} param={Id}", idx, paramId);
+                return Results.Problem(detail: ex.Message, statusCode: 500);
+            }
+        });
+
+        app.MapPost("/api/plughost/slots/{idx:int}/editor/show", async (
+            int idx, VstHostHostedService svc, Zeus.PluginHost.IPluginHost host,
+            HttpContext ctx) =>
+        {
+            if (idx < 0 || idx >= host.MaxChainSlots)
+                return Results.BadRequest(new { error = "slot index out of range" });
+            var outcome = await svc.ShowSlotEditorAsync(idx, ctx.RequestAborted);
+            if (!outcome.Ok)
+            {
+                return Results.Problem(
+                    detail: outcome.Error ?? "editor not available",
+                    statusCode: 409);
+            }
+            return Results.Ok(new { index = idx, width = outcome.Width, height = outcome.Height });
+        });
+
+        app.MapPost("/api/plughost/slots/{idx:int}/editor/hide", async (
+            int idx, VstHostHostedService svc, Zeus.PluginHost.IPluginHost host,
+            HttpContext ctx) =>
+        {
+            if (idx < 0 || idx >= host.MaxChainSlots)
+                return Results.BadRequest(new { error = "slot index out of range" });
+            var closed = await svc.HideSlotEditorAsync(idx, ctx.RequestAborted);
+            return Results.Ok(new { index = idx, closed });
+        });
+
         return app;
     }
 

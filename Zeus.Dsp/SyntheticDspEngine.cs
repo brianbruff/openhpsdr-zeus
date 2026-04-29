@@ -193,7 +193,7 @@ public sealed class SyntheticDspEngine : IDspEngine
     // never will. Both methods return false unconditionally so callers take
     // the bypass path and use the original buffer with zero overhead.
     public bool ProcessRxVstChain(Span<float> audio, int frames, int sampleRateHz) => false;
-    public bool ProcessTxVstChain(Span<float> audio, int frames, int sampleRateHz) => false;
+    public bool ProcessTxMicVstChain(Span<float> audio, int frames, int sampleRateHz) => false;
 
     // Synthetic has no TX analyzer; the TX panadapter stays on the RX trace.
     // Returning false tells DspPipelineService.Tick to leave the display alone

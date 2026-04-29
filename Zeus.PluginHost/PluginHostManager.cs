@@ -261,6 +261,12 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
                 _runCts = new CancellationTokenSource();
                 _backoffStep = 0;
             }
+            // Drop any leftover re-chunking state from a previous sidecar
+            // run. Held under _txGate (uncontended at start) so concurrent
+            // TryProcess calls observe a coherent reset.
+            await _txGate.WaitAsync(ct).ConfigureAwait(false);
+            try { ResetRechunkRings(); }
+            finally { _txGate.Release(); }
 
             _log.LogInformation(
                 $"PluginHostManager: handshake OK pid={proc.ProcessId} suffix={suffix}");
@@ -425,11 +431,43 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
         }
     }
 
+    // Re-chunking buffers. The sidecar wire format is fixed at 256 frames
+    // per block (Phase2Frames), but WDSP TX feeds blocks of 1024 (P1 mic) or
+    // 512 (P2 mic). We accumulate caller input into _inRing, drain it in
+    // 256-frame batches through the sidecar round-trip, and accumulate
+    // sidecar responses into _outRing for the caller to drain. Both rings
+    // are owned by _txGate-protected sections so SPSC discipline on the
+    // shared-memory rings is preserved.
+    //
+    // Initial-fill latency: when the rings are empty, the first call may
+    // produce fewer output samples than requested (the sidecar's first
+    // 256-frame response can't satisfy a 1024-frame request) and the
+    // method returns false → caller treats as bypass for that block. After
+    // the first round-trip the output ring has 256 frames; subsequent
+    // calls fill from that buffered set + new round-trips. Steady-state
+    // latency is at most 255 samples at 48 kHz (~5.3 ms) — acceptable for
+    // TX since the operator never monitors through the same path.
+    //
+    // Sized at 4096 floats each (16 KiB) — comfortably larger than any
+    // expected caller block (P1 1024) plus 256 of overhead.
+    private const int RechunkRingCapacity = 4096;
+    private readonly float[] _inRing = new float[RechunkRingCapacity];
+    private readonly float[] _outRing = new float[RechunkRingCapacity];
+    private int _inRingCount;   // logical length, samples [0, _inRingCount) live
+    private int _outRingCount;  // same
+
+    /// <summary>Maximum block size accepted by <see cref="TryProcess"/>.
+    /// Blocks larger than this are rejected to keep the re-chunking ring
+    /// bounded. WDSP's TX block sizes (P1=1024, P2=512) are well under
+    /// this limit.</summary>
+    public const int MaxFramesPerCall = 2048;
+
     /// <inheritdoc />
-    public unsafe bool TryProcess(ReadOnlySpan<float> input, Span<float> output, int frames)
+    public bool TryProcess(ReadOnlySpan<float> input, Span<float> output, int frames)
     {
         if (_disposed) return false;
-        if (frames != (int)Phase2Frames) return false;
+        if (frames <= 0) return false;
+        if (frames > MaxFramesPerCall) return false;
         if (input.Length < frames || output.Length < frames) return false;
 
         // Snapshot the IPC handles under the lock; we operate on them
@@ -452,49 +490,126 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
             return false;
         }
 
-        // Single-block round-trip — serialize so SPSC discipline holds.
+        // Serialize so SPSC discipline on the shared-memory rings holds AND
+        // the re-chunking rings stay coherent across overlapped callers.
         if (!_txGate.Wait(0))
         {
             return false; // another caller is mid-flight
         }
         try
         {
-            BlockHeader* slot = h2s.Acquire();
-            if (slot == null) return false; // ring full
+            // Fast path: caller's block is exactly the sidecar block size
+            // AND nothing is currently buffered. Skip the rings entirely.
+            if (frames == (int)Phase2Frames && _inRingCount == 0 && _outRingCount == 0)
+            {
+                return TryProcessOneBlock(h2s, s2h, h2sSemHandle, s2hSemHandle,
+                    input, output, frames);
+            }
 
-            slot->Seq        = (ulong)Environment.TickCount64;
-            slot->Frames     = (uint)frames;
-            slot->Channels   = Phase2Channels;
-            slot->SampleRate = Phase2SampleRate;
-            slot->Flags      = (uint)BlockFlags.None;
-            for (int i = 0; i < 40; i++) slot->Reserved[i] = 0;
-
-            float* payload = ShmRing.PayloadOf(slot);
-            for (int i = 0; i < frames; i++) payload[i] = input[i];
-
-            h2s.Publish(slot);
-            h2sSemHandle.Post();
-
-            // Wait for the sidecar's response with the Phase 2 budget. If
-            // the sidecar is dead or stuck, the timeout fires and the
-            // caller falls back to the bypass path.
-            if (!s2hSemHandle.TimedWait(TimeSpan.FromMilliseconds(50)))
+            // Refuse if the input ring would overflow. Caller treats as
+            // bypass; we don't drop intermediate state because that would
+            // shift the chain's stream alignment.
+            if (_inRingCount + frames > RechunkRingCapacity)
             {
                 return false;
             }
 
-            BlockHeader* response = s2h.Read();
-            if (response == null) return false; // spurious wake
+            // Append caller input to the in-ring.
+            input.Slice(0, frames).CopyTo(_inRing.AsSpan(_inRingCount, frames));
+            _inRingCount += frames;
 
-            float* respPayload = ShmRing.PayloadOf(response);
-            for (int i = 0; i < frames; i++) output[i] = respPayload[i];
-            s2h.Release(response);
+            // Drain in 256-frame batches while we have a full block AND the
+            // output ring has room. Rings are sized for ~16 batches each so
+            // a single 1024-sample call (4 batches) never trips this guard.
+            int batch = (int)Phase2Frames;
+            Span<float> batchOut = stackalloc float[(int)Phase2Frames];
+            while (_inRingCount >= batch && _outRingCount + batch <= RechunkRingCapacity)
+            {
+                bool ok = TryProcessOneBlock(h2s, s2h, h2sSemHandle, s2hSemHandle,
+                    _inRing.AsSpan(0, batch), batchOut, batch);
+                if (!ok)
+                {
+                    // Sidecar didn't respond on this batch. Drop the input
+                    // we just consumed (otherwise the next call would
+                    // re-send it, and a stuck sidecar would stay stuck).
+                    Array.Copy(_inRing, batch, _inRing, 0, _inRingCount - batch);
+                    _inRingCount -= batch;
+                    return false;
+                }
+                // Compact in-ring (consumed `batch` from the head).
+                Array.Copy(_inRing, batch, _inRing, 0, _inRingCount - batch);
+                _inRingCount -= batch;
+                // Append batch output.
+                batchOut.CopyTo(_outRing.AsSpan(_outRingCount, batch));
+                _outRingCount += batch;
+            }
+
+            // Do we have enough output to satisfy the caller?
+            if (_outRingCount < frames)
+            {
+                return false; // priming — caller falls back to bypass
+            }
+
+            // Pop `frames` from out-ring head into caller output.
+            _outRing.AsSpan(0, frames).CopyTo(output);
+            Array.Copy(_outRing, frames, _outRing, 0, _outRingCount - frames);
+            _outRingCount -= frames;
             return true;
         }
         finally
         {
             _txGate.Release();
         }
+    }
+
+    // One sidecar round-trip at the wire-fixed Phase2Frames size. Caller
+    // owns _txGate. Returns false on ring-full, timeout, or spurious wake.
+    private unsafe bool TryProcessOneBlock(
+        ShmRing h2s, ShmRing s2h,
+        Wakeup h2sSemHandle, Wakeup s2hSemHandle,
+        ReadOnlySpan<float> input, Span<float> output, int frames)
+    {
+        BlockHeader* slot = h2s.Acquire();
+        if (slot == null) return false; // ring full
+
+        slot->Seq        = (ulong)Environment.TickCount64;
+        slot->Frames     = (uint)frames;
+        slot->Channels   = Phase2Channels;
+        slot->SampleRate = Phase2SampleRate;
+        slot->Flags      = (uint)BlockFlags.None;
+        for (int i = 0; i < 40; i++) slot->Reserved[i] = 0;
+
+        float* payload = ShmRing.PayloadOf(slot);
+        for (int i = 0; i < frames; i++) payload[i] = input[i];
+
+        h2s.Publish(slot);
+        h2sSemHandle.Post();
+
+        // Wait for the sidecar's response with the Phase 2 budget. If the
+        // sidecar is dead or stuck, the timeout fires and the caller falls
+        // back to the bypass path.
+        if (!s2hSemHandle.TimedWait(TimeSpan.FromMilliseconds(50)))
+        {
+            return false;
+        }
+
+        BlockHeader* response = s2h.Read();
+        if (response == null) return false; // spurious wake
+
+        float* respPayload = ShmRing.PayloadOf(response);
+        for (int i = 0; i < frames; i++) output[i] = respPayload[i];
+        s2h.Release(response);
+        return true;
+    }
+
+    // Reset the re-chunking state when the sidecar comes up or goes down,
+    // so a stale chunk from a previous run doesn't leak into the new one.
+    private void ResetRechunkRings()
+    {
+        // Caller owns _txGate; we only zero the counts (no need to clear the
+        // backing arrays — only the [0, count) prefix is read).
+        _inRingCount = 0;
+        _outRingCount = 0;
     }
 
     /// <inheritdoc />
@@ -1100,6 +1215,23 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
                     Parameters: Array.Empty<PluginParameter>());
             }
             _chainEnabled = false;
+        }
+
+        // Drop the re-chunking buffers — any in-flight stream alignment is
+        // moot now. Best-effort lock acquisition: a concurrent TryProcess
+        // may still be holding _txGate, in which case it'll observe the
+        // (newly-false) IsRunning state and abort harmlessly. We reset
+        // unconditionally to keep the next-launch cycle clean.
+        if (_txGate.Wait(0))
+        {
+            try { ResetRechunkRings(); }
+            finally { _txGate.Release(); }
+        }
+        else
+        {
+            // Tx gate held by a TryProcess racing the exit — that path will
+            // bail out on its own IsRunning check; the next StartAsync
+            // resets the rings under the gate.
         }
 
         // Bump backoff hint for any caller that wants to space restarts.

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Allow cleartext HTTP to RFC1918 / link-local addresses so the WebView can
+  reach a LAN-side Zeus.Server. Public hosts still require HTTPS.
+  Capacitor itself loads from http://localhost via androidScheme=http; it's
+  whitelisted explicitly.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- Capacitor's webview origin -->
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain> <!-- Android emulator host loopback -->
+
+        <!-- RFC1918 private ranges -->
+        <domain includeSubdomains="true">10.0.0.0/8</domain>
+        <domain includeSubdomains="true">172.16.0.0/12</domain>
+        <domain includeSubdomains="true">192.168.0.0/16</domain>
+
+        <!-- Link-local IPv4 -->
+        <domain includeSubdomains="true">169.254.0.0/16</domain>
+
+        <!-- mDNS .local -->
+        <domain includeSubdomains="true">local</domain>
+    </domain-config>
+</network-security-config>

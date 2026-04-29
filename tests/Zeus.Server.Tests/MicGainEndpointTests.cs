@@ -86,34 +86,49 @@ public class MicGainEndpointTests : IClassFixture<MicGainEndpointTests.Factory>
     }
 
     [Fact]
-    public async Task Post20db_SetsLinearGainOf10()
+    public async Task PostPlus10db_SetsLinearGainOfRoughly3point16()
     {
         _factory.TestEngine.GainCalls.Clear();
         using var client = _factory.CreateClient();
 
-        var resp = await client.PostAsJsonAsync("/api/mic-gain", new { db = 20 });
+        var resp = await client.PostAsJsonAsync("/api/mic-gain", new { db = 10 });
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
 
         var call = Assert.Single(_factory.TestEngine.GainCalls);
-        Assert.Equal(10.0, call, precision: 6);
+        Assert.Equal(Math.Pow(10.0, 0.5), call, precision: 6);
     }
 
     [Fact]
-    public async Task PostOutOfRange_ClampsTo0And20()
+    public async Task PostMinus20db_AttenuatesByLinearGainOfRoughly0point1()
     {
         _factory.TestEngine.GainCalls.Clear();
         using var client = _factory.CreateClient();
 
-        // db=-5 clamps to 0 → gain 1.0
+        // -20 dB → linear gain 0.1 — verifies the negative half of the range
+        // actually attenuates, not just clamps to 0 / unity.
+        var resp = await client.PostAsJsonAsync("/api/mic-gain", new { db = -20 });
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+
+        var call = Assert.Single(_factory.TestEngine.GainCalls);
+        Assert.Equal(0.1, call, precision: 6);
+    }
+
+    [Fact]
+    public async Task PostOutOfRange_ClampsToMinus40AndPlus10()
+    {
+        _factory.TestEngine.GainCalls.Clear();
+        using var client = _factory.CreateClient();
+
+        // db=-100 clamps to -40 → gain 10^(-2) = 0.01
         Assert.Equal(HttpStatusCode.OK,
-            (await client.PostAsJsonAsync("/api/mic-gain", new { db = -5 })).StatusCode);
-        // db=50 clamps to 20 → gain 10.0
+            (await client.PostAsJsonAsync("/api/mic-gain", new { db = -100 })).StatusCode);
+        // db=50 clamps to +10 → gain 10^(0.5) ≈ 3.1623
         Assert.Equal(HttpStatusCode.OK,
             (await client.PostAsJsonAsync("/api/mic-gain", new { db = 50 })).StatusCode);
 
         Assert.Collection(_factory.TestEngine.GainCalls,
-            v => Assert.Equal(1.0, v, precision: 6),
-            v => Assert.Equal(10.0, v, precision: 6));
+            v => Assert.Equal(0.01, v, precision: 6),
+            v => Assert.Equal(Math.Pow(10.0, 0.5), v, precision: 6));
     }
 
     public sealed class Factory : WebApplicationFactory<Program>

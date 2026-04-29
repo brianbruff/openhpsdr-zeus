@@ -594,6 +594,39 @@ public sealed class TciSession : IDisposable
                     HandleTxProfilesEx(args);
                     break;
 
+                // --- VFO lock / swap / RX2 enable / TX filter band ---
+                case "vfo_lock":
+                    HandleVfoLock(args);
+                    break;
+                case "vfo_swap_ex":
+                    HandleVfoSwapEx(args);
+                    break;
+                case "rx_enable":
+                    HandleRxEnable(args);
+                    break;
+                case "tx_filter_band_ex":
+                    HandleTxFilterBandEx(args);
+                    break;
+
+                // --- NR with level (spec §5.4 rx_nr_enable_ex:rx,bool,level) ---
+                case "rx_nr_enable":
+                case "rx_nr_enable_ex":
+                    HandleRxNrEnableEx(args);
+                    break;
+
+                // --- Antenna (no RadioService API yet; ack + log) ---
+                case "rx_antenna":
+                    HandleRxAntenna(args);
+                    break;
+
+                // --- Sensor stream gating (spec §5.6) ---
+                case "tx_sensors_enable":
+                    HandleTxSensorsEnable(args);
+                    break;
+                case "rx_sensors_enable":
+                    HandleRxSensorsEnable(args);
+                    break;
+
                 // --- CAT pass-through (spec §5.9: PS0/PS1/ZZTX0) ---
                 case "run_cat_ex":
                     HandleRunCatEx(args);
@@ -628,7 +661,9 @@ public sealed class TciSession : IDisposable
         }
         else if (args.Length >= 3 && TciProtocol.TryParseLong(args[2], out long hz))
         {
-            // Set VFO
+            // Spec §8.5: vfo:trx,vfo,0 is invalid — never set a VFO to 0 Hz.
+            // Reject silently rather than driving the radio to an out-of-range freq.
+            if (hz <= 0) return;
             _radio.SetVfo(hz);
             // Don't echo back immediately — the StateChanged event will broadcast it
         }
@@ -1167,11 +1202,167 @@ public sealed class TciSession : IDisposable
     private void HandleRunCatEx(string[] args)
     {
         // run_cat_ex:<KENWOOD_CMD>  — Kenwood CAT pass-through (spec §5.9).
-        // Common uses: PS1 (power on), PS0 (power off), ZZTX0 (force-unkey).
-        // Zeus doesn't have a CAT engine, so we log and ack; the client
-        // does not expect a wire reply.
-        string cmd = args.Length > 0 ? args[0] : "";
-        _log.LogDebug("tci.run_cat_ex received cmd={Cmd} (unimplemented)", cmd);
+        // Zeus has no general CAT engine, but the three commands clients
+        // actually rely on are wired here:
+        //   PS1   — power on  → ConnectAsync (no-op if no last-known endpoint)
+        //   PS0   — power off → DisconnectAsync
+        //   ZZTX0 — force-unkey → TxService.TrySetMox(false)
+        // The client does not expect a wire reply.
+        string cmd = args.Length > 0 ? args[0].Trim().ToUpperInvariant() : "";
+        switch (cmd)
+        {
+            case "PS0":
+                _log.LogInformation("tci.run_cat_ex PS0 → disconnect");
+                _ = _radio.DisconnectAsync();
+                break;
+            case "PS1":
+                // Re-connect requires an endpoint and sample rate. Zeus's
+                // power-up flow runs through discovery + the web UI; without
+                // a stored last-known endpoint, log and skip rather than
+                // guess.
+                _log.LogInformation("tci.run_cat_ex PS1 → ignored (no auto-connect path; use Zeus discovery)");
+                break;
+            case "ZZTX0":
+                _log.LogInformation("tci.run_cat_ex ZZTX0 → force-unkey");
+                _tx.TrySetMox(false, out _);
+                break;
+            default:
+                _log.LogDebug("tci.run_cat_ex unhandled cmd={Cmd}", cmd);
+                break;
+        }
+    }
+
+    private void HandleVfoLock(string[] args)
+    {
+        // vfo_lock:<trx>,<vfo>          GET → echo
+        // vfo_lock:<trx>,<vfo>,<bool>   SET → ack-only (Zeus has no per-VFO lock yet)
+        if (args.Length < 2) return;
+        if (!TciProtocol.TryParseInt(args[0], out int trx)) return;
+        if (!TciProtocol.TryParseInt(args[1], out int vfo)) return;
+        if (args.Length == 2)
+        {
+            Send(TciProtocol.Command("vfo_lock", trx, vfo, false));
+            return;
+        }
+        if (TciProtocol.TryParseBool(args[2], out bool locked))
+            Send(TciProtocol.Command("vfo_lock", trx, vfo, locked));
+    }
+
+    private void HandleVfoSwapEx(string[] args)
+    {
+        // vfo_swap_ex:<trx>  — swap VFO A/B contents (C→S only).
+        // Zeus has no split / dual-VFO state to swap yet; log and ack.
+        _log.LogDebug("tci.vfo_swap_ex received (split not implemented)");
+    }
+
+    private void HandleRxEnable(string[] args)
+    {
+        // rx_enable:<trx>,<bool>  — toggle secondary receiver (RX2).
+        // Zeus is single-RX; echo whatever the client sent so its UI doesn't
+        // assume the SET silently succeeded.
+        if (args.Length < 2) return;
+        if (!TciProtocol.TryParseInt(args[0], out int trx)) return;
+        if (TciProtocol.TryParseBool(args[1], out bool enabled))
+            Send(TciProtocol.Command("rx_enable", trx, enabled));
+    }
+
+    private void HandleTxFilterBandEx(string[] args)
+    {
+        // tx_filter_band_ex:<lo_hz>,<hi_hz>  — TX bandpass filter (spec §5.3).
+        // Note: NO rx index, unlike rx_filter_band. Zeus tracks
+        // TxFilterLowHz / TxFilterHighHz on StateDto but doesn't yet expose
+        // a setter; ack with the client-supplied values so the client UI
+        // updates and treat as informational.
+        if (args.Length == 0)
+        {
+            var state = _radio.Snapshot();
+            Send(TciProtocol.Command("tx_filter_band_ex", state.TxFilterLowHz, state.TxFilterHighHz));
+            return;
+        }
+        if (args.Length >= 2
+            && TciProtocol.TryParseInt(args[0], out int lo)
+            && TciProtocol.TryParseInt(args[1], out int hi))
+        {
+            Send(TciProtocol.Command("tx_filter_band_ex", lo, hi));
+        }
+    }
+
+    private void HandleRxNrEnableEx(string[] args)
+    {
+        // rx_nr_enable / rx_nr_enable_ex:<rx>,<bool>[,<level>]  — spec §5.4.
+        // level 1..4 maps to NrMode: 1=Anr (NR), 2=Emnr (NR2), 3=Sbnr (Spec NR),
+        // 4=Anr (Zeus has no NR4; closest available). bool=false → NrMode.Off
+        // regardless of level.
+        if (args.Length < 2) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+        if (!TciProtocol.TryParseBool(args[1], out bool enable)) return;
+
+        NrMode mode = NrMode.Off;
+        if (enable)
+        {
+            int level = 1;
+            if (args.Length >= 3 && TciProtocol.TryParseInt(args[2], out int parsedLevel))
+                level = parsedLevel;
+            mode = level switch
+            {
+                2 => NrMode.Emnr,
+                3 => NrMode.Sbnr,
+                _ => NrMode.Anr,
+            };
+        }
+        var current = _radio.Snapshot().Nr ?? new NrConfig();
+        _radio.SetNr(current with { NrMode = mode });
+    }
+
+    private void HandleRxAntenna(string[] args)
+    {
+        // rx_antenna:<rx>,<n>  — n=0..2 for ANT1..3, n=3 for "default" (spec §5.4).
+        // RadioService has no antenna-selection API yet (HL2 has no
+        // switchable antenna; ANAN-class boards do, but Zeus hasn't wired
+        // it). Log and ack so clients don't see "unknown command".
+        if (args.Length < 2) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+        if (TciProtocol.TryParseInt(args[1], out int n))
+        {
+            _log.LogDebug("tci.rx_antenna rx={Rx} n={N} (no antenna API yet; ack-only)", rx, n);
+            Send(TciProtocol.Command("rx_antenna", rx, n));
+        }
+    }
+
+    // --- Sensor stream gating (spec §5.6) ---
+    // Clients opt in to combined-frame telemetry pushes (tx_sensors,
+    // rx_channel_sensors). Off by default; the existing rx_smeter / tx_power
+    // / tx_swr broadcasts continue regardless.
+    private bool _wantsTxSensors;
+    private bool _wantsRxSensors;
+    public bool WantsTxSensors { get { lock (_streamLock) return _wantsTxSensors; } }
+    public bool WantsRxSensors { get { lock (_streamLock) return _wantsRxSensors; } }
+
+    private void HandleTxSensorsEnable(string[] args)
+    {
+        if (args.Length == 0)
+        {
+            Send(TciProtocol.Command("tx_sensors_enable", WantsTxSensors));
+            return;
+        }
+        if (TciProtocol.TryParseBool(args[0], out bool enable))
+        {
+            lock (_streamLock) _wantsTxSensors = enable;
+            Send(TciProtocol.Command("tx_sensors_enable", enable));
+        }
+    }
+
+    private void HandleRxSensorsEnable(string[] args)
+    {
+        // rx_sensors_enable:<rx>,<bool>  — per-RX subscription. Zeus has one
+        // RX, so the rx index is informational; we track a single flag.
+        if (args.Length < 2) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+        if (TciProtocol.TryParseBool(args[1], out bool enable))
+        {
+            lock (_streamLock) _wantsRxSensors = enable;
+            Send(TciProtocol.Command("rx_sensors_enable", rx, enable));
+        }
     }
 
     private void HandleNrEnable(string[] args)

@@ -87,18 +87,15 @@ public sealed class TciManagementService
         var currentBindAddress = _startupOptions.BindAddress;
         var clientCount = _tciServer.ClientCount;
 
-        string? error = null;
+        // The (single) TciServer is the listener for this port — when it is
+        // running, probe-binding the same port from this status method always
+        // fails with "address already in use" and surfaces a false-positive
+        // warning in the UI. Skip the probe; report port-availability as true
+        // whenever startup is configured to enable TCI. The "is this port free
+        // to switch to?" question is handled separately by TestPort, which the
+        // settings panel calls before saving a new bindAddress/port.
         bool portAvailable = true;
-
-        // Check if the current startup port is actually available if TCI was supposed to be enabled
-        if (currentlyEnabled)
-        {
-            portAvailable = IsPortAvailable(currentBindAddress, currentPort);
-            if (!portAvailable)
-            {
-                error = $"Port {currentPort} is not available on {currentBindAddress}";
-            }
-        }
+        string? error = null;
 
         // Check if pending config differs from startup config (requires restart)
         var requiresRestart = _pendingConfig.Enabled != currentlyEnabled

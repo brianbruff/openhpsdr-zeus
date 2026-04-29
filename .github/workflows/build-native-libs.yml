@@ -18,10 +18,10 @@ jobs:
     runs-on: windows-latest
     strategy:
       matrix:
-        # arm64 deferred: upstream channel.c uses _MM_SET_FLUSH_ZERO_MODE
-        # (SSE intrinsic) guarded only for linux/APPLE, so it fails to
-        # compile on Windows-on-ARM. Revisit if a Windows-ARM64 user asks.
-        arch: [x64]
+        # arm64: channel.c _MM_SET_FLUSH_ZERO_MODE guard was extended in
+        # native/wdsp/channel.c to exclude _M_ARM64/__aarch64__ (issue #189).
+        # Cross-compiled from windows-latest (x64) using -A ARM64 -T ClangCL.
+        arch: [x64, arm64]
     steps:
       - uses: actions/checkout@v4
 
@@ -33,7 +33,22 @@ jobs:
           # vcpkg's fftw3 port builds all three precisions (fftw3, fftw3f,
           # fftw3l) by default, so libspecbleach (NR4) gets fftw3f from the
           # same install.
-          vcpkg install fftw3:${{ matrix.arch }}-windows-static-md
+          #
+          # arm64-windows-static-md: vcpkg community triplet (static libs,
+          # dynamic CRT) for cross-compiling to Windows ARM64. Ensure it
+          # exists; older vcpkg snapshots on the runner may pre-date it.
+          $triplet = "${{ matrix.arch }}-windows-static-md"
+          $tripletFile = "$env:VCPKG_INSTALLATION_ROOT\triplets\community\$triplet.cmake"
+          if (-not (Test-Path $tripletFile)) {
+            Write-Host "Creating custom triplet $triplet"
+            $content = @"
+set(VCPKG_TARGET_ARCHITECTURE ${{ matrix.arch }})
+set(VCPKG_CRT_LINKAGE dynamic)
+set(VCPKG_LIBRARY_LINKAGE static)
+"@
+            Set-Content -Path $tripletFile -Value $content
+          }
+          vcpkg install fftw3:$triplet
           echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
 
       - name: Configure CMake
@@ -249,9 +264,10 @@ jobs:
           for artifact_dir in artifacts/wdsp-*; do
             artifact_name=$(basename "$artifact_dir")  # e.g. wdsp-windows-x64
             case "$artifact_name" in
-              wdsp-windows-x64) destDir=Zeus.Dsp/runtimes/win-x64/native ;;
-              wdsp-linux-x64)   destDir=Zeus.Dsp/runtimes/linux-x64/native ;;
-              wdsp-linux-arm64) destDir=Zeus.Dsp/runtimes/linux-arm64/native ;;
+              wdsp-windows-x64)   destDir=Zeus.Dsp/runtimes/win-x64/native ;;
+              wdsp-windows-arm64) destDir=Zeus.Dsp/runtimes/win-arm64/native ;;
+              wdsp-linux-x64)     destDir=Zeus.Dsp/runtimes/linux-x64/native ;;
+              wdsp-linux-arm64)   destDir=Zeus.Dsp/runtimes/linux-arm64/native ;;
               *)
                 echo "Unrecognised artifact $artifact_name — refusing to guess destination" >&2
                 exit 1

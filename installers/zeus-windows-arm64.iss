@@ -1,0 +1,78 @@
+; Zeus ARM64 Installer Script for Inno Setup
+; Requires Inno Setup 6.3 or later: https://jrsoftware.org/isinfo.php
+
+#define MyAppName "Zeus"
+#define MyAppPublisher "Brian Keating (EI6LF) and contributors"
+#define MyAppURL "https://github.com/brianbruff/openhpsdr-zeus"
+#define MyAppExeName "Zeus.Server.exe"
+
+; Version will be passed via /DMyAppVersion="x.y.z" command line parameter
+#ifndef MyAppVersion
+  #define MyAppVersion "0.0.0"
+#endif
+
+[Setup]
+AppId={{8F2E3B1C-9A4D-4E6F-B7C3-1D5A9E8F2B4D}
+AppName={#MyAppName}
+AppVersion={#MyAppVersion}
+AppPublisher={#MyAppPublisher}
+AppPublisherURL={#MyAppURL}
+AppSupportURL={#MyAppURL}/issues
+AppUpdatesURL={#MyAppURL}/releases
+DefaultDirName={autopf}\{#MyAppName}
+DefaultGroupName={#MyAppName}
+DisableProgramGroupPage=yes
+LicenseFile=..\LICENSE
+OutputDir=.\output
+OutputBaseFilename=Zeus-{#MyAppVersion}-win-arm64-setup
+Compression=lzma2
+SolidCompression=yes
+WizardStyle=modern
+ArchitecturesInstallIn64BitMode=arm64
+ArchitecturesAllowed=arm64
+PrivilegesRequired=lowest
+UninstallDisplayIcon={app}\{#MyAppExeName}
+
+[Languages]
+Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Tasks]
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+
+[Files]
+Source: "..\Zeus.Server\bin\Release\net10.0\win-arm64\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "zeus-windows-launcher.cmd"; DestDir: "{app}"; DestName: "zeus.cmd"; Flags: ignoreversion
+
+[Icons]
+; Shortcuts launch zeus.cmd (which boots Zeus.Server and opens the browser at
+; http://localhost:6060) instead of Zeus.Server.exe directly. IconFilename
+; keeps the Zeus.Server.exe icon on the shortcut so it doesn't show as a cmd.
+Name: "{group}\{#MyAppName}"; Filename: "{app}\zeus.cmd"; IconFilename: "{app}\{#MyAppExeName}"
+Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\zeus.cmd"; IconFilename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+
+[Run]
+Filename: "{app}\zeus.cmd"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent shellexec
+
+[Code]
+procedure InitializeWizard;
+begin
+  WizardForm.LicenseAcceptedRadio.Checked := True;
+end;
+
+function InitializeSetup(): Boolean;
+begin
+  Result := True;
+  if not IsWin64 then
+  begin
+    MsgBox('This application requires a 64-bit version of Windows.', mbError, MB_OK);
+    Result := False;
+    Exit;
+  end;
+  if not IsARM64 then
+  begin
+    MsgBox('This installer is for Windows on ARM64 (Snapdragon / Qualcomm-based PCs, Surface Pro X, etc.).' + #13#10 +
+           'For x64 Windows, please use the Zeus-win-x64 installer instead.', mbError, MB_OK);
+    Result := False;
+  end;
+end;

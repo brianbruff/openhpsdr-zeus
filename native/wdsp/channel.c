@@ -98,7 +98,7 @@ void OpenChannel (int channel, int in_size, int dsp_size, int input_samplerate, 
     InterlockedBitTestAndSet (&ch[channel].exchange, 0);
   }
 
-#if !defined(linux) && !defined(__APPLE__)
+#if !defined(linux) && !defined(__APPLE__) && !defined(_M_ARM64) && !defined(__aarch64__)
   _MM_SET_FLUSH_ZERO_MODE (_MM_FLUSH_ZERO_ON);
 #endif
 }

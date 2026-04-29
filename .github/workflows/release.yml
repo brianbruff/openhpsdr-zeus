@@ -49,6 +49,12 @@ jobs:
             runner: windows-latest
             rid: win-x64
             artifact: windows-installer
+            iss_file: zeus-windows.iss
+          - os: windows-arm64
+            runner: windows-latest  # cross-compiles win-arm64 from x64 host
+            rid: win-arm64
+            artifact: windows-arm64-installer
+            iss_file: zeus-windows-arm64.iss
           - os: linux
             runner: ubuntu-latest
             rid: linux-x64
@@ -103,19 +109,19 @@ jobs:
             -p:DebugSymbols=false
 
       - name: Build Windows Installer (Inno Setup)
-        if: matrix.config.os == 'windows'
+        if: startsWith(matrix.config.os, 'windows')
         shell: pwsh
         run: |
           choco install innosetup -y
           $env:PATH += ";C:\Program Files (x86)\Inno Setup 6"
-          iscc /DMyAppVersion="${{ steps.version.outputs.version }}" installers\zeus-windows.iss
+          iscc /DMyAppVersion="${{ steps.version.outputs.version }}" installers\${{ matrix.config.iss_file }}
 
       - name: Upload Windows Installer
-        if: matrix.config.os == 'windows'
+        if: startsWith(matrix.config.os, 'windows')
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.config.artifact }}
-          path: installers/output/Zeus-${{ steps.version.outputs.version }}-win-x64-setup.exe
+          path: installers/output/Zeus-${{ steps.version.outputs.version }}-${{ matrix.config.rid }}-setup.exe
           if-no-files-found: error
 
       - name: Build Linux Package
@@ -185,6 +191,13 @@ jobs:
             - Includes .NET runtime and all dependencies
             - Run the installer and follow the prompts
 
+          ### Windows (ARM64)
+          - **Zeus-${{ steps.version.outputs.version }}-win-arm64-setup.exe** - Windows on ARM installer
+            - For Snapdragon/Qualcomm-based PCs, Surface Pro X, and other ARM64 Windows devices
+            - Also runs natively in Parallels Desktop on Apple Silicon Macs
+            - Includes .NET runtime and all dependencies
+            - Run the installer and follow the prompts
+
           ### macOS (Apple Silicon)
           - **Zeus-${{ steps.version.outputs.version }}-macos-arm64.dmg** - M1/M2/M3 Macs
 
@@ -223,6 +236,7 @@ jobs:
           prerelease: false
           files: |
             release-artifacts/windows-installer/*
+            release-artifacts/windows-arm64-installer/*
             release-artifacts/linux-tarball/*
             release-artifacts/macos-arm64-dmg/*
         env:

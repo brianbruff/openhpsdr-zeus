@@ -64,11 +64,8 @@ jobs:
       - name: Verify wwwroot output
         shell: bash
         run: |
-          # Vite outputs into Zeus.Server.Hosting/wwwroot since the
-          # Zeus.Server.Hosting library refactor; both Zeus.Server and
-          # Zeus.Desktop pick the assets up via Content propagation.
-          if [ ! -f "Zeus.Server.Hosting/wwwroot/index.html" ]; then
-            echo "Error: Frontend build did not produce Zeus.Server.Hosting/wwwroot/index.html"
+          if [ ! -f "Zeus.Server/wwwroot/index.html" ]; then
+            echo "Error: Frontend build did not produce wwwroot/index.html"
             exit 1
           fi
           echo "Frontend build successful"

@@ -49,7 +49,6 @@ import { useConnectionStore, type WisdomPhase } from '../state/connection-store'
 import { useDisplayStore } from '../state/display-store';
 import { useTxStore } from '../state/tx-store';
 import { warnOnce } from '../util/logger';
-import { wsUrl as buildWsUrl } from '../serverUrl';
 
 const INITIAL_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 8000;
@@ -110,7 +109,9 @@ const MIC_PCM_BYTES = 1 + MIC_PCM_SAMPLES * 4;
 let activeWs: WebSocket | null = null;
 
 function wsUrl(path: string): string {
-  return buildWsUrl(path);
+  if (typeof window === 'undefined') return path;
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${window.location.host}${path}`;
 }
 
 /**

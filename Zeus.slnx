@@ -11,6 +11,4 @@
   <Project Path="Zeus.Protocol1/Zeus.Protocol1.csproj" />
   <Project Path="Zeus.Protocol2/Zeus.Protocol2.csproj" />
   <Project Path="Zeus.Server/Zeus.Server.csproj" />
-  <Project Path="Zeus.Server.Hosting/Zeus.Server.Hosting.csproj" />
-  <Project Path="Zeus.Desktop/Zeus.Desktop.csproj" />
 </Solution>

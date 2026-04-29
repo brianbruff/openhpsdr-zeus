@@ -50,8 +50,7 @@ import { useTxStore } from '../state/tx-store';
 // SetTXAPanelGain1(10^(micGainDb/20)) before the sample reaches TXA/ALC.
 // So the level that actually clips is (rawDbfs + micGainDb) — we display
 // that "effective" value so the operator can set gain before keying
-// without driving into distortion (the Thetis workflow). micGainDb is
-// signed: negative values attenuate, positive boost.
+// without driving into distortion (the Thetis workflow).
 //
 // Visual sits in the transport strip as a .knob-group, using the design's
 // meter-bar chrome. A permanent red zone paints the last 3 dB of the
@@ -121,7 +120,7 @@ export function MicMeter() {
     effectiveDbfs <= MIN_DBFS ? '−∞' : `${effectiveDbfs.toFixed(0)} dBFS`;
   const hint =
     micGainDb !== 0
-      ? `raw ${rawDbfs.toFixed(0)} dBFS ${micGainDb > 0 ? '+' : '−'} ${Math.abs(micGainDb)} dB gain = ${effectiveDbfs.toFixed(0)} dBFS at ALC`
+      ? `raw ${rawDbfs.toFixed(0)} dBFS + ${micGainDb > 0 ? '+' : ''}${micGainDb} dB gain = ${effectiveDbfs.toFixed(0)} dBFS at ALC`
       : undefined;
 
   return (

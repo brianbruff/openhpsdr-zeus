@@ -106,10 +106,8 @@ public sealed class TciServer : IHostedService, IDisposable
         _radio.StateChanged += OnRadioStateChanged;
         _radio.Connected += OnRadioConnected;
         _radio.Disconnected += OnRadioDisconnected;
-        _radio.PreampChanged += OnPreampChanged;
         _pipeline.RxMeterUpdated += OnRxMeterUpdated;
         _pipeline.RxIqAvailable += OnRxIqAvailable;
-        _pipeline.RxAudioAvailable += OnRxAudioAvailable;
         _txMeters.TxMetersUpdated += OnTxMetersUpdated;
         _subscribed = true;
 
@@ -124,10 +122,8 @@ public sealed class TciServer : IHostedService, IDisposable
             _radio.StateChanged -= OnRadioStateChanged;
             _radio.Connected -= OnRadioConnected;
             _radio.Disconnected -= OnRadioDisconnected;
-            _radio.PreampChanged -= OnPreampChanged;
             _pipeline.RxMeterUpdated -= OnRxMeterUpdated;
             _pipeline.RxIqAvailable -= OnRxIqAvailable;
-            _pipeline.RxAudioAvailable -= OnRxAudioAvailable;
             _txMeters.TxMetersUpdated -= OnTxMetersUpdated;
             _subscribed = false;
         }
@@ -189,8 +185,6 @@ public sealed class TciServer : IHostedService, IDisposable
 
     // --- Event handlers: broadcast state changes to all connected clients ---
 
-    private int _lastBroadcastAttenDb = int.MinValue;
-
     private void OnRadioStateChanged(StateDto state)
     {
         // Broadcast VFO, mode, filter changes to all clients
@@ -210,20 +204,6 @@ public sealed class TciServer : IHostedService, IDisposable
         // IF limits on sample rate change
         int halfRate = state.SampleRate / 2;
         Broadcast(TciProtocol.Command("if_limits", -halfRate, halfRate));
-
-        // Step attenuator change → rx_step_att_ex (spec §5.4 S→C push)
-        if (state.AttenDb != _lastBroadcastAttenDb)
-        {
-            _lastBroadcastAttenDb = state.AttenDb;
-            Broadcast(TciProtocol.Command("rx_step_att_ex", 0, state.AttenDb));
-        }
-    }
-
-    private void OnPreampChanged(bool on)
-    {
-        // rx_preamp_att_ex:<rx>,<int>  — combined preamp/attenuator push.
-        // Spec format is loose; emit a single int (1=preamp on, 0=off).
-        Broadcast(TciProtocol.Command("rx_preamp_att_ex", 0, on ? 1 : 0));
     }
 
     private void OnRadioConnected(Protocol1.IProtocol1Client client)
@@ -241,16 +221,6 @@ public sealed class TciServer : IHostedService, IDisposable
         // TCI rx_smeter event: rx_smeter:<rx>,<chan>,<dbm>
         // Rate-limited to avoid flooding during rapid meter updates
         BroadcastRateLimited($"rx_smeter:0,{channelId}", TciProtocol.Command("rx_smeter", 0, channelId, (int)Math.Round(dbm)));
-
-        // Spec §5.6 rx_channel_sensors:<rx>,...,<dBm> — combined-frame
-        // telemetry, sent only to clients that opted in via rx_sensors_enable.
-        if (_clients.IsEmpty) return;
-        int dbmRounded = (int)Math.Round(dbm);
-        var frame = TciProtocol.Command("rx_channel_sensors", 0, channelId, dbmRounded);
-        foreach (var session in _clients.Values)
-        {
-            if (session.WantsRxSensors) session.Send(frame);
-        }
     }
 
     private void OnRxIqAvailable(int receiver, int sampleRateHz, ReadOnlyMemory<double> interleavedIQ)
@@ -276,54 +246,17 @@ public sealed class TciServer : IHostedService, IDisposable
         }
     }
 
-    private void OnRxAudioAvailable(int receiver, int sampleRateHz, ReadOnlyMemory<float> samples)
-    {
-        if (_clients.IsEmpty) return;
-
-        bool anyWants = false;
-        foreach (var session in _clients.Values)
-        {
-            if (session.WantsAudioStream(receiver)) { anyWants = true; break; }
-        }
-        if (!anyWants) return;
-
-        var payload = TciStreamPayload.BuildAudioFromFloats(receiver, sampleRateHz, samples.Span);
-        foreach (var session in _clients.Values)
-        {
-            if (session.WantsAudioStream(receiver))
-                session.SendBinary(payload);
-        }
-    }
-
     private void OnTxMetersUpdated(float fwdWatts, float refWatts, float swr, float alcPk, float alcGr)
     {
-        // Standalone TX meter events broadcast to all clients
+        // TCI TX meter events per ExpertSDR3 spec
         // tx_power:<watts> — forward power
         Broadcast(TciProtocol.Command("tx_power", (int)Math.Round(fwdWatts)));
-        // tx_forward_power:<watts> — alias many clients listen for
-        Broadcast(TciProtocol.Command("tx_forward_power", (int)Math.Round(fwdWatts)));
-        // tx_swr:<ratio> — SWR ratio (e.g. 1.5 for 1.5:1)
-        var swrStr = swr.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
-        Broadcast(TciProtocol.Command("tx_swr", swrStr));
-        Broadcast(TciProtocol.Command("swr", swrStr));
+        // tx_swr:<ratio> — SWR ratio (e.g., 1.5 for 1.5:1)
+        Broadcast(TciProtocol.Command("tx_swr", swr.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)));
         // tx_alc:<percent> — ALC gain reduction as percentage (0-100)
+        // Convert dB of gain reduction to percentage for TCI
         int alcPct = alcGr > 0 ? Math.Min(100, (int)Math.Round(alcGr * 10)) : 0;
         Broadcast(TciProtocol.Command("tx_alc", alcPct));
-
-        // Spec §5.6 tx_sensors:<channel>,<mic_db>,<fwd_pwr>,<rev_pwr>,<swr>
-        // Combined-frame TX telemetry, sent only to clients that opted in via
-        // tx_sensors_enable. mic_db isn't carried in TxMetersUpdated; emit 0.
-        if (_clients.IsEmpty) return;
-        var frame = TciProtocol.Command(
-            "tx_sensors",
-            0, 0,
-            (int)Math.Round(fwdWatts),
-            (int)Math.Round(refWatts),
-            swrStr);
-        foreach (var session in _clients.Values)
-        {
-            if (session.WantsTxSensors) session.Send(frame);
-        }
     }
 
     /// <summary>

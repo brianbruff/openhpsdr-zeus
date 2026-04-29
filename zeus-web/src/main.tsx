@@ -51,11 +51,6 @@ import './styles/filter-ribbon.css';
 import './styles/toolbar-favorites.css';
 import './styles/nr-settings.css';
 import App from './App.tsx';
-import { installFetchInterceptor } from './serverUrl';
-
-// Capacitor / standalone-host builds set localStorage["zeus.serverUrl"]
-// to a LAN address; on plain web this is a no-op (relative paths).
-installFetchInterceptor();
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('root element missing');

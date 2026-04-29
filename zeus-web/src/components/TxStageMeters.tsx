@@ -193,6 +193,7 @@ const LEVEL_RANGE_DB = LEVEL_MAX_DB - LEVEL_MIN_DB; // 42 dB span
 const LEVEL_DANGER_POS = (0 - LEVEL_MIN_DB) / LEVEL_RANGE_DB; // 0 dBFS = clip
 const LEVEL_TARGET_POS = (-6 - LEVEL_MIN_DB) / LEVEL_RANGE_DB; // -6 dBFS target
 const GR_MAX_DB = 25;
+const GR_DANGER_POS = 10 / GR_MAX_DB; // >10 dB GR = over-driving the limiter
 // WDSP returns −400 dBFS when a stage is bypassed. Anything ≤ −200 is far
 // below any real audio level, so we treat it as a bypassed sentinel rather
 // than clamping to the axis floor (which would paint a misleading tiny bar
@@ -238,123 +239,17 @@ function dbfsToAxis(dbfs: number): number {
 
 type LevelRowProps = {
   label: string;
-  dbfs: number;     // peak (TXA_*_PK)
-  dbfsAv: number;   // average (TXA_*_AV) — slow, sustained energy
+  dbfs: number;
   hint: string;
 };
 
-// Solid colours used for the PK/AV bar fill, picked by zone — matches the
-// design tokens (--good is added to tokens.css alongside --tx and --power).
-const COLOR_GOOD = '#2e7a2e';        // healthy speech band (≤ -6 dBFS)
-const COLOR_WARN = 'var(--power)';   // approaching clip (-6..0 dBFS)
-const COLOR_CLIP = 'var(--tx)';      // clipping (≥ 0 dBFS)
-
-// Permanent zone bands painted on the chassis so "good vs bad" reads even
-// when the bar is empty. Low alpha keeps the chassis legible; the live fill
-// draws on top in a saturated colour. Boundaries match LEVEL_TARGET_POS
-// (-6 dBFS) and LEVEL_DANGER_POS (0 dBFS).
-const LEVEL_ZONE_BG =
-  `linear-gradient(90deg,` +
-  ` rgba(46,122,46,0.18) 0%,` +
-  ` rgba(46,122,46,0.18) ${LEVEL_TARGET_POS * 100}%,` +
-  ` rgba(255,201,58,0.20) ${LEVEL_TARGET_POS * 100}%,` +
-  ` rgba(255,201,58,0.20) ${LEVEL_DANGER_POS * 100}%,` +
-  ` rgba(230,58,43,0.24) ${LEVEL_DANGER_POS * 100}%,` +
-  ` rgba(230,58,43,0.24) 100%)`;
-
-function levelFillColor(dbfs: number): string {
-  if (!isFinite(dbfs) || isBypassed(dbfs)) return COLOR_GOOD;
-  if (dbfs >= 0) return COLOR_CLIP;
-  if (dbfs >= -6) return COLOR_WARN;
-  return COLOR_GOOD;
-}
-
-// GR fill colour by zone — 0..3 dB warns the operator the leveler isn't
-// engaging (signal probably too quiet), 3..10 dB is the healthy SSB band,
-// 10+ dB means the input is overdriving the limiter.
-function grFillColor(db: number): string {
-  if (!isFinite(db) || isBypassed(db)) return COLOR_WARN;
-  const v = Math.max(0, db);
-  if (v >= ALC_ZONE_HEALTHY_END_DB) return COLOR_CLIP;
-  if (v >= ALC_ZONE_QUIET_END_DB) return COLOR_GOOD;
-  return COLOR_WARN;
-}
-
-// Single solid-colour bar:
-//   • Background = permanent green/yellow/red zone bands (chassis paint).
-//   • AV fill    = solid colour driven by the AV zone — wide bar, slow
-//                  transition. This is the "easy to read" sustained level.
-//   • PK tick    = bright vertical line at the instantaneous peak position
-//                  so operators can see headroom-to-clipping at a glance.
-//
-// PK and AV come straight off the wire (TXA_*_PK / TXA_*_AV); we don't
-// fabricate either client-side. Stage-bypassed (≤ -200 dBFS sentinel) rows
-// just render zone bands with no fill and an em-dash readout.
-function ZoneLevelBar({ pkAxis, avAxis, pkValue, avValue, pkBypassed, avBypassed }: {
-  pkAxis: number; avAxis: number;
-  pkValue: number; avValue: number;
-  pkBypassed: boolean; avBypassed: boolean;
-}) {
-  const fillColor = levelFillColor(avBypassed ? pkValue : avValue);
-  const avPct = avBypassed ? 0 : (avAxis / LEVEL_RANGE_DB) * 100;
-  const pkPct = pkBypassed ? null : (pkAxis / LEVEL_RANGE_DB) * 100;
-  return (
-    <>
-      {/* Zone bands behind the fill */}
-      <div
-        aria-hidden="true"
-        style={{
-          position: 'absolute',
-          inset: 0,
-          background: LEVEL_ZONE_BG,
-          pointerEvents: 'none',
-        }}
-      />
-      {/* AV — solid colour fill */}
-      <div
-        aria-hidden="true"
-        style={{
-          position: 'absolute',
-          left: 0,
-          top: 0,
-          bottom: 0,
-          width: `${avPct}%`,
-          background: fillColor,
-          transition: 'width 220ms, background 100ms',
-          pointerEvents: 'none',
-        }}
-      />
-      {/* PK — bright tick at the instantaneous peak */}
-      {pkPct !== null && (
-        <div
-          aria-hidden="true"
-          style={{
-            position: 'absolute',
-            left: `calc(${pkPct}% - 1px)`,
-            top: 0,
-            bottom: 0,
-            width: 2,
-            background: 'rgba(255,255,255,0.92)',
-            transition: 'left 80ms',
-            pointerEvents: 'none',
-          }}
-        />
-      )}
-    </>
-  );
-}
-
-function LevelRow({ label, dbfs, dbfsAv, hint }: LevelRowProps) {
-  const pkBypassed = isBypassed(dbfs);
-  const avBypassed = isBypassed(dbfsAv);
-  const bypassed = pkBypassed && avBypassed;
-  const pkAxis = dbfsToAxis(dbfs);
-  const avAxis = dbfsToAxis(dbfsAv);
+function LevelRow({ label, dbfs, hint }: LevelRowProps) {
+  const bypassed = isBypassed(dbfs);
+  const axis = dbfsToAxis(dbfs);
   const held = usePeakHold(dbfs);
   const heldAxis = dbfsToAxis(held);
-  const heldVisible = isFinite(held) && !isBypassed(held) && heldAxis > pkAxis;
-  const pkDisplay = !isFinite(dbfs) || pkBypassed ? '—' : dbfs.toFixed(0);
-  const avDisplay = !isFinite(dbfsAv) || avBypassed ? '—' : dbfsAv.toFixed(0);
+  const heldVisible = isFinite(held) && !isBypassed(held) && heldAxis > axis;
+  const display = !isFinite(dbfs) || bypassed ? '—' : dbfs.toFixed(0);
   const rowTitle = bypassed ? `${hint} (stage bypassed)` : hint;
   return (
     <div
@@ -364,21 +259,21 @@ function LevelRow({ label, dbfs, dbfsAv, hint }: LevelRowProps) {
     >
       <div className="meter-head">
         <span className="label-xs">{label}</span>
-        <span className="meter-val mono" style={{ fontSize: 12 }}>
-          {pkDisplay}
-          <span className="unit" style={{ margin: '0 4px' }}>/</span>
-          {avDisplay}
+        <span className="meter-val mono">
+          {display}
           <span className="unit"> dBFS</span>
         </span>
       </div>
-      <div className="meter-bar" style={{ height: 12 }}>
-        <ZoneLevelBar
-          pkAxis={pkAxis}
-          avAxis={avAxis}
-          pkValue={dbfs}
-          avValue={dbfsAv}
-          pkBypassed={pkBypassed}
-          avBypassed={avBypassed}
+      <div className="meter-bar">
+        <div
+          className="meter-fill"
+          style={{
+            width: `${(axis / LEVEL_RANGE_DB) * 100}%`,
+            filter:
+              axis / LEVEL_RANGE_DB > LEVEL_DANGER_POS
+                ? 'hue-rotate(-20deg) saturate(1.4)'
+                : undefined,
+          }}
         />
         {heldVisible && (
           // 2 px tick at the held peak — amber (#FFA028) @ 0.4 alpha, no new
@@ -454,26 +349,23 @@ function grZoneBackground(): string {
   );
 }
 
-function AlcPairRow({ alcPk, alcAv, alcGr }: { alcPk: number; alcAv: number; alcGr: number }) {
-  // PK + AV side re-use the same -30..+12 dB axis as the per-stage strip so
-  // the prominent summary agrees with the strip below.
+function AlcPairRow({ alcPk, alcGr }: { alcPk: number; alcGr: number }) {
+  // PK side re-uses the same -30..+12 dB axis as the per-stage strip so the
+  // prominent summary agrees with the strip below.
   const pkBypassed = isBypassed(alcPk);
-  const avBypassed = isBypassed(alcAv);
   const pkAxis = dbfsToAxis(alcPk);
-  const avAxis = dbfsToAxis(alcAv);
   const pkHeld = usePeakHold(alcPk);
   const pkHeldAxis = dbfsToAxis(pkHeld);
   const pkHeldVisible =
     isFinite(pkHeld) && !isBypassed(pkHeld) && pkHeldAxis > pkAxis;
   const pkDisplay =
     !isFinite(alcPk) || pkBypassed ? '—' : alcPk.toFixed(0);
-  const avDisplay =
-    !isFinite(alcAv) || avBypassed ? '—' : alcAv.toFixed(0);
 
   // GR side clamps negative noise to 0 (see P1.8); bypass sentinel still wins.
   const grBypassed = isBypassed(alcGr);
   const grNormalized = grBypassed ? alcGr : Math.max(0, alcGr);
   const grClamped = grBypassed ? 0 : Math.min(GR_MAX_DB, grNormalized);
+  const grOverdrive = grClamped >= ALC_ZONE_HEALTHY_END_DB;
   const grHeld = usePeakHold(grNormalized, GR_MAX_DB / 2);
   const grHeldClamped = Math.max(0, Math.min(GR_MAX_DB, grHeld));
   const grHeldVisible =
@@ -501,7 +393,7 @@ function AlcPairRow({ alcPk, alcAv, alcGr }: { alcPk: number; alcAv: number; alc
           ALC
         </span>
         <span className="meter-val mono" style={{ fontSize: 12 }}>
-          PK {pkDisplay}<span className="unit" style={{ margin: '0 4px' }}>/</span>{avDisplay}
+          PK {pkDisplay}
           <span className="unit"> dBFS</span>
           <span style={{ color: 'var(--fg-3)', margin: '0 6px' }}>·</span>
           GR {grDisplay}
@@ -516,15 +408,17 @@ function AlcPairRow({ alcPk, alcAv, alcGr }: { alcPk: number; alcAv: number; alc
           alignItems: 'stretch',
         }}
       >
-        {/* PK + AV bar (-30..+12) with green/yellow/red zones */}
-        <div className="meter-bar" style={{ height: 12 }}>
-          <ZoneLevelBar
-            pkAxis={pkAxis}
-            avAxis={avAxis}
-            pkValue={alcPk}
-            avValue={alcAv}
-            pkBypassed={pkBypassed}
-            avBypassed={avBypassed}
+        {/* PK bar (-30..+12) */}
+        <div className="meter-bar">
+          <div
+            className="meter-fill"
+            style={{
+              width: `${(pkAxis / LEVEL_RANGE_DB) * 100}%`,
+              filter:
+                pkAxis / LEVEL_RANGE_DB > LEVEL_DANGER_POS
+                  ? 'hue-rotate(-20deg) saturate(1.4)'
+                  : undefined,
+            }}
           />
           {pkHeldVisible && (
             <div
@@ -562,8 +456,8 @@ function AlcPairRow({ alcPk, alcAv, alcGr }: { alcPk: number; alcAv: number; alc
           </div>
         </div>
 
-        {/* GR bar (0..25) with zone bands + solid-colour fill */}
-        <div className="meter-bar" style={{ height: 12 }}>
+        {/* GR bar (0..25) with zone bands */}
+        <div className="meter-bar">
           {/* Zone background stripes sit behind the fill. */}
           <div
             aria-hidden="true"
@@ -575,16 +469,12 @@ function AlcPairRow({ alcPk, alcAv, alcGr }: { alcPk: number; alcAv: number; alc
             }}
           />
           <div
-            aria-hidden="true"
+            className="meter-fill"
             style={{
-              position: 'absolute',
-              left: 0,
-              top: 0,
-              bottom: 0,
               width: `${(grClamped / GR_MAX_DB) * 100}%`,
-              background: grFillColor(grNormalized),
-              transition: 'width 200ms, background 100ms',
-              pointerEvents: 'none',
+              filter: grOverdrive
+                ? 'hue-rotate(-20deg) saturate(1.4)'
+                : undefined,
             }}
           />
           {grHeldVisible && (
@@ -622,29 +512,103 @@ function AlcPairRow({ alcPk, alcAv, alcGr }: { alcPk: number; alcAv: number; alc
   );
 }
 
+function GrRow({ db, hint }: { db: number; hint: string }) {
+  // GR is "dB of gain reduction" by convention: 0 = no reduction, +N = N dB
+  // cut. WDSP's ALC_GAIN meter drifts slightly above unity when ALC isn't
+  // limiting, which lands as small negative values after the backend's
+  // negation — meaningless for the operator. Clamp the raw reading to ≥ 0
+  // *before* anything else so text, bar, and peak-hold all agree.
+  // Bypass (−400 dBFS sentinel) wins over the clamp so bypassed stages
+  // still render as em-dash rather than "0 dB".
+  const bypassed = isBypassed(db);
+  const normalized = bypassed ? db : Math.max(0, db);
+  const clamped = bypassed ? 0 : Math.min(GR_MAX_DB, normalized);
+  // GR axis is GR_MAX_DB wide; scale decay so full-range takes ~2 s.
+  const held = usePeakHold(normalized, GR_MAX_DB / 2);
+  const heldClamped = Math.max(0, Math.min(GR_MAX_DB, held));
+  const heldVisible =
+    isFinite(held) && !isBypassed(held) && heldClamped > clamped;
+  const display =
+    !isFinite(normalized) || bypassed
+      ? '—'
+      : normalized === 0
+        ? '0'
+        : normalized.toFixed(1);
+  const rowTitle = bypassed ? `${hint} (stage bypassed)` : hint;
+  return (
+    <div
+      className="meter"
+      title={rowTitle}
+      style={bypassed ? { opacity: 0.55 } : undefined}
+    >
+      <div className="meter-head">
+        <span className="label-xs">ALC GR</span>
+        <span className="meter-val mono">
+          {display}
+          <span className="unit"> dB</span>
+        </span>
+      </div>
+      <div className="meter-bar">
+        <div
+          className="meter-fill"
+          style={{
+            width: `${(clamped / GR_MAX_DB) * 100}%`,
+            filter:
+              clamped / GR_MAX_DB > GR_DANGER_POS
+                ? 'hue-rotate(-20deg) saturate(1.4)'
+                : undefined,
+          }}
+        />
+        {heldVisible && (
+          <div
+            className="meter-peak-hold"
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              left: `calc(${(heldClamped / GR_MAX_DB) * 100}% - 1px)`,
+              top: 0,
+              bottom: 0,
+              width: 2,
+              background: 'rgba(255, 160, 40, 0.4)',
+              pointerEvents: 'none',
+            }}
+          />
+        )}
+        <div className="meter-ticks">
+          {[0.25, 0.5, 0.75].map((t) => (
+            <div key={t} className="meter-tick" style={{ left: `${t * 100}%` }} />
+          ))}
+          <div
+            className="meter-tick danger"
+            style={{ left: `${GR_DANGER_POS * 100}%` }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Compact CFC row: PK level bar on the left, GR bar on the right — same
 // visual language as AlcPairRow but in a single LevelRow-sized vertical
 // slot. CFC is bypassed by default (WDSP SetTXACFCRun is not called), so
 // both readings land on the −400 sentinel and the row dims to 55% via
 // the `bypassed` style on the outer meter chassis.
-function CfcPairRow({ pk, av, gr, hint }: { pk: number; av: number; gr: number; hint: string }) {
+function CfcPairRow({ pk, gr, hint }: { pk: number; gr: number; hint: string }) {
   const pkBypassed = isBypassed(pk);
-  const avBypassed = isBypassed(av);
   const grBypassed = isBypassed(gr);
-  // Row-level "bypassed" = all three streams silent (CFC off in WDSP).
-  const bypassed = pkBypassed && avBypassed && grBypassed;
+  // Row-level "bypassed" = both streams silent (CFC off in WDSP).
+  const bypassed = pkBypassed && grBypassed;
 
   const pkAxis = dbfsToAxis(pk);
-  const avAxis = dbfsToAxis(av);
   const pkHeld = usePeakHold(pk);
   const pkHeldAxis = dbfsToAxis(pkHeld);
   const pkHeldVisible =
     isFinite(pkHeld) && !isBypassed(pkHeld) && pkHeldAxis > pkAxis;
   const pkDisplay = !isFinite(pk) || pkBypassed ? '—' : pk.toFixed(0);
-  const avDisplay = !isFinite(av) || avBypassed ? '—' : av.toFixed(0);
 
   const grNormalized = grBypassed ? gr : Math.max(0, gr);
   const grClamped = grBypassed ? 0 : Math.min(GR_MAX_DB, grNormalized);
+  const grOverdrive = grClamped >= ALC_ZONE_HEALTHY_END_DB;
   const grHeld = usePeakHold(grNormalized, GR_MAX_DB / 2);
   const grHeldClamped = Math.max(0, Math.min(GR_MAX_DB, grHeld));
   const grHeldVisible =
@@ -666,7 +630,7 @@ function CfcPairRow({ pk, av, gr, hint }: { pk: number; av: number; gr: number; 
       <div className="meter-head">
         <span className="label-xs">CFC</span>
         <span className="meter-val mono" style={{ fontSize: 12 }}>
-          PK {pkDisplay}<span className="unit" style={{ margin: '0 4px' }}>/</span>{avDisplay}
+          PK {pkDisplay}
           <span className="unit"> dBFS</span>
           <span style={{ color: 'var(--fg-3)', margin: '0 6px' }}>·</span>
           GR {grDisplay}
@@ -681,15 +645,17 @@ function CfcPairRow({ pk, av, gr, hint }: { pk: number; av: number; gr: number; 
           alignItems: 'stretch',
         }}
       >
-        {/* PK + AV bar with green/yellow/red zones */}
-        <div className="meter-bar" style={{ height: 12 }}>
-          <ZoneLevelBar
-            pkAxis={pkAxis}
-            avAxis={avAxis}
-            pkValue={pk}
-            avValue={av}
-            pkBypassed={pkBypassed}
-            avBypassed={avBypassed}
+        {/* PK bar */}
+        <div className="meter-bar">
+          <div
+            className="meter-fill"
+            style={{
+              width: `${(pkAxis / LEVEL_RANGE_DB) * 100}%`,
+              filter:
+                pkAxis / LEVEL_RANGE_DB > LEVEL_DANGER_POS
+                  ? 'hue-rotate(-20deg) saturate(1.4)'
+                  : undefined,
+            }}
           />
           {pkHeldVisible && (
             <div
@@ -712,28 +678,15 @@ function CfcPairRow({ pk, av, gr, hint }: { pk: number; av: number; gr: number; 
             />
           </div>
         </div>
-        {/* GR bar — solid colour by zone, zone bands behind */}
-        <div className="meter-bar" style={{ height: 12 }}>
+        {/* GR bar */}
+        <div className="meter-bar">
           <div
-            aria-hidden="true"
+            className="meter-fill"
             style={{
-              position: 'absolute',
-              inset: 0,
-              background: grZoneBackground(),
-              pointerEvents: 'none',
-            }}
-          />
-          <div
-            aria-hidden="true"
-            style={{
-              position: 'absolute',
-              left: 0,
-              top: 0,
-              bottom: 0,
               width: `${(grClamped / GR_MAX_DB) * 100}%`,
-              background: grFillColor(grNormalized),
-              transition: 'width 200ms, background 100ms',
-              pointerEvents: 'none',
+              filter: grOverdrive
+                ? 'hue-rotate(-20deg) saturate(1.4)'
+                : undefined,
             }}
           />
           {grHeldVisible && (
@@ -766,21 +719,14 @@ function CfcPairRow({ pk, av, gr, hint }: { pk: number; av: number; gr: number; 
 
 export function TxStageMeters() {
   const wdspMicPk = useTxStore((s) => s.wdspMicPk);
-  const micAv = useTxStore((s) => s.micAv);
   const eqPk = useTxStore((s) => s.eqPk);
-  const eqAv = useTxStore((s) => s.eqAv);
   const lvlrPk = useTxStore((s) => s.lvlrPk);
-  const lvlrAv = useTxStore((s) => s.lvlrAv);
   const cfcPk = useTxStore((s) => s.cfcPk);
-  const cfcAv = useTxStore((s) => s.cfcAv);
   const cfcGr = useTxStore((s) => s.cfcGr);
   const compPk = useTxStore((s) => s.compPk);
-  const compAv = useTxStore((s) => s.compAv);
   const alcPk = useTxStore((s) => s.alcPk);
-  const alcAv = useTxStore((s) => s.alcAv);
   const alcGr = useTxStore((s) => s.alcGr);
   const outPk = useTxStore((s) => s.outPk);
-  const outAv = useTxStore((s) => s.outAv);
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
   const transmitting = moxOn || tunOn;
@@ -810,37 +756,39 @@ export function TxStageMeters() {
         Rendered above the per-stage strip so it's always in view even
         before the user scrolls.
       */}
-      <AlcPairRow alcPk={alcPk} alcAv={alcAv} alcGr={alcGr} />
+      <AlcPairRow alcPk={alcPk} alcGr={alcGr} />
 
       <LevelRow
         label="MIC"
         dbfs={wdspMicPk}
-        dbfsAv={micAv}
-        hint="Post-panel-gain mic level entering WDSP TXA (TXA_MIC_PK / _AV)"
+        hint="Post-panel-gain mic level entering WDSP TXA (TXA_MIC_PK)"
       />
-      <LevelRow label="EQ" dbfs={eqPk} dbfsAv={eqAv} hint="Post-EQ peak / average" />
+      <LevelRow label="EQ" dbfs={eqPk} hint="Post-EQ peak" />
       <LevelRow
         label="LVLR"
         dbfs={lvlrPk}
-        dbfsAv={lvlrAv}
-        hint="Post-Leveler peak / average — same as EQ while Leveler is disabled"
+        hint="Post-Leveler peak — same as EQ while Leveler is disabled"
       />
       <CfcPairRow
         pk={cfcPk}
-        av={cfcAv}
         gr={cfcGr}
-        hint="CFC (continuous-frequency compressor) peak + average + gain reduction"
+        hint="CFC (continuous-frequency compressor) peak + gain reduction"
       />
       <LevelRow
         label="COMP"
         dbfs={compPk}
-        dbfsAv={compAv}
-        hint="Post-compressor peak / average — bypassed by default"
+        hint="Post-compressor peak — bypassed by default"
       />
-      {/* ALC and ALC GR are not duplicated as standalone rows — the
-          prominent AlcPairRow at the top of the panel already shows both
-          in side-by-side form. */}
-      <LevelRow label="OUT" dbfs={outPk} dbfsAv={outAv} hint="Final TX peak / average" />
+      <LevelRow
+        label="ALC"
+        dbfs={alcPk}
+        hint="Post-ALC peak — the key clipping indicator for SSB distortion"
+      />
+      <GrRow
+        db={alcGr}
+        hint="ALC gain reduction; sustained >10 dB means the input is over-driving the limiter"
+      />
+      <LevelRow label="OUT" dbfs={outPk} hint="Final TX peak" />
     </div>
   );
 }

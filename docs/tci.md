@@ -51,7 +51,7 @@ The server sends a handshake message immediately after the WebSocket upgrade, en
 command:arg1,arg2,...;
 ```
 
-## Supported Commands (Phase 1 + Phase 2 + Phase 4)
+## Supported Commands (Phase 1 + Phase 2)
 
 ### Frequency Control
 
@@ -74,18 +74,6 @@ command:arg1,arg2,...;
 ### AGC (Phase 2)
 
 - `agc_gain:<rx>,<db>` — Set/query AGC gain (synonymous with AGC top, range -20 to 120 dB)
-
-### Noise Reduction / Blanking (Phase 4)
-
-- `nr_enable:<rx>,<bool>` — Enable/disable noise reduction (NR1/ANR). `true` enables NR1; `false` turns off all NR modes. For NR2/NR4, use the REST DSP API.
-- `nb_enable:<rx>,<bool>` — Enable/disable noise blanker (NB1). `true` enables NB1; `false` disables noise blanking.
-- `anf_enable:<rx>,<bool>` — Enable/disable automatic notch filter (ANF).
-- `anc_enable:<rx>,<bool>` — Enable/disable spectral noise blanker / adaptive noise canceller (SNB).
-
-### Preamp / Attenuator (Phase 4)
-
-- `preamp:<rx>,<bool>` — Set/query preamp state.
-- `attenuator:<rx>,<db>` — Set/query attenuator level in dB (0..31, HPSDR hardware limit).
 
 ### CW Keyer / Macros (Phase 2 — ack-only stubs)
 
@@ -119,37 +107,27 @@ The following commands are accepted by the dispatcher but currently no-op (logge
 
 ### Binary Streams (Phase 3)
 
-#### IQ Streams
-
 - `iq_start:<rx>,<bool>` — Subscribe (true) / unsubscribe (false) to RX IQ binary stream for the given receiver
 - `iq_stop:<rx>` — Alias for `iq_start:<rx>,false`
 - `iq_samplerate:<hz>` — Set/query requested IQ sample rate (clamped to 48000–384000)
 
-The actual rate of published frames is the radio's native IQ sample rate (set via the protocol layer); the server echoes the clamped requested rate so the client knows what it will receive.
-
-#### RX Audio Streams
-
-- `audio_start:<rx>,<bool>` — Subscribe (true) / unsubscribe (false) to demodulated RX audio stream for the given receiver
-- `audio_stop:<rx>` — Alias for `audio_start:<rx>,false`
-- `audio_samplerate:<hz>` — Set/query requested audio sample rate (clamped to 8000–48000). Zeus currently emits audio at 48 kHz; the requested rate is stored and echoed. Down-sampling is not yet implemented.
-
-Audio frames carry mono FLOAT32 samples at 48 kHz. Streams emit WebSocket binary frames with the 64-byte TCI header described below.
+The actual rate of published frames is the radio's native IQ sample rate (set via the protocol layer); the server echoes the clamped requested rate so the client knows what it will receive. Streams emit WebSocket binary frames with the 64-byte TCI header described below.
 
 #### Binary frame layout (64-byte header + samples)
 
 All header fields are little-endian uint32. Layout matches Thetis `buildStreamPayload`:
 
-| Offset | Field | IQ stream value | RX audio stream value |
-|---|---|---|---|
-| 0..3 | receiver index | `0` | `0` |
-| 4..7 | sample rate (Hz) | radio native (48k/96k/192k/384k) | `48000` |
-| 8..11 | sample type | `3` = FLOAT32 | `3` = FLOAT32 |
-| 12..19 | reserved | 0 | 0 |
-| 20..23 | length | float-value count = `complex_samples * 2` | sample count |
-| 24..27 | stream type | `0` = IQ_STREAM | `1` = RX_AUDIO_STREAM |
-| 28..31 | channels | `2` (I, Q interleaved) | `1` (mono) |
-| 32..63 | reserved | 0 | 0 |
-| 64.. | payload | FLOAT32 LE, interleaved I, Q, I, Q, … | FLOAT32 LE, mono samples |
+| Offset | Field | IQ value |
+|---|---|---|
+| 0..3 | receiver index | `0` |
+| 4..7 | sample rate (Hz) | radio native (48k/96k/192k/384k) |
+| 8..11 | sample type | `3` = FLOAT32 |
+| 12..19 | reserved | 0 |
+| 20..23 | length | float-value count = `complex_samples * 2` |
+| 24..27 | stream type | `0` = IQ_STREAM |
+| 28..31 | channels | `2` (I, Q interleaved) |
+| 32..63 | reserved | 0 |
+| 64.. | payload | FLOAT32 little-endian, interleaved I, Q, I, Q, … |
 
 ## Events (Server → Client)
 
@@ -214,35 +192,26 @@ trx:0,true;
 tx_enable:0,true;
 ```
 
-## REST API
+## Future Phases
 
-TCI server status and configuration is available over the standard Zeus REST API:
-
-- `GET /api/tci/status` — Returns current TCI server status (enabled, port, bind address, client count, port availability, pending config, restart required flag)
-- `POST /api/tci/config` — Update pending TCI configuration (requires app restart to take effect)
-- `POST /api/tci/test` — Test if a given address/port is available
-
-## Remaining / Future Work
-
-**Phase 2 — Digital Mode Support** ✅ (Complete)
+**Phase 2 — Digital Mode Support** ✅ (Partially Complete)
 - ✅ AGC gain commands
 - ✅ S-meter event broadcasting
 - ✅ TX-meter event broadcasts (power, SWR, ALC)
 - 🟡 CW message / keyer commands (ack-only stubs; functional impl deferred pending CW engine)
 
-**Phase 3 — Binary Streams** 🟡 (Mostly Complete)
+**Phase 3 — Binary Streams** 🟡 (Partially Complete)
 - ✅ IQ streaming (`iq_start`, `iq_stop`, `iq_samplerate`) — single receiver, FLOAT32, native radio rate
 - ✅ Outbound priority queues (Urgent / Binary / Control) mirroring Thetis architecture
-- ✅ RX audio streaming (`audio_start`, `audio_stop`, `audio_samplerate`) — 48 kHz mono FLOAT32
-- ⏸️ Functional audio down-sampling (requested rate stored/echoed, actual frames always at 48 kHz)
-- ⏸️ Multi-receiver IQ/audio when Zeus gains Diversity / dual-RX support
+- ⏸️ Audio streaming (`audio_start`, `audio_stop`, `audio_samplerate`)
+- ⏸️ Multi-receiver IQ when Zeus gains Diversity / dual-RX support
 - ⏸️ Conformance test against a real third-party client (Log4OM / SMP)
 
-**Phase 4 — Polish** ✅ (Mostly Complete)
-- ✅ Noise reduction commands (`nr_enable`, `nb_enable`, `anf_enable`, `anc_enable`)
-- ✅ Preamp / attenuator commands (`preamp`, `attenuator`)
-- ✅ REST API for TCI status/control (`GET /api/tci/status`)
-- ⏸️ Spot rendering on panadapter (visual-design red-light — maintainer decision required)
+**Phase 4 — Polish**
+- Noise reduction commands (NB, NR, ANF, ANC)
+- Preamp / attenuator commands
+- Spot rendering on panadapter
+- REST API for TCI status/control
 
 ## Protocol Reference
 

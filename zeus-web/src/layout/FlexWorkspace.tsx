@@ -89,29 +89,11 @@ export function FlexWorkspace() {
     }
   }, [loadFromServer]);
 
-  // Build the FlexLayout Model **once** on initial server-state load.
-  //
-  // After that the Model is its own source of truth — it mutates internally
-  // for every drag/dock/tab-switch/click and fires onModelChange so we can
-  // persist the JSON to the store. We must NOT rebuild the Model from
-  // store JSON on every layout change: doing so replaces the Model
-  // reference, which makes flexlayout-react's <Layout> remount every panel
-  // and reinitialise stateful widgets (the panadapter WebGL context, audio
-  // worklet, etc.). The visible symptoms were "click anything in a flex
-  // panel and the panadapter refreshes from scratch / button clicks do
-  // nothing" — flexlayout fires onModelChange even on tab-focus updates,
-  // which were round-tripping through the store and remounting the world.
-  //
-  // The "RESET FLEX LAYOUT" button in DisplayPanel uses window.location
-  // .reload(), so it gets a fresh Model that way; we don't need to react
-  // to layout-store changes here.
+  // (Re-)build the Model once the server response arrives.
   useEffect(() => {
     if (!isLoaded) return;
-    setModel((current) => {
-      if (current) return current;
-      const json = (layout ?? DEFAULT_LAYOUT) as unknown as IJsonModel;
-      return Model.fromJson(json);
-    });
+    const json = (layout ?? DEFAULT_LAYOUT) as unknown as IJsonModel;
+    setModel(Model.fromJson(json));
   }, [isLoaded, layout]);
 
   // Sync layout to server on page unload (sendBeacon → XHR fallback).

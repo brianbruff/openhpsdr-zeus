@@ -14,8 +14,8 @@ namespace Zeus.Server.Tests.Tci;
 
 /// <summary>
 /// Wire-compatibility tests for the 64-byte TCI binary stream header.
-/// Layout matches SunSDR / ExpertSDR3 TCI v1.x spec §7.1 — offset 28..63
-/// is reserved zero; channel count is implicit by stream type.
+/// Layout must match Thetis TCIServer.buildStreamPayload byte-for-byte —
+/// any drift here breaks ExpertSDR3 clients.
 /// </summary>
 public class TciStreamPayloadTests
 {
@@ -24,7 +24,7 @@ public class TciStreamPayloadTests
     {
         var frame = TciStreamPayload.Build(
             receiver: 0, sampleRate: 48000, sampleType: TciSampleType.Float32,
-            length: 0, streamType: TciStreamType.IqStream,
+            length: 0, streamType: TciStreamType.IqStream, channels: 2,
             samplePayload: ReadOnlySpan<byte>.Empty);
 
         Assert.Equal(TciStreamPayload.HeaderSize, frame.Length);
@@ -36,7 +36,7 @@ public class TciStreamPayloadTests
     {
         var frame = TciStreamPayload.Build(
             receiver: 1, sampleRate: 192_000, sampleType: TciSampleType.Float32,
-            length: 1024, streamType: TciStreamType.IqStream,
+            length: 1024, streamType: TciStreamType.IqStream, channels: 2,
             samplePayload: ReadOnlySpan<byte>.Empty);
 
         Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(0)));
@@ -44,6 +44,7 @@ public class TciStreamPayloadTests
         Assert.Equal((uint)TciSampleType.Float32, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(8)));
         Assert.Equal(1024u, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(20)));
         Assert.Equal((uint)TciStreamType.IqStream, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(24)));
+        Assert.Equal(2u, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(28)));
     }
 
     [Fact]
@@ -51,13 +52,14 @@ public class TciStreamPayloadTests
     {
         var frame = TciStreamPayload.Build(
             receiver: 0, sampleRate: 48000, sampleType: TciSampleType.Float32,
-            length: 0, streamType: TciStreamType.IqStream,
+            length: 0, streamType: TciStreamType.IqStream, channels: 2,
             samplePayload: ReadOnlySpan<byte>.Empty);
 
-        // Codec at [12], crc at [16], and reserved[9] at [28..63] are all zero
+        // Two reserved uint32 between sampleType and length (offsets 12, 16)
         Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(12)));
         Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(16)));
-        for (int offset = 28; offset < 64; offset += 4)
+        // Eight reserved uint32 from offset 32..63
+        for (int offset = 32; offset < 64; offset += 4)
             Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(offset)));
     }
 
@@ -67,7 +69,7 @@ public class TciStreamPayloadTests
         ReadOnlySpan<byte> payload = stackalloc byte[] { 0xDE, 0xAD, 0xBE, 0xEF };
         var frame = TciStreamPayload.Build(
             receiver: 0, sampleRate: 48000, sampleType: TciSampleType.Float32,
-            length: 4, streamType: TciStreamType.IqStream,
+            length: 4, streamType: TciStreamType.IqStream, channels: 2,
             samplePayload: payload);
 
         Assert.Equal(64 + 4, frame.Length);
@@ -78,16 +80,16 @@ public class TciStreamPayloadTests
     }
 
     [Fact]
-    public void BuildIqFromDoubles_HeaderTypedAsFloat32Iq()
+    public void BuildIqFromDoubles_HeaderTypedAsFloat32IqWithTwoChannels()
     {
         ReadOnlySpan<double> samples = stackalloc double[] { 1.0, -1.0, 0.5, -0.5 };
         var frame = TciStreamPayload.BuildIqFromDoubles(0, 48000, samples);
 
         Assert.Equal((uint)TciSampleType.Float32, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(8)));
         Assert.Equal((uint)TciStreamType.IqStream, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(24)));
+        Assert.Equal(2u, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(28)));
+        // length is the count of float values, equal to samples.Length for IQ
         Assert.Equal((uint)samples.Length, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(20)));
-        // Offset 28 is reserved — must be zero per spec
-        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(28)));
     }
 
     [Fact]
@@ -96,6 +98,7 @@ public class TciStreamPayloadTests
         ReadOnlySpan<double> samples = stackalloc double[] { 1.0, -1.0, 0.5, -0.5 };
         var frame = TciStreamPayload.BuildIqFromDoubles(0, 48000, samples);
 
+        // Each input double becomes one little-endian FLOAT32 (4 bytes) starting at offset 64.
         Assert.Equal(64 + samples.Length * 4, frame.Length);
         for (int i = 0; i < samples.Length; i++)
         {
@@ -103,46 +106,5 @@ public class TciStreamPayloadTests
             float actual = BitConverter.ToSingle(frame, 64 + i * 4);
             Assert.Equal(expected, actual);
         }
-    }
-
-    [Fact]
-    public void BuildAudioFromFloats_HeaderTypedAsFloat32RxAudio()
-    {
-        ReadOnlySpan<float> samples = stackalloc float[] { 0.1f, -0.2f, 0.3f, -0.4f };
-        var frame = TciStreamPayload.BuildAudioFromFloats(0, 48000, samples);
-
-        Assert.Equal((uint)TciSampleType.Float32, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(8)));
-        Assert.Equal((uint)TciStreamType.RxAudioStream, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(24)));
-        // length is the *total float count* on the wire — stereo doubles it
-        Assert.Equal((uint)(samples.Length * 2), BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(20)));
-        // Offset 28 is reserved — must be zero per spec
-        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(28)));
-    }
-
-    [Fact]
-    public void BuildAudioFromFloats_DuplicatesMonoToStereoLR()
-    {
-        ReadOnlySpan<float> mono = stackalloc float[] { 0.1f, -0.2f, 0.3f };
-        var frame = TciStreamPayload.BuildAudioFromFloats(0, 48000, mono);
-
-        // Payload is mono.Length * 2 floats, interleaved L,R,L,R,…
-        // Each L and R for a given source sample equals that source sample.
-        Assert.Equal(64 + mono.Length * 2 * 4, frame.Length);
-        for (int i = 0; i < mono.Length; i++)
-        {
-            float left = BitConverter.ToSingle(frame, 64 + (i * 2) * 4);
-            float right = BitConverter.ToSingle(frame, 64 + (i * 2 + 1) * 4);
-            Assert.Equal(mono[i], left);
-            Assert.Equal(mono[i], right);
-        }
-    }
-
-    [Fact]
-    public void BuildAudioFromFloats_SampleRateWrittenToHeader()
-    {
-        ReadOnlySpan<float> samples = stackalloc float[] { 0.0f };
-        var frame = TciStreamPayload.BuildAudioFromFloats(0, 48000, samples);
-
-        Assert.Equal(48000u, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(4)));
     }
 }

@@ -90,7 +90,6 @@ import { bearingDeg, distanceKm } from './components/design/geo';
 import { LeafletWorldMap } from './components/design/LeafletWorldMap';
 import { LeafletMapErrorBoundary } from './components/design/LeafletMapErrorBoundary';
 import { startRealtime } from './realtime/ws-client';
-import { getServerBaseUrl, isCapacitorRuntime } from './serverUrl';
 import { getAudioClient } from './audio/audio-client';
 import { useMicUplink } from './audio/use-mic-uplink';
 import { fetchState } from './api/client';
@@ -117,7 +116,7 @@ const STATE_POLL_MS = 333;
 export default function App() {
   useSwUpdatePrompt();
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsInitialTab, setSettingsInitialTab] = useState<'pa' | 'qrz' | 'rotator' | 'server' | 'about' | undefined>();
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'pa' | 'qrz' | 'rotator' | 'about' | undefined>();
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [installUpdate, setInstallUpdate] = useState<(() => Promise<void>) | null>(null);
   const status = useConnectionStore((s) => s.status);
@@ -207,18 +206,12 @@ export default function App() {
     document.documentElement.setAttribute('data-fonts', fonts);
   }, []);
 
-  // Handle deeplink via URL hash (#qrz, #rotator, #pa, #server, #about).
+  // Handle deeplink via URL hash (#qrz, #rotator, #pa, #about).
   // Opens settings menu and navigates to the specified tab.
   useEffect(() => {
     const handleHash = () => {
       const hash = window.location.hash.slice(1); // Remove '#'
-      if (
-        hash === 'qrz' ||
-        hash === 'rotator' ||
-        hash === 'pa' ||
-        hash === 'server' ||
-        hash === 'about'
-      ) {
+      if (hash === 'qrz' || hash === 'rotator' || hash === 'pa' || hash === 'about') {
         setSettingsInitialTab(hash);
         setSettingsOpen(true);
         // Clear the hash after handling it
@@ -232,17 +225,6 @@ export default function App() {
     // Listen for hash changes
     window.addEventListener('hashchange', handleHash);
     return () => window.removeEventListener('hashchange', handleHash);
-  }, []);
-
-  // First-run UX for native shells (Capacitor): if there is no server URL
-  // configured, the app would spin trying to reach the WebView's own host.
-  // Pop the Settings → Server tab open so the operator can paste their LAN
-  // address.
-  useEffect(() => {
-    if (!isCapacitorRuntime()) return;
-    if (getServerBaseUrl()) return;
-    setSettingsInitialTab('server');
-    setSettingsOpen(true);
   }, []);
 
   // --- Design-mock state (QRZ, DSP grid toggles, CW WPM, memories) ---

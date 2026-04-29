@@ -5,7 +5,6 @@ zeus-web/node_modules/
 zeus-web/dist/
 zeus-web/dev-dist/
 Zeus.Server/wwwroot/
-Zeus.Server.Hosting/wwwroot/
 
 # Stray npm artifacts from running `npm install` at the repo root.
 # Zeus has no root-level package.json — the JS app lives under zeus-web/.

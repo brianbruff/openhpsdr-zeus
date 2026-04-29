@@ -105,7 +105,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: '../Zeus.Server.Hosting/wwwroot',
+    outDir: '../Zeus.Server/wwwroot',
     emptyOutDir: true,
   },
 });

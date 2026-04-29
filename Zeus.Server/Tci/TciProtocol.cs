@@ -57,7 +57,7 @@ public static class TciProtocol
 {
     // Protocol constants
     public const string ProtocolName = "ExpertSDR3";
-    public const string ProtocolVersion = "2.0";
+    public const string ProtocolVersion = "1.8";
     public const string DeviceName = "Zeus";
 
     /// <summary>

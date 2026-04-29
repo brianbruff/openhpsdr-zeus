@@ -1,83 +1,45 @@
 name: Release
 
-# Three trigger paths:
-#   1. push of a v*.*.* tag         → full release (build + publish to GitHub Releases)
-#   2. push to a release/** branch  → dry-run build only (artifacts uploaded, no Release)
-#   3. manual workflow_dispatch     → dry-run build only (run from any branch via the
-#                                     Actions tab → Release → Run workflow)
-#
-# In all three modes the same matrix builds installers for Windows, Linux,
-# and macOS — both the headless service-mode bundles AND the new Photino
-# desktop bundles. The 'create-release' job is gated on github.ref_type=='tag'
-# so dry-run runs never publish.
 on:
   push:
     tags:
       - 'v*.*.*'
-    branches:
-      - 'release/**'
-  workflow_dispatch:
 
 jobs:
-  determine-version:
-    name: Determine version
+  verify-tag:
+    name: Verify tag is on main and well-formed
     runs-on: ubuntu-latest
     outputs:
-      # Full SemVer string used in artifact filenames (e.g. 0.4.1-dryrun.abc1234).
       version: ${{ steps.parse.outputs.version }}
-      # Numeric MAJOR.MINOR.PATCH for -p:VersionPrefix. .NET's AssemblyVersion /
-      # FileVersion are derived from this in Directory.Build.props and reject
-      # any non-numeric content (CS7034 / CS7035), so the suffix has to ride on
-      # VersionSuffix instead.
-      version-prefix: ${{ steps.parse.outputs.version-prefix }}
-      version-suffix: ${{ steps.parse.outputs.version-suffix }}
-      is-release: ${{ steps.parse.outputs.is-release }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Parse version + validate (tag mode only)
-        id: parse
+      - name: Validate tag format (vMAJOR.MINOR.PATCH, digits only)
         run: |
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            # Tag push — strict release path.
-            if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "::error::Tag '$GITHUB_REF_NAME' does not match vMAJOR.MINOR.PATCH (e.g. v1.2.3)."
-              exit 1
-            fi
-            git fetch origin main --depth=0 2>/dev/null || git fetch origin main
-            TAG_SHA=$(git rev-parse "$GITHUB_REF_NAME^{commit}")
-            if ! git merge-base --is-ancestor "$TAG_SHA" origin/main; then
-              echo "::error::Tag '$GITHUB_REF_NAME' (commit $TAG_SHA) is not reachable from origin/main. Releases must be tagged from main."
-              exit 1
-            fi
-            VERSION_PREFIX="${GITHUB_REF_NAME#v}"
-            VERSION_SUFFIX=""
-            VERSION="$VERSION_PREFIX"
-            IS_RELEASE="true"
-            echo "Tagged release $GITHUB_REF_NAME → version $VERSION"
-          else
-            # Branch push or manual dispatch — dry-run path. Read VersionPrefix
-            # from Directory.Build.props and ride the dryrun.<sha> tag on
-            # VersionSuffix so .NET's AssemblyVersion (which is built from
-            # VersionPrefix only) stays a valid MAJOR.MINOR.PATCH.
-            VERSION_PREFIX=$(sed -n 's:.*<VersionPrefix[^>]*>\([^<]*\)</VersionPrefix>.*:\1:p' Directory.Build.props | head -1)
-            VERSION_PREFIX="${VERSION_PREFIX:-0.0.0}"
-            SHORT_SHA="${GITHUB_SHA:0:7}"
-            VERSION_SUFFIX="dryrun.${SHORT_SHA}"
-            VERSION="${VERSION_PREFIX}-${VERSION_SUFFIX}"
-            IS_RELEASE="false"
-            echo "Dry-run build (trigger=$GITHUB_EVENT_NAME ref=$GITHUB_REF) → version $VERSION"
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '$GITHUB_REF_NAME' does not match vMAJOR.MINOR.PATCH (e.g. v1.2.3)."
+            exit 1
           fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "version-prefix=${VERSION_PREFIX}" >> "$GITHUB_OUTPUT"
-          echo "version-suffix=${VERSION_SUFFIX}" >> "$GITHUB_OUTPUT"
-          echo "is-release=${IS_RELEASE}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag commit is reachable from main
+        run: |
+          git fetch origin main --depth=0 2>/dev/null || git fetch origin main
+          TAG_SHA=$(git rev-parse "$GITHUB_REF_NAME^{commit}")
+          if ! git merge-base --is-ancestor "$TAG_SHA" origin/main; then
+            echo "::error::Tag '$GITHUB_REF_NAME' (commit $TAG_SHA) is not reachable from origin/main. Releases must be tagged from main."
+            exit 1
+          fi
+          echo "Tag $GITHUB_REF_NAME verified on main (commit $TAG_SHA)."
+
+      - name: Parse version
+        id: parse
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
   build-release:
-    name: Build (${{ matrix.config.os }})
-    needs: determine-version
+    name: Build Release (${{ matrix.config.os }})
+    needs: verify-tag
     runs-on: ${{ matrix.config.runner }}
     strategy:
       fail-fast: false
@@ -103,7 +65,7 @@ jobs:
         id: version
         shell: bash
         run: |
-          VERSION="${{ needs.determine-version.outputs.version }}"
+          VERSION="${{ needs.verify-tag.outputs.version }}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Building version: ${VERSION}"
 
@@ -125,12 +87,10 @@ jobs:
           npm run build
         working-directory: zeus-web
 
-      - name: Publish Zeus.Server (service mode)
+      - name: Publish .NET application
         # Force bash so the backslash line-continuations parse correctly on
         # windows-latest, where the default shell is PowerShell (which
         # treats `--self-contained \` as a unary operator and errors out).
-        # VersionPrefix stays numeric (consumed by AssemblyVersion); the
-        # text suffix rides on VersionSuffix and lands in InformationalVersion.
         shell: bash
         run: |
           dotnet publish Zeus.Server/Zeus.Server.csproj \
@@ -138,30 +98,9 @@ jobs:
             -r ${{ matrix.config.rid }} \
             --self-contained true \
             -p:PublishReadyToRun=true \
-            -p:VersionPrefix=${{ needs.determine-version.outputs.version-prefix }} \
-            -p:VersionSuffix=${{ needs.determine-version.outputs.version-suffix }} \
+            -p:VersionPrefix=${{ steps.version.outputs.version }} \
             -p:DebugType=embedded \
             -p:DebugSymbols=false
-
-      - name: Publish Zeus.Desktop (desktop mode)
-        # Same self-contained publish as Zeus.Server, but for the Photino shell.
-        # Per-installer scripts (Windows .iss, Linux AppImage, macOS .app) all
-        # consume this output dir directly. The macOS desktop script does its
-        # own `dotnet publish` internally as a fallback for local use; running
-        # publish here makes it idempotent on this runner.
-        shell: bash
-        run: |
-          dotnet publish Zeus.Desktop/Zeus.Desktop.csproj \
-            -c Release \
-            -r ${{ matrix.config.rid }} \
-            --self-contained true \
-            -p:PublishReadyToRun=true \
-            -p:VersionPrefix=${{ needs.determine-version.outputs.version-prefix }} \
-            -p:VersionSuffix=${{ needs.determine-version.outputs.version-suffix }} \
-            -p:DebugType=embedded \
-            -p:DebugSymbols=false
-
-      # ---------- Service-mode installers (existing flow) -----------------
 
       - name: Build Windows Installer (Inno Setup)
         if: matrix.config.os == 'windows'
@@ -208,62 +147,9 @@ jobs:
           path: installers/output/Zeus-${{ steps.version.outputs.version }}-macos-*.dmg
           if-no-files-found: error
 
-      # ---------- Desktop-mode installers (Photino in-process) ------------
-
-      - name: Build Windows Desktop Installer (Inno Setup)
-        if: matrix.config.os == 'windows'
-        shell: pwsh
-        run: |
-          # Inno Setup was already installed by the service-mode step on the
-          # same runner; this just adds the binary to PATH and runs iscc again
-          # against the desktop .iss.
-          $env:PATH += ";C:\Program Files (x86)\Inno Setup 6"
-          iscc /DMyAppVersion="${{ steps.version.outputs.version }}" installers\zeus-desktop-windows.iss
-
-      - name: Upload Windows Desktop Installer
-        if: matrix.config.os == 'windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-desktop-installer
-          path: installers/output/Zeus-Desktop-${{ steps.version.outputs.version }}-win-x64-setup.exe
-          if-no-files-found: error
-
-      - name: Build Linux Desktop AppImage
-        if: matrix.config.os == 'linux'
-        run: |
-          # appimagetool fetched on-demand by the script. We pass
-          # --appimage-extract-and-run inside the script so FUSE2 isn't
-          # required on the runner.
-          chmod +x installers/create-linux-desktop-appimage.sh
-          installers/create-linux-desktop-appimage.sh ${{ steps.version.outputs.version }}
-
-      - name: Upload Linux Desktop AppImage
-        if: matrix.config.os == 'linux'
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-desktop-appimage
-          path: installers/output/Zeus-Desktop-${{ steps.version.outputs.version }}-linux-x86_64.AppImage
-          if-no-files-found: error
-
-      - name: Build macOS Desktop Package
-        if: startsWith(matrix.config.os, 'macos')
-        run: |
-          chmod +x installers/create-macos-desktop-app.sh
-          ARCH="${{ matrix.config.rid == 'osx-arm64' && 'arm64' || 'x64' }}"
-          installers/create-macos-desktop-app.sh ${{ steps.version.outputs.version }} $ARCH
-
-      - name: Upload macOS Desktop Package
-        if: startsWith(matrix.config.os, 'macos')
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-arm64-desktop-dmg
-          path: installers/output/Zeus-Desktop-${{ steps.version.outputs.version }}-macos-*.dmg
-          if-no-files-found: error
-
   create-release:
     name: Create GitHub Release
-    needs: [determine-version, build-release]
-    if: needs.determine-version.outputs.is-release == 'true'
+    needs: [verify-tag, build-release]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -273,7 +159,7 @@ jobs:
       - name: Determine version
         id: version
         run: |
-          VERSION="${{ needs.determine-version.outputs.version }}"
+          VERSION="${{ needs.verify-tag.outputs.version }}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
 
@@ -295,15 +181,12 @@ jobs:
           ## Downloads
 
           ### Windows (x64)
-          - **Zeus-${{ steps.version.outputs.version }}-win-x64-setup.exe** - service mode (browser UI)
-          - **Zeus-Desktop-${{ steps.version.outputs.version }}-win-x64-setup.exe** - desktop edition (native Photino window)
-
-          Both bundle the .NET 10 runtime and all dependencies. Distinct AppIds, so
-          you can install both side-by-side if you want.
+          - **Zeus-${{ steps.version.outputs.version }}-win-x64-setup.exe** - Windows installer
+            - Includes .NET runtime and all dependencies
+            - Run the installer and follow the prompts
 
           ### macOS (Apple Silicon)
-          - **Zeus-${{ steps.version.outputs.version }}-macos-arm64.dmg** - service mode (open Zeus in your browser)
-          - **Zeus-Desktop-${{ steps.version.outputs.version }}-macos-arm64.dmg** - desktop edition (native Photino window, no browser)
+          - **Zeus-${{ steps.version.outputs.version }}-macos-arm64.dmg** - M1/M2/M3 Macs
 
           Intel Mac builds are no longer published — the `macos-13` runner queue
           on GitHub-hosted Actions is too slow to be practical. If you need an
@@ -316,10 +199,10 @@ jobs:
           This is required because Zeus is not signed by a registered Apple Developer.
 
           ### Linux (x64)
-          - **zeus-${{ steps.version.outputs.version }}-linux-x64.tar.gz** - service mode tarball (browser UI)
-            - Extract and run `./zeus`. Self-contained .NET runtime + statically-embedded FFTW3.
-          - **Zeus-Desktop-${{ steps.version.outputs.version }}-linux-x86_64.AppImage** - desktop edition (native Photino window)
-            - `chmod +x` and run. Requires `libwebkit2gtk-4.1-0` (`apt install` / `dnf install`).
+          - **zeus-${{ steps.version.outputs.version }}-linux-x64.tar.gz** - Linux x64 tarball
+            - Extract and run `./zeus` from the extracted directory
+            - Self-contained: bundles the .NET runtime and statically embeds
+              FFTW3 into libwdsp.so, so no system packages are required
 
           ## Changes
 
@@ -340,10 +223,7 @@ jobs:
           prerelease: false
           files: |
             release-artifacts/windows-installer/*
-            release-artifacts/windows-desktop-installer/*
             release-artifacts/linux-tarball/*
-            release-artifacts/linux-desktop-appimage/*
             release-artifacts/macos-arm64-dmg/*
-            release-artifacts/macos-arm64-desktop-dmg/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -52,7 +52,6 @@ import { DspFlexPanel } from './panels/DspFlexPanel';
 import { CwPanel } from './panels/CwPanel';
 import { LogbookPanel } from './panels/LogbookPanel';
 import { TxMetersPanel } from './panels/TxMetersPanel';
-import { TxPanel } from './panels/TxPanel';
 import { FilterRibbonPanel } from './panels/FilterRibbonPanel';
 import { PsFlexPanel } from './panels/PsFlexPanel';
 import { BandPanel } from './panels/BandPanel';
@@ -135,13 +134,6 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'meters',
     tags: ['tx', 'power', 'swr', 'alc', 'meters'],
     component: TxMetersPanel,
-  },
-  tx: {
-    id: 'tx',
-    name: 'TX (Drive · Tune · Mic · Filter)',
-    category: 'controls',
-    tags: ['tx', 'drive', 'tune', 'mic', 'mic-gain', 'power', 'filter', 'bandpass'],
-    component: TxPanel,
   },
   filter: {
     id: 'filter',

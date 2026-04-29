@@ -14,7 +14,6 @@
 // statement and per-component attribution.
 
 import { Workbox } from 'workbox-window';
-import { isCapacitorRuntime } from '../serverUrl';
 
 /**
  * Register the service worker and handle updates.
@@ -25,13 +24,6 @@ export function registerServiceWorker(
 ): (() => Promise<void>) | null {
   // Service worker only works in production builds
   if (import.meta.env.DEV) {
-    return null;
-  }
-
-  // Capacitor's WebView already ships the bundled assets — running the PWA
-  // service worker on top of capacitor:// scope causes redundant caching
-  // and update prompts that don't make sense for a native shell.
-  if (isCapacitorRuntime()) {
     return null;
   }
 

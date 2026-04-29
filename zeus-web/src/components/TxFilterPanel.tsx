@@ -25,7 +25,6 @@ import { useConnectionStore } from '../state/connection-store';
 import { DriveSlider } from './DriveSlider';
 import { TunePowerSlider } from './TunePowerSlider';
 import { MicGainSlider } from './MicGainSlider';
-import { LevelerMaxGainSlider } from './LevelerMaxGainSlider';
 
 const CUSTOM_MIN = 0;
 const CUSTOM_MAX = 10000;
@@ -120,19 +119,7 @@ export function TxFilterPanel() {
     <div className="ctrl-group" style={{ padding: '6px 8px', gap: 6 }}>
       <DriveSlider />
       <TunePowerSlider />
-      {/* MIC + LVLR share a row — both are mic-chain TX-only sliders and
-          read together (mic gain into TXA, leveler max-gain after EQ). */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
-          gap: 8,
-          alignItems: 'center',
-        }}
-      >
-        <MicGainSlider />
-        <LevelerMaxGainSlider />
-      </div>
+      <MicGainSlider />
       {/* FILTER section — labeled explicitly now that the panel header is just
           "TX". Top border separates the bandpass row from the sliders above so
           the operator reads them as distinct controls. */}

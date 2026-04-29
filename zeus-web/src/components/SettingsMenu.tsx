@@ -25,23 +25,13 @@ import { AboutPanel } from './AboutPanel';
 import { DisplayPanel } from './DisplayPanel';
 import { QrzSettingsPanel } from './QrzSettingsPanel';
 import { RotatorSettingsPanel } from './RotatorSettingsPanel';
-import { ServerUrlPanel } from './ServerUrlPanel';
 import { TciSettingsPanel } from './TciSettingsPanel';
 import { RadioSelector } from './RadioSelector';
 import { usePaStore } from '../state/pa-store';
 import { PsSettingsPanel } from './PsSettingsPanel';
 import { TxAudioToolsPanel } from './TxAudioToolsPanel';
 
-type TabId =
-  | 'pa'
-  | 'ps'
-  | 'tx-audio'
-  | 'qrz'
-  | 'rotator'
-  | 'tci'
-  | 'display'
-  | 'server'
-  | 'about';
+type TabId = 'pa' | 'ps' | 'tx-audio' | 'qrz' | 'rotator' | 'tci' | 'display' | 'about';
 
 const TABS: ReadonlyArray<{ id: TabId; label: string }> = [
   { id: 'pa', label: 'PA SETTINGS' },
@@ -51,7 +41,6 @@ const TABS: ReadonlyArray<{ id: TabId; label: string }> = [
   { id: 'rotator', label: 'ROTATOR' },
   { id: 'tci', label: 'TCI' },
   { id: 'display', label: 'DISPLAY' },
-  { id: 'server', label: 'SERVER' },
   { id: 'about', label: 'ABOUT' },
 ];
 
@@ -318,7 +307,6 @@ export function SettingsMenu({ open, onClose, initialTab }: Props) {
           {active === 'rotator' && <RotatorSettingsPanel />}
           {active === 'tci' && <TciSettingsPanel />}
           {active === 'display' && <DisplayPanel />}
-          {active === 'server' && <ServerUrlPanel />}
           {active === 'about' && <AboutPanel />}
         </div>
       </div>

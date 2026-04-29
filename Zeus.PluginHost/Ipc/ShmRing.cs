@@ -4,13 +4,10 @@
 // consumer. Slot count is a power of two so the modulo reduces to a
 // bitwise AND.
 //
-// Phase 1 backs the mapping with an anonymous, process-local
-// MemoryMappedFile. That gives us the exact same in-memory layout that
-// shm_open + mmap will produce in Phase 2 (when the sidecar opens the
-// same name and shares the pages); the only thing that changes when we
-// upgrade is the mapping creation. The realtime contract — Acquire /
-// Publish / Read / Release do NO syscalls, NO mallocs, NO locks — holds
-// today and is what the audio thread relies on.
+// Phase 2 backs the mapping with a real POSIX shared-memory region opened
+// via libc shm_open + ftruncate, then mmap'd via
+// MemoryMappedFile.CreateFromFile($"/dev/shm/<name>"). Both the .NET host
+// and the C++ sidecar see the same pages by name.
 //
 // Wire layout (must match C++ RingControlBlock byte-for-byte):
 //
@@ -34,10 +31,12 @@
 // planar float32 payload, padded out to a cache line.
 
 using System;
+using System.IO;
 using System.IO.MemoryMappedFiles;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Microsoft.Win32.SafeHandles;
 
 namespace Zeus.PluginHost.Ipc;
 
@@ -64,9 +63,7 @@ internal unsafe struct RingControlBlock
 }
 
 /// <summary>
-/// SPSC lock-free shared-memory ring. Phase 1 owns the backing memory via
-/// <see cref="MemoryMappedFile"/>; Phase 2 will open a named shm region
-/// shared with the sidecar process.
+/// SPSC lock-free shared-memory ring.
 /// </summary>
 public sealed unsafe class ShmRing : IDisposable
 {
@@ -80,12 +77,17 @@ public sealed unsafe class ShmRing : IDisposable
     /// <summary>BlockHeader is one cache line by spec.</summary>
     public const int BlockHeaderBytes = 64;
 
+    /// <summary>Linux page size used to round the mmap size up.</summary>
+    public const int PageBytes = 4096;
+
     private readonly MemoryMappedFile _mmf;
     private readonly MemoryMappedViewAccessor _accessor;
     private readonly byte* _base;
     private readonly RingControlBlock* _control;
     private readonly byte* _slots;
     private readonly uint _slotMask;
+    private readonly string? _shmName;
+    private readonly bool _ownsName;
 
     private bool _disposed;
 
@@ -104,12 +106,21 @@ public sealed unsafe class ShmRing : IDisposable
     /// <summary>Sample rate of the block payload in Hz.</summary>
     public uint SampleRate => _control->SampleRate;
 
+    /// <summary>POSIX shm name (with leading '/'), or null for anonymous.</summary>
+    public string? ShmName => _shmName;
+
+    /// <summary>True if this instance owns the shm name (and will shm_unlink
+    /// at dispose).</summary>
+    public bool OwnsName => _ownsName;
+
     private ShmRing(
         MemoryMappedFile mmf,
         MemoryMappedViewAccessor accessor,
         byte* basePtr,
         RingControlBlock* control,
-        byte* slots)
+        byte* slots,
+        string? shmName,
+        bool ownsName)
     {
         _mmf = mmf;
         _accessor = accessor;
@@ -117,17 +128,14 @@ public sealed unsafe class ShmRing : IDisposable
         _control = control;
         _slots = slots;
         _slotMask = control->SlotCount - 1u;
+        _shmName = shmName;
+        _ownsName = ownsName;
     }
 
     /// <summary>
-    /// Create an anonymous Phase 1 mapping that the host owns end-to-end.
-    /// In Phase 2 this becomes a named shm region opened from both the
-    /// host and the sidecar.
+    /// Create an anonymous in-process mapping. Used by Phase 1 / unit tests
+    /// only — the sidecar cannot see this mapping.
     /// </summary>
-    /// <param name="frames">Samples per channel in each slot. Phase 1 = 256.</param>
-    /// <param name="channels">Channel count per slot. Phase 1 = 1.</param>
-    /// <param name="sampleRate">Sample rate stamped into each slot. Phase 1 = 48000.</param>
-    /// <param name="slotCount">Number of slots; must be a power of two. Phase 1 = 8.</param>
     public static ShmRing CreateAnonymous(
         uint frames, uint channels, uint sampleRate, uint slotCount)
     {
@@ -140,9 +148,9 @@ public sealed unsafe class ShmRing : IDisposable
         var slotBytes = RoundUpToCacheLine(BlockBytes(frames, channels));
         var totalBytes = (long)Marshal.SizeOf<RingControlBlock>()
             + (long)slotBytes * slotCount;
+        // Round up to page boundary so Phase 2 layout matches.
+        totalBytes = RoundUpToPage(totalBytes);
 
-        // Anonymous (null name) mapping. Suitable for Phase 1 in-process
-        // testing; Phase 2 names the mapping so the sidecar can open it.
         var mmf = MemoryMappedFile.CreateNew(
             mapName: null,
             capacity: totalBytes,
@@ -150,11 +158,150 @@ public sealed unsafe class ShmRing : IDisposable
         var accessor = mmf.CreateViewAccessor(
             0, totalBytes, MemoryMappedFileAccess.ReadWrite);
 
+        return InitNew(mmf, accessor, totalBytes,
+            frames, channels, sampleRate, slotCount,
+            shmName: null, ownsName: false);
+    }
+
+    /// <summary>
+    /// Create a POSIX shm region named <paramref name="shmName"/>, size it,
+    /// and zero-init the control block. Caller (the host) owns the name and
+    /// will shm_unlink on dispose.
+    /// </summary>
+    /// <param name="shmName">POSIX shm name with leading '/'. No further '/'.</param>
+    public static ShmRing CreateNamed(
+        string shmName,
+        uint frames, uint channels, uint sampleRate, uint slotCount)
+    {
+        EnsurePosixShmSupported();
+        ValidateShmName(shmName);
+        if (slotCount == 0 || (slotCount & (slotCount - 1u)) != 0)
+        {
+            throw new ArgumentException(
+                "slotCount must be a power of two", nameof(slotCount));
+        }
+
+        var slotBytes = RoundUpToCacheLine(BlockBytes(frames, channels));
+        var logicalBytes = (long)Marshal.SizeOf<RingControlBlock>()
+            + (long)slotBytes * slotCount;
+        var totalBytes = RoundUpToPage(logicalBytes);
+
+        // Recover from any previous crash that left the name in /dev/shm.
+        Posix.shm_unlink(shmName);
+
+        var fd = Posix.shm_open(shmName, Posix.O_CREAT | Posix.O_EXCL | Posix.O_RDWR, 0x180);
+        if (fd < 0)
+        {
+            throw new IOException(
+                $"shm_open(O_CREAT) failed for {shmName}: errno={Marshal.GetLastWin32Error()}");
+        }
+        if (Posix.ftruncate(fd, totalBytes) != 0)
+        {
+            int err = Marshal.GetLastWin32Error();
+            Posix.close(fd);
+            Posix.shm_unlink(shmName);
+            throw new IOException($"ftruncate failed: errno={err}");
+        }
+
+        // Wrap the fd in a SafeFileHandle so MemoryMappedFile can mmap it.
+        // Ownership transfers to the SafeFileHandle.
+        var sfh = new SafeFileHandle(new IntPtr(fd), ownsHandle: true);
+
+        MemoryMappedFile mmf;
+        MemoryMappedViewAccessor accessor;
+        try
+        {
+            mmf = MemoryMappedFile.CreateFromFile(
+                fileHandle: sfh,
+                mapName: null,
+                capacity: totalBytes,
+                access: MemoryMappedFileAccess.ReadWrite,
+                inheritability: HandleInheritability.None,
+                leaveOpen: false);
+            accessor = mmf.CreateViewAccessor(
+                0, totalBytes, MemoryMappedFileAccess.ReadWrite);
+        }
+        catch
+        {
+            try { sfh.Dispose(); } catch { /* best-effort */ }
+            Posix.shm_unlink(shmName);
+            throw;
+        }
+
+        return InitNew(mmf, accessor, totalBytes,
+            frames, channels, sampleRate, slotCount,
+            shmName: shmName, ownsName: true);
+    }
+
+    /// <summary>
+    /// Open an already-created POSIX shm region named <paramref name="shmName"/>.
+    /// The caller (e.g. a test harness emulating the sidecar) does NOT own
+    /// the name and will not shm_unlink.
+    /// </summary>
+    public static ShmRing OpenExisting(
+        string shmName,
+        uint expectedFrames, uint expectedChannels,
+        uint expectedSampleRate, uint expectedSlotCount)
+    {
+        EnsurePosixShmSupported();
+        ValidateShmName(shmName);
+
+        var fd = Posix.shm_open(shmName, Posix.O_RDWR, 0);
+        if (fd < 0)
+        {
+            throw new IOException(
+                $"shm_open(existing) failed for {shmName}: errno={Marshal.GetLastWin32Error()}");
+        }
+
+        long size = Posix.lseek(fd, 0, Posix.SEEK_END);
+        if (size <= 0)
+        {
+            Posix.close(fd);
+            throw new IOException("shm region is empty");
+        }
+        Posix.lseek(fd, 0, Posix.SEEK_SET);
+
+        var sfh = new SafeFileHandle(new IntPtr(fd), ownsHandle: true);
+        var mmf = MemoryMappedFile.CreateFromFile(
+            fileHandle: sfh, mapName: null, capacity: size,
+            access: MemoryMappedFileAccess.ReadWrite,
+            inheritability: HandleInheritability.None,
+            leaveOpen: false);
+        var accessor = mmf.CreateViewAccessor(
+            0, size, MemoryMappedFileAccess.ReadWrite);
+
         byte* basePtr = null;
         accessor.SafeMemoryMappedViewHandle.AcquirePointer(ref basePtr);
 
-        // Zero the whole mapping — the C++ side does memset(raw, 0, totalBytes)
-        // immediately after allocation, and we must match.
+        var control = (RingControlBlock*)basePtr;
+        if (control->SlotCount  != expectedSlotCount  ||
+            control->Frames     != expectedFrames     ||
+            control->Channels   != expectedChannels   ||
+            control->SampleRate != expectedSampleRate)
+        {
+            try { accessor.SafeMemoryMappedViewHandle.ReleasePointer(); } catch { }
+            accessor.Dispose();
+            mmf.Dispose();
+            throw new IOException("shm geometry mismatch with creator");
+        }
+
+        var slots = basePtr + Marshal.SizeOf<RingControlBlock>();
+        return new ShmRing(mmf, accessor, basePtr, control, slots,
+            shmName: shmName, ownsName: false);
+    }
+
+    private static ShmRing InitNew(
+        MemoryMappedFile mmf, MemoryMappedViewAccessor accessor,
+        long totalBytes,
+        uint frames, uint channels, uint sampleRate, uint slotCount,
+        string? shmName, bool ownsName)
+    {
+        var slotBytes = RoundUpToCacheLine(BlockBytes(frames, channels));
+
+        byte* basePtr = null;
+        accessor.SafeMemoryMappedViewHandle.AcquirePointer(ref basePtr);
+
+        // Zero the whole mapping — the C++ side does memset(raw, 0, totalBytes).
         new Span<byte>(basePtr, (int)totalBytes).Clear();
 
         var control = (RingControlBlock*)basePtr;
@@ -167,7 +314,7 @@ public sealed unsafe class ShmRing : IDisposable
         control->SampleRate = sampleRate;
 
         var slots = basePtr + Marshal.SizeOf<RingControlBlock>();
-        return new ShmRing(mmf, accessor, basePtr, control, slots);
+        return new ShmRing(mmf, accessor, basePtr, control, slots, shmName, ownsName);
     }
 
     // ---- producer side --------------------------------------------------
@@ -256,6 +403,39 @@ public sealed unsafe class ShmRing : IDisposable
         return (n + (uint)(CacheLineBytes - 1)) & ~(uint)(CacheLineBytes - 1);
     }
 
+    private static long RoundUpToPage(long n)
+    {
+        return (n + (PageBytes - 1)) & ~((long)PageBytes - 1);
+    }
+
+    private static void EnsurePosixShmSupported()
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Linux) &&
+            !RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            throw new PlatformNotSupportedException(
+                "ShmRing.CreateNamed/OpenExisting require Linux or macOS in Phase 2.");
+        }
+    }
+
+    private static void ValidateShmName(string name)
+    {
+        if (string.IsNullOrEmpty(name) || name[0] != '/')
+        {
+            throw new ArgumentException(
+                "POSIX shm name must start with '/'", nameof(name));
+        }
+    }
+
+    /// <summary>Idempotent shm_unlink — safe to call from cleanup paths.</summary>
+    public static void Unlink(string shmName)
+    {
+        if (string.IsNullOrEmpty(shmName)) return;
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Linux) &&
+            !RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return;
+        Posix.shm_unlink(shmName);
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -270,5 +450,43 @@ public sealed unsafe class ShmRing : IDisposable
         }
         _accessor.Dispose();
         _mmf.Dispose();
+
+        if (_ownsName && !string.IsNullOrEmpty(_shmName))
+        {
+            try { Posix.shm_unlink(_shmName); } catch { /* best-effort */ }
+        }
     }
+}
+
+/// <summary>
+/// libc P/Invokes for POSIX shared memory. Linux glibc + macOS dylib
+/// expose all of these from "libc".
+/// </summary>
+internal static class Posix
+{
+    public const int O_RDWR  = 0x002;
+    public const int O_CREAT = 0x40;   // Linux glibc
+    public const int O_EXCL  = 0x80;   // Linux glibc
+
+    public const int SEEK_SET = 0;
+    public const int SEEK_END = 2;
+
+    [DllImport("libc", EntryPoint = "shm_open", SetLastError = true,
+               CharSet = CharSet.Ansi, BestFitMapping = false)]
+    public static extern int shm_open(
+        [MarshalAs(UnmanagedType.LPStr)] string name, int oflag, int mode);
+
+    [DllImport("libc", EntryPoint = "shm_unlink", SetLastError = true,
+               CharSet = CharSet.Ansi, BestFitMapping = false)]
+    public static extern int shm_unlink(
+        [MarshalAs(UnmanagedType.LPStr)] string name);
+
+    [DllImport("libc", EntryPoint = "ftruncate", SetLastError = true)]
+    public static extern int ftruncate(int fd, long length);
+
+    [DllImport("libc", EntryPoint = "close", SetLastError = true)]
+    public static extern int close(int fd);
+
+    [DllImport("libc", EntryPoint = "lseek", SetLastError = true)]
+    public static extern long lseek(int fd, long offset, int whence);
 }

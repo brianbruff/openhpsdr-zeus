@@ -13,6 +13,7 @@
 // keeps the terminal alive after parent exit" surprises during dev.
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Threading;
@@ -76,12 +77,19 @@ public sealed class SidecarProcess : IDisposable
     }
 
     /// <summary>
-    /// Spawn a new sidecar. Throws <see cref="FileNotFoundException"/> if
-    /// the binary path does not resolve, and rethrows any
+    /// Spawn a new sidecar with optional argv. Throws
+    /// <see cref="FileNotFoundException"/> if the binary path does not
+    /// resolve, and rethrows any
     /// <see cref="System.ComponentModel.Win32Exception"/> from the OS.
     /// </summary>
+    /// <param name="binaryPath">Resolved sidecar binary path.</param>
+    /// <param name="log">Optional log sink.</param>
+    /// <param name="args">Optional argv passed to the sidecar. Phase 2
+    /// callers pass <c>--shm-name</c> + <c>--control-pipe</c> here.</param>
     public static SidecarProcess Launch(
-        string binaryPath, IPluginHostLog? log = null)
+        string binaryPath,
+        IPluginHostLog? log = null,
+        IReadOnlyList<string>? args = null)
     {
         log ??= NullPluginHostLog.Instance;
         if (string.IsNullOrWhiteSpace(binaryPath))
@@ -103,9 +111,14 @@ public sealed class SidecarProcess : IDisposable
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            // TODO(phase2): pass --shm-name and --control-pipe as argv
-            // once PluginHostManager creates the named primitives.
         };
+        if (args != null)
+        {
+            foreach (var a in args)
+            {
+                psi.ArgumentList.Add(a);
+            }
+        }
 
         var proc = new Process { StartInfo = psi };
         if (!proc.Start())

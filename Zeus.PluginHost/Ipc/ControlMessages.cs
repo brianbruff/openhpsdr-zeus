@@ -1,86 +1,81 @@
-// ControlMessages.cs — type model for the length-prefixed control plane.
+// ControlMessages.cs — concrete Phase 2 control-message types.
 //
-// Phase 1 wire encoding is raw bytes (see ControlChannel). Phase 2 will
-// switch the encoding to length-prefixed CBOR (PeterO.Cbor or
-// System.Formats.Cbor) once the LoadPlugin / SetParam shapes are nailed
-// down on the C++ side.
-//
-// The Phase 1 messages we actually exchange are:
-//
-//   Hello      — handshake. Sidecar -> host once, with version + caps.
-//   Goodbye    — graceful shutdown. Host -> sidecar.
-//   Heartbeat  — 1 Hz, both directions, deadman keepalive.
-//   LogLine    — sidecar -> host, plain text for diagnostic forwarding.
-//
-// Plugin lifecycle (LoadPlugin / UnloadPlugin / SetParam / GetState /
-// SetState) is deferred to Phase 2 and only stubbed here for forward
-// reference in code reviews.
+// Wire encoding is the simple length-prefixed framing in ControlChannel.cs:
+// each message is a u32 length + u8 tag + payload. The records below
+// represent the typed payload only; the tag is taken from
+// <see cref="ControlTag"/>. See docs/proposals/vst-host-phase2-wire.md
+// for the canonical byte layout.
 
 using System;
+using System.Buffers.Binary;
 
 namespace Zeus.PluginHost.Ipc;
 
 /// <summary>
-/// Discriminator for the four Phase 1 control messages, plus stubs for
-/// the Phase 2 messages so the type model is easy to extend without a
-/// breaking rename.
+/// Sidecar -> host handshake. Sent immediately after the sidecar connects.
+/// Payload is 16 bytes, four little-endian uint32s.
 /// </summary>
-public enum ControlMessageType : ushort
-{
-    /// <summary>Reserved invalid value — never sent on the wire.</summary>
-    None = 0,
-
-    // ---- Phase 1 ---------------------------------------------------------
-    Hello = 1,
-    Goodbye = 2,
-    Heartbeat = 3,
-    LogLine = 4,
-
-    // ---- Phase 2 (TODO) — declared here so adding them later is additive,
-    //                       not a renumbering of existing values.
-    LoadPlugin = 100,
-    UnloadPlugin = 101,
-    SetParam = 102,
-    GetState = 103,
-    SetState = 104,
-}
-
-/// <summary>Phase 1 handshake. Sidecar tells host its version + capabilities.</summary>
 public sealed record HelloMessage(
-    string SidecarVersion,
     uint ProtocolVersion,
-    string Capabilities);
-
-/// <summary>Host -> sidecar shutdown signal. Sidecar should drain and exit.</summary>
-public sealed record GoodbyeMessage(string Reason);
-
-/// <summary>Bidirectional 1 Hz keepalive. Carries a sequence so each end
-/// can detect packet loss and the silent-sidecar SIGKILL recovery path.</summary>
-public sealed record HeartbeatMessage(ulong Sequence, long UnixTimeMs);
-
-/// <summary>Sidecar diagnostic. Severity matches the host's
-/// <see cref="IPluginHostLog"/> levels.</summary>
-public sealed record LogLineMessage(LogLevel Severity, string Text);
-
-/// <summary>Subset of log levels the sidecar emits over the wire.</summary>
-public enum LogLevel : byte
+    uint SampleRate,
+    uint FramesPerBlock,
+    uint Channels)
 {
-    Information = 0,
-    Warning = 1,
-    Error = 2,
+    public const int PayloadBytes = 16;
+
+    public byte[] Encode()
+    {
+        var buf = new byte[PayloadBytes];
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0, 4),  ProtocolVersion);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(4, 4),  SampleRate);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(8, 4),  FramesPerBlock);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(12, 4), Channels);
+        return buf;
+    }
+
+    public static HelloMessage Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length != PayloadBytes)
+        {
+            throw new ArgumentException(
+                $"Hello payload must be {PayloadBytes} bytes, got {payload.Length}");
+        }
+        var ver  = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(0, 4));
+        var rate = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(4, 4));
+        var fpb  = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(8, 4));
+        var ch   = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(12, 4));
+        return new HelloMessage(ver, rate, fpb, ch);
+    }
 }
 
-// ---- Phase 2 stubs ------------------------------------------------------
-//
-// These records are intentionally placeholders. The CBOR shape will be
-// finalized when the C++ side implements LoadPlugin; until then nothing
-// in Phase 1 should construct or send these.
+/// <summary>Host -> sidecar handshake confirmation. Empty payload.</summary>
+public sealed record HelloAckMessage
+{
+    public static readonly HelloAckMessage Instance = new();
+    public byte[] Encode() => Array.Empty<byte>();
+}
 
-/// <summary>TODO(phase2): plugin path + bitness probe payload.</summary>
-public sealed record LoadPluginMessage(string PluginPath);
+/// <summary>Bidirectional 1 Hz keepalive. Empty payload in Phase 2.</summary>
+public sealed record HeartbeatMessage
+{
+    public static readonly HeartbeatMessage Instance = new();
+    public byte[] Encode() => Array.Empty<byte>();
+}
 
-/// <summary>TODO(phase2): unload by slot id.</summary>
-public sealed record UnloadPluginMessage(uint SlotId);
+/// <summary>Host -> sidecar graceful-shutdown signal. Empty payload.</summary>
+public sealed record GoodbyeMessage
+{
+    public static readonly GoodbyeMessage Instance = new();
+    public byte[] Encode() => Array.Empty<byte>();
+}
 
-/// <summary>TODO(phase2): per-parameter set, normalized 0..1.</summary>
-public sealed record SetParamMessage(uint SlotId, uint ParamId, float Normalized);
+/// <summary>Sidecar -> host diagnostic line. Payload is UTF-8 text.</summary>
+public sealed record LogLineMessage(string Text)
+{
+    public byte[] Encode() => System.Text.Encoding.UTF8.GetBytes(Text);
+
+    public static LogLineMessage Decode(ReadOnlySpan<byte> payload)
+    {
+        return new LogLineMessage(System.Text.Encoding.UTF8.GetString(payload));
+    }
+}

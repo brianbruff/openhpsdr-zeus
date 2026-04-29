@@ -143,6 +143,24 @@ jobs:
             -p:DebugType=embedded \
             -p:DebugSymbols=false
 
+      - name: Publish Zeus.Desktop (desktop mode)
+        # Same self-contained publish as Zeus.Server, but for the Photino shell.
+        # Per-installer scripts (Windows .iss, Linux AppImage, macOS .app) all
+        # consume this output dir directly. The macOS desktop script does its
+        # own `dotnet publish` internally as a fallback for local use; running
+        # publish here makes it idempotent on this runner.
+        shell: bash
+        run: |
+          dotnet publish Zeus.Desktop/Zeus.Desktop.csproj \
+            -c Release \
+            -r ${{ matrix.config.rid }} \
+            --self-contained true \
+            -p:PublishReadyToRun=true \
+            -p:VersionPrefix=${{ needs.determine-version.outputs.version-prefix }} \
+            -p:VersionSuffix=${{ needs.determine-version.outputs.version-suffix }} \
+            -p:DebugType=embedded \
+            -p:DebugSymbols=false
+
       # ---------- Service-mode installers (existing flow) -----------------
 
       - name: Build Windows Installer (Inno Setup)
@@ -191,9 +209,41 @@ jobs:
           if-no-files-found: error
 
       # ---------- Desktop-mode installers (Photino in-process) ------------
-      # macOS desktop installer is wired now (3a). Windows + Linux desktop
-      # scripts land in 3b / 3c — until then those steps are intentionally
-      # absent so CI stays green.
+
+      - name: Build Windows Desktop Installer (Inno Setup)
+        if: matrix.config.os == 'windows'
+        shell: pwsh
+        run: |
+          # Inno Setup was already installed by the service-mode step on the
+          # same runner; this just adds the binary to PATH and runs iscc again
+          # against the desktop .iss.
+          $env:PATH += ";C:\Program Files (x86)\Inno Setup 6"
+          iscc /DMyAppVersion="${{ steps.version.outputs.version }}" installers\zeus-desktop-windows.iss
+
+      - name: Upload Windows Desktop Installer
+        if: matrix.config.os == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-desktop-installer
+          path: installers/output/Zeus-Desktop-${{ steps.version.outputs.version }}-win-x64-setup.exe
+          if-no-files-found: error
+
+      - name: Build Linux Desktop AppImage
+        if: matrix.config.os == 'linux'
+        run: |
+          # appimagetool fetched on-demand by the script. We pass
+          # --appimage-extract-and-run inside the script so FUSE2 isn't
+          # required on the runner.
+          chmod +x installers/create-linux-desktop-appimage.sh
+          installers/create-linux-desktop-appimage.sh ${{ steps.version.outputs.version }}
+
+      - name: Upload Linux Desktop AppImage
+        if: matrix.config.os == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-desktop-appimage
+          path: installers/output/Zeus-Desktop-${{ steps.version.outputs.version }}-linux-x86_64.AppImage
+          if-no-files-found: error
 
       - name: Build macOS Desktop Package
         if: startsWith(matrix.config.os, 'macos')
@@ -245,9 +295,11 @@ jobs:
           ## Downloads
 
           ### Windows (x64)
-          - **Zeus-${{ steps.version.outputs.version }}-win-x64-setup.exe** - Windows installer (service mode + browser UI)
-            - Includes .NET runtime and all dependencies
-            - Run the installer and follow the prompts
+          - **Zeus-${{ steps.version.outputs.version }}-win-x64-setup.exe** - service mode (browser UI)
+          - **Zeus-Desktop-${{ steps.version.outputs.version }}-win-x64-setup.exe** - desktop edition (native Photino window)
+
+          Both bundle the .NET 10 runtime and all dependencies. Distinct AppIds, so
+          you can install both side-by-side if you want.
 
           ### macOS (Apple Silicon)
           - **Zeus-${{ steps.version.outputs.version }}-macos-arm64.dmg** - service mode (open Zeus in your browser)
@@ -264,10 +316,10 @@ jobs:
           This is required because Zeus is not signed by a registered Apple Developer.
 
           ### Linux (x64)
-          - **zeus-${{ steps.version.outputs.version }}-linux-x64.tar.gz** - Linux x64 tarball
-            - Extract and run `./zeus` from the extracted directory
-            - Self-contained: bundles the .NET runtime and statically embeds
-              FFTW3 into libwdsp.so, so no system packages are required
+          - **zeus-${{ steps.version.outputs.version }}-linux-x64.tar.gz** - service mode tarball (browser UI)
+            - Extract and run `./zeus`. Self-contained .NET runtime + statically-embedded FFTW3.
+          - **Zeus-Desktop-${{ steps.version.outputs.version }}-linux-x86_64.AppImage** - desktop edition (native Photino window)
+            - `chmod +x` and run. Requires `libwebkit2gtk-4.1-0` (`apt install` / `dnf install`).
 
           ## Changes
 
@@ -288,7 +340,9 @@ jobs:
           prerelease: false
           files: |
             release-artifacts/windows-installer/*
+            release-artifacts/windows-desktop-installer/*
             release-artifacts/linux-tarball/*
+            release-artifacts/linux-desktop-appimage/*
             release-artifacts/macos-arm64-dmg/*
             release-artifacts/macos-arm64-desktop-dmg/*
         env:

@@ -68,6 +68,14 @@ internal static class ControlFrame
         // Extended RX attenuator (both bare HPSDR and HL2 firmware gain).
         // Protocol-1 writes these under C0=0x14.
         Attenuator = 0x14,
+        // HL2-specific: PureSignal enable and LNA gain configuration.
+        // Register 0x0a[22] = PureSignal enable bit.
+        // Register 0x0a[5:0] = LNA gain (with bit 6 for extended range).
+        PsEnableLna = 0x0A,
+        // HL2-specific: Predistortion configuration.
+        // Register 0x2b[31:24] = Predistortion subindex.
+        // Register 0x2b[19:16] = Predistortion value.
+        Predistortion = 0x2B,
     }
 
     /// <summary>
@@ -96,7 +104,13 @@ internal static class ControlFrame
         // anything. Selected by MOX: TX mask during transmit, RX mask otherwise
         // (piHPSDR `old_protocol.c:1884-1904`).
         byte UserOcTxMask = 0,
-        byte UserOcRxMask = 0);
+        byte UserOcRxMask = 0,
+        // PureSignal state (HL2-specific). When enabled, register 0x0a[22] is
+        // set and the RX stream will include feedback IQ samples for predistortion.
+        bool PsEnabled = false,
+        // Predistortion subindex and value (HL2 register 0x2b).
+        byte PsSubindex = 0,
+        byte PsPredistortion = 0);
 
     /// <summary>
     /// Write the 5 C&amp;C bytes for <paramref name="register"/> given the current
@@ -141,6 +155,14 @@ internal static class ControlFrame
 
             case CcRegister.Attenuator:
                 WriteAttenuatorPayload(cc[1..], in state);
+                break;
+
+            case CcRegister.PsEnableLna:
+                WritePsEnableLnaPayload(cc[1..], in state);
+                break;
+
+            case CcRegister.Predistortion:
+                WritePredistortionPayload(cc[1..], in state);
                 break;
 
             default:
@@ -204,6 +226,54 @@ internal static class ControlFrame
         // old_protocol.c:2661), N-1 receivers at [5:3] = 0 (we always use 1 RX).
         byte c4 = 1 << 2;
         c14[3] = c4;
+    }
+
+    private static void WritePsEnableLnaPayload(Span<byte> c14, in CcState s)
+    {
+        // HL2-specific register 0x0a controls PureSignal enable and LNA gain.
+        // C1..C2: bits [31:16] — reserved, leave zero
+        // C3: bits [15:8] — bit 6 (0x40) = extended LNA range, bits [5:0] = LNA gain value
+        // C4: bits [7:0] — bit 6 (0x40) = PureSignal enable, bits [5:0] = continuation of LNA
+        //
+        // Per hermes-lite2-protocol.md:
+        //   0x0a[22] = PureSignal enable (0=disable, 1=enable)
+        //   0x0a[6] = Extended LNA gain range selector
+        //   0x0a[5:0] = LNA gain value
+        //
+        // Note: For this implementation, we're primarily concerned with the PureSignal
+        // enable bit. LNA gain is handled separately via the attenuator path.
+        // When PureSignal is enabled, bit 22 is set (which is bit 6 of byte 2, or C3).
+
+        c14[0] = 0;  // C1 [31:24]
+        c14[1] = 0;  // C2 [23:16]
+
+        // C3 [15:8] contains bit 22-16, so bit 22 is at position (22-16) = 6
+        byte c3 = 0;
+        if (s.PsEnabled)
+        {
+            c3 |= 1 << 6;  // Set bit 22 (PureSignal enable)
+        }
+        c14[2] = c3;
+
+        c14[3] = 0;  // C4 [7:0]
+    }
+
+    private static void WritePredistortionPayload(Span<byte> c14, in CcState s)
+    {
+        // HL2-specific register 0x2b for predistortion configuration.
+        // Per hermes-lite2-protocol.md:
+        //   0x2b[31:24] = Predistortion subindex
+        //   0x2b[19:16] = Predistortion value
+        //
+        // C1 [31:24] = Predistortion subindex
+        // C2 [23:16] = bits 23-20 reserved, bits 19-16 = predistortion value
+        // C3 [15:8] = reserved
+        // C4 [7:0] = reserved
+
+        c14[0] = s.PsSubindex;  // C1 = subindex
+        c14[1] = (byte)((s.PsPredistortion & 0x0F) << 4);  // C2 = predistortion at bits [19:16]
+        c14[2] = 0;  // C3 reserved
+        c14[3] = 0;  // C4 reserved
     }
 
     /// <summary>

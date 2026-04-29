@@ -1,0 +1,77 @@
+name: Build iOS (Simulator)
+
+# Sanity-check that the iOS Capacitor project still compiles. Builds against
+# the iOS Simulator only — no signing, no real-device install. The output is
+# not uploaded as an artifact: a simulator build can't be sideloaded onto an
+# iPhone, so its only purpose is to fail the CI check if the project breaks.
+#
+# To actually run Zeus on your iPhone, build locally with `npm run open:ios`
+# in zeus-mobile/ and sign with your personal Apple ID — see
+# zeus-mobile/README.md.
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'zeus-web/**'
+      - 'zeus-mobile/**'
+      - '.github/workflows/build-mobile-ios.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'zeus-web/**'
+      - 'zeus-mobile/**'
+      - '.github/workflows/build-mobile-ios.yml'
+  workflow_dispatch:
+
+jobs:
+  ios-simulator-build:
+    name: Build for iOS Simulator
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            zeus-web/package-lock.json
+            zeus-mobile/package-lock.json
+
+      - name: Build zeus-web bundle
+        run: |
+          npm ci
+          npm run build
+        working-directory: zeus-web
+
+      - name: Install zeus-mobile dependencies
+        run: npm ci
+        working-directory: zeus-mobile
+
+      - name: Add iOS platform
+        run: npx cap add ios
+        working-directory: zeus-mobile
+
+      - name: Apply Zeus iOS patches
+        run: bash scripts/apply-ios-patches.sh
+        working-directory: zeus-mobile
+
+      - name: Sync web bundle into iOS project
+        run: npx cap sync ios
+        working-directory: zeus-mobile
+
+      - name: Build for iOS Simulator
+        # CODE_SIGNING_ALLOWED=NO skips the device-signing step — we only
+        # care that the project compiles. A simulator binary can't be
+        # sideloaded onto a real iPhone anyway.
+        run: |
+          xcodebuild \
+            -workspace zeus-mobile/ios/App/App.xcworkspace \
+            -scheme App \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            build

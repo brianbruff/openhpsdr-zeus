@@ -10,7 +10,7 @@ user picks a LAN-side `Zeus.Server` host at first launch via
 This directory is JS-side only. Platform projects (`android/`, `ios/`) are
 gitignored; they're scaffolded by `npm run setup` on first checkout.
 
-## Skip the local toolchain — grab a CI-built APK
+## Skip the local toolchain — grab a CI-built APK (Android)
 
 If you just want to install Zeus on an Android device, you don't need a
 local Android SDK. The
@@ -22,8 +22,40 @@ workflow on GitHub Actions builds an unsigned debug APK on every push to
 to install — you'll need to enable "Install unknown apps" for your file
 manager).
 
-iOS builds are not yet on CI — they need a macOS runner and signing certs.
-Build locally with `npm run open:ios` for now.
+## iPhone — build locally and sign with your Apple ID
+
+CI does run a
+[**Build iOS (Simulator)**](../../../actions/workflows/build-mobile-ios.yml)
+sanity check on every push, but a simulator build can't be sideloaded onto
+a real iPhone. To actually install Zeus on your phone you need Xcode on a
+Mac plus an Apple ID — the *free* tier is enough for personal use, no
+$99/yr Developer Program required.
+
+One-time setup:
+
+1. `cd zeus-mobile && npm run setup` (does the bootstrap from this README).
+2. `npm run open:ios` — opens the project in Xcode.
+3. In Xcode, select the **App** target → **Signing & Capabilities** → tick
+   **Automatically manage signing** → set **Team** to your personal Apple
+   ID. (Xcode will offer to add it the first time.)
+4. Plug in your iPhone, pick it as the run destination in the toolbar, and
+   click ▶ Run.
+5. The first launch on the phone will fail to start — go to **Settings →
+   General → VPN & Device Management** on the phone, trust the developer
+   profile, then tap the Zeus icon again.
+
+Caveats of the free Apple ID path:
+- The signed build expires after **7 days**. To refresh, plug back in and
+  hit Run again — Xcode re-signs automatically.
+- Up to **3 apps** at once on one device.
+- A signed Developer Program build (paid, with proper provisioning) is a
+  separate ticket — out of scope here.
+
+After any UI change, rebuild the web bundle and re-sync before re-running:
+
+```sh
+npm run sync
+```
 
 ## Prerequisites for local builds
 

@@ -40,7 +40,18 @@ public static class ZeusHost
     /// </summary>
     public static WebApplication Build(string[] args, ZeusHostOptions options)
     {
-        var builder = WebApplication.CreateBuilder(args);
+        // Pin ContentRoot to the binary directory so UseStaticFiles() finds
+        // wwwroot/ next to the executable regardless of how we were launched
+        // ('dotnet run --project X' sets cwd=X/source-dir, an installed .app
+        // launches with cwd=/, etc.). The wwwroot is copied next to the
+        // binary via Zeus.Server.Hosting.csproj's <Content Include="wwwroot/**">
+        // — same place appsettings.json and the WDSP zetaHat.bin/calculus
+        // model files land.
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            Args = args,
+            ContentRootPath = AppContext.BaseDirectory,
+        });
 
         // Emit enums as strings on the wire ("USB", not 1) per doc 04 §3. The
         // converter also accepts ordinal integers on read, so older clients that

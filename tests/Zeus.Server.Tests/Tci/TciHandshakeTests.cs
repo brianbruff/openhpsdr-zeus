@@ -55,7 +55,7 @@ public class TciHandshakeTests
         var state = CreateTestState();
         var handshake = TciHandshake.BuildHandshake(state, 192000, false, false, 50);
 
-        Assert.Contains("protocol:ExpertSDR3,1.8;", handshake);
+        Assert.Contains("protocol:ExpertSDR3,2.0;", handshake);
         Assert.Contains("device:Zeus;", handshake);
     }
 
@@ -65,7 +65,7 @@ public class TciHandshakeTests
         var state = CreateTestState();
         var handshake = TciHandshake.BuildHandshake(state, 192000, false, false, 50);
 
-        Assert.StartsWith("protocol:ExpertSDR3,1.8;", handshake);
+        Assert.Equal("protocol:ExpertSDR3,2.0;", handshake[0]);
     }
 
     [Fact]
@@ -74,7 +74,20 @@ public class TciHandshakeTests
         var state = CreateTestState();
         var handshake = TciHandshake.BuildHandshake(state, 192000, false, false, 50);
 
-        Assert.EndsWith("ready;", handshake);
+        Assert.Equal("ready;", handshake[^1]);
+        Assert.Equal("start;", handshake[^2]);
+    }
+
+    [Fact]
+    public void BuildHandshake_IncludesAudioStreamNegotiation()
+    {
+        var state = CreateTestState();
+        var handshake = TciHandshake.BuildHandshake(state, 192000, false, false, 50);
+
+        Assert.Contains("audio_stream_sample_type:float32;", handshake);
+        Assert.Contains("audio_stream_channels:2;", handshake);
+        Assert.Contains("audio_stream_samples:2048;", handshake);
+        Assert.Contains("tx_stream_audio_buffering:50;", handshake);
     }
 
     [Fact]
@@ -127,7 +140,7 @@ public class TciHandshakeTests
         var state = CreateTestState();
         var handshake = TciHandshake.BuildHandshake(state, 192000, false, false, 50);
 
-        Assert.Contains("modulations_list:AM,SAM,DSB,LSB,USB,FM,CWL,CWU,DIGL,DIGU;", handshake);
+        Assert.Contains("modulations_list:AM,SAM,DSB,LSB,USB,CWL,CWU,FM,DIGL,DIGU,SPEC,DRM;", handshake);
     }
 
     [Fact]
@@ -202,20 +215,21 @@ public class TciHandshakeTests
     }
 
     [Fact]
-    public void BuildHandshake_AllLinesSemicolonTerminated()
+    public void BuildHandshake_AllCommandsSemicolonTerminated()
     {
         var state = CreateTestState();
         var handshake = TciHandshake.BuildHandshake(state, 192000, false, false, 50);
 
-        var lines = handshake.Split(';', StringSplitOptions.RemoveEmptyEntries);
-        // Every line should be non-empty (split removes the trailing semicolons)
-        Assert.All(lines, line => Assert.False(string.IsNullOrWhiteSpace(line)));
+        Assert.All(handshake, cmd =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(cmd));
+            Assert.EndsWith(";", cmd);
+        });
     }
 
     [Fact]
     public void BuildHandshake_GoldenFileRegression()
     {
-        // Golden-file test: exact byte sequence for handshake stability
         var state = new StateDto(
             Status: ConnectionStatus.Connected,
             Endpoint: "192.168.1.100:1024",
@@ -234,37 +248,45 @@ public class TciHandshakeTests
 
         var handshake = TciHandshake.BuildHandshake(state, 192000, false, false, 50);
 
-        var expected = "protocol:ExpertSDR3,1.8;" +
-                       "device:Zeus;" +
-                       "receive_only:false;" +
-                       "trx_count:1;" +
-                       "channels_count:1;" +
-                       "vfo_limits:0,61440000;" +
-                       "if_limits:-96000,96000;" +
-                       "modulations_list:AM,SAM,DSB,LSB,USB,FM,CWL,CWU,DIGL,DIGU;" +
-                       "iq_samplerate:192000;" +
-                       "audio_samplerate:48000;" +
-                       "volume:0;" +
-                       "mute:false;" +
-                       "mon_volume:-20;" +
-                       "mon_enable:false;" +
-                       "dds:0,14074000;" +
-                       "if:0,0,0;" +
-                       "if:0,1,0;" +
-                       "vfo:0,0,14074000;" +
-                       "vfo:0,1,14074000;" +
-                       "modulation:0,USB;" +
-                       "rx_enable:0,true;" +
-                       "split_enable:0,false;" +
-                       "tx_enable:0,false;" +
-                       "trx:0,false;" +
-                       "tune:0,false;" +
-                       "rx_mute:0,false;" +
-                       "rx_filter_band:0,150,2850;" +
-                       "drive:0,50;" +
-                       "tune_drive:0,50;" +
-                       "tx_frequency:14074000;" +
-                       "ready;";
+        var expected = new[]
+        {
+            "protocol:ExpertSDR3,2.0;",
+            "device:Zeus;",
+            "receive_only:false;",
+            "trx_count:1;",
+            "channels_count:1;",
+            "vfo_limits:0,61440000;",
+            "if_limits:-96000,96000;",
+            "modulations_list:AM,SAM,DSB,LSB,USB,CWL,CWU,FM,DIGL,DIGU,SPEC,DRM;",
+            "iq_samplerate:192000;",
+            "audio_samplerate:48000;",
+            "audio_stream_sample_type:float32;",
+            "audio_stream_channels:2;",
+            "audio_stream_samples:2048;",
+            "tx_stream_audio_buffering:50;",
+            "volume:0;",
+            "mute:false;",
+            "mon_volume:-20;",
+            "mon_enable:false;",
+            "dds:0,14074000;",
+            "if:0,0,0;",
+            "if:0,1,0;",
+            "vfo:0,0,14074000;",
+            "vfo:0,1,14074000;",
+            "modulation:0,USB;",
+            "rx_enable:0,true;",
+            "split_enable:0,false;",
+            "tx_enable:0,false;",
+            "trx:0,false;",
+            "tune:0,false;",
+            "rx_mute:0,false;",
+            "rx_filter_band:0,150,2850;",
+            "drive:0,50;",
+            "tune_drive:0,50;",
+            "tx_frequency:14074000;",
+            "start;",
+            "ready;",
+        };
 
         Assert.Equal(expected, handshake);
     }

@@ -43,97 +43,78 @@
 // License for details.
 
 using Zeus.Contracts;
-using System.Text;
 
 namespace Zeus.Server.Tci;
 
 /// <summary>
-/// Builds the TCI handshake message sequence sent immediately after WebSocket
-/// upgrade. The handshake advertises radio capabilities and initial state.
-/// Exact literal sequence per ExpertSDR3 TCI v1.8 spec; order matters.
+/// Builds the TCI handshake command sequence sent immediately after WebSocket
+/// upgrade. Each command is a self-contained semicolon-terminated string; the
+/// caller sends each as its own WebSocket text frame, matching Thetis
+/// (TCIServer.cs sendTextFrame) and the ExpertSDR3 TCI 2.0 wire convention.
+/// Order matters: protocol/device first, audio-stream negotiation before any
+/// state, then start; ready; last.
 /// </summary>
 public static class TciHandshake
 {
-    /// <summary>
-    /// Build the complete handshake string for a single-RX configuration.
-    /// Each line is semicolon-terminated. The sequence ends with "ready;".
-    /// </summary>
-    public static string BuildHandshake(StateDto state, int sampleRate, bool moxOn, bool tunOn, int drivePercent)
+    public static IReadOnlyList<string> BuildHandshake(StateDto state, int sampleRate, bool moxOn, bool tunOn, int drivePercent)
     {
-        var sb = new StringBuilder();
+        var cmds = new List<string>(40);
 
-        // Protocol identification (must be first)
-        sb.Append(TciProtocol.Command("protocol", TciProtocol.ProtocolName, TciProtocol.ProtocolVersion));
-        sb.Append(TciProtocol.Command("device", TciProtocol.DeviceName));
+        cmds.Add(TciProtocol.Command("protocol", TciProtocol.ProtocolName, TciProtocol.ProtocolVersion));
+        cmds.Add(TciProtocol.Command("device", TciProtocol.DeviceName));
 
-        // Capabilities
-        sb.Append(TciProtocol.Command("receive_only", false));
-        sb.Append(TciProtocol.Command("trx_count", 1));     // single RX for now
-        sb.Append(TciProtocol.Command("channels_count", 1)); // single channel per RX
+        cmds.Add(TciProtocol.Command("receive_only", false));
+        cmds.Add(TciProtocol.Command("trx_count", 1));
+        cmds.Add(TciProtocol.Command("channels_count", 1));
 
-        // Frequency limits (0 Hz to 61.44 MHz, HPSDR max)
-        sb.Append(TciProtocol.Command("vfo_limits", 0, 61_440_000));
+        cmds.Add(TciProtocol.Command("vfo_limits", 0, 61_440_000));
 
-        // IF limits: ±(sampleRate/2)
         int halfRate = sampleRate / 2;
-        sb.Append(TciProtocol.Command("if_limits", -halfRate, halfRate));
+        cmds.Add(TciProtocol.Command("if_limits", -halfRate, halfRate));
 
-        // Supported modulations (uppercase, CWL/CWU not bare CW)
-        sb.Append(TciProtocol.Command("modulations_list", "AM,SAM,DSB,LSB,USB,FM,CWL,CWU,DIGL,DIGU"));
+        cmds.Add(TciProtocol.Command("modulations_list", "AM,SAM,DSB,LSB,USB,CWL,CWU,FM,DIGL,DIGU,SPEC,DRM"));
 
-        // Sample rates
-        sb.Append(TciProtocol.Command("iq_samplerate", sampleRate));
-        sb.Append(TciProtocol.Command("audio_samplerate", 48000)); // WDSP audio is 48 kHz
+        cmds.Add(TciProtocol.Command("iq_samplerate", sampleRate));
+        cmds.Add(TciProtocol.Command("audio_samplerate", 48000));
 
-        // Audio state (master volume/mute)
-        sb.Append(TciProtocol.Command("volume", 0));       // 0 dB (we don't have master vol yet)
-        sb.Append(TciProtocol.Command("mute", false));
+        // Audio stream negotiation — channels=2 (stereo) per TCI spec §5.8/§7.2.
+        // Mono RX audio is duplicated to L=R in TciStreamPayload.BuildAudioFromFloats.
+        cmds.Add(TciProtocol.Command("audio_stream_sample_type", "float32"));
+        cmds.Add(TciProtocol.Command("audio_stream_channels", 2));
+        cmds.Add(TciProtocol.Command("audio_stream_samples", 2048));
+        cmds.Add(TciProtocol.Command("tx_stream_audio_buffering", 50));
 
-        // Monitor (sidetone) — not implemented yet, report as off
-        sb.Append(TciProtocol.Command("mon_volume", -20));
-        sb.Append(TciProtocol.Command("mon_enable", false));
+        cmds.Add(TciProtocol.Command("volume", 0));
+        cmds.Add(TciProtocol.Command("mute", false));
+        cmds.Add(TciProtocol.Command("mon_volume", -20));
+        cmds.Add(TciProtocol.Command("mon_enable", false));
 
-        // DDS centre frequency (rx=0)
-        sb.Append(TciProtocol.Command("dds", 0, state.VfoHz));
+        cmds.Add(TciProtocol.Command("dds", 0, state.VfoHz));
+        cmds.Add(TciProtocol.Command("if", 0, 0, 0));
+        cmds.Add(TciProtocol.Command("if", 0, 1, 0));
+        cmds.Add(TciProtocol.Command("vfo", 0, 0, state.VfoHz));
+        cmds.Add(TciProtocol.Command("vfo", 0, 1, state.VfoHz));
 
-        // IF offset (rx=0, channel=0 and channel=1) — zero for now
-        sb.Append(TciProtocol.Command("if", 0, 0, 0));
-        sb.Append(TciProtocol.Command("if", 0, 1, 0));
-
-        // VFO frequencies (rx=0, channel=0 and channel=1)
-        // In single-VFO mode both channels show the same freq
-        sb.Append(TciProtocol.Command("vfo", 0, 0, state.VfoHz));
-        sb.Append(TciProtocol.Command("vfo", 0, 1, state.VfoHz));
-
-        // Mode
         string tciMode = TciProtocol.ModeToTci(state.Mode);
-        sb.Append(TciProtocol.Command("modulation", 0, tciMode));
+        cmds.Add(TciProtocol.Command("modulation", 0, tciMode));
 
-        // RX enable (rx=0 always true)
-        sb.Append(TciProtocol.Command("rx_enable", 0, true));
+        cmds.Add(TciProtocol.Command("rx_enable", 0, true));
+        cmds.Add(TciProtocol.Command("split_enable", 0, false));
+        cmds.Add(TciProtocol.Command("tx_enable", 0, moxOn || tunOn));
+        cmds.Add(TciProtocol.Command("trx", 0, moxOn));
+        cmds.Add(TciProtocol.Command("tune", 0, tunOn));
 
-        // Split, TX, TRX state
-        sb.Append(TciProtocol.Command("split_enable", 0, false)); // no split yet
-        sb.Append(TciProtocol.Command("tx_enable", 0, moxOn || tunOn));
-        sb.Append(TciProtocol.Command("trx", 0, moxOn));
-        sb.Append(TciProtocol.Command("tune", 0, tunOn));
+        cmds.Add(TciProtocol.Command("rx_mute", 0, false));
+        cmds.Add(TciProtocol.Command("rx_filter_band", 0, state.FilterLowHz, state.FilterHighHz));
 
-        // RX mute (per-receiver)
-        sb.Append(TciProtocol.Command("rx_mute", 0, false));
+        cmds.Add(TciProtocol.Command("drive", 0, drivePercent));
+        cmds.Add(TciProtocol.Command("tune_drive", 0, drivePercent));
 
-        // RX filter band
-        sb.Append(TciProtocol.Command("rx_filter_band", 0, state.FilterLowHz, state.FilterHighHz));
+        cmds.Add(TciProtocol.Command("tx_frequency", state.VfoHz));
 
-        // TX drive
-        sb.Append(TciProtocol.Command("drive", 0, drivePercent));
-        sb.Append(TciProtocol.Command("tune_drive", 0, drivePercent)); // same for now
+        cmds.Add(TciProtocol.Command("start"));
+        cmds.Add(TciProtocol.Command("ready"));
 
-        // TX frequency (event-only in spec, but sent in handshake)
-        sb.Append(TciProtocol.Command("tx_frequency", state.VfoHz));
-
-        // Handshake complete
-        sb.Append(TciProtocol.Command("ready"));
-
-        return sb.ToString();
+        return cmds;
     }
 }

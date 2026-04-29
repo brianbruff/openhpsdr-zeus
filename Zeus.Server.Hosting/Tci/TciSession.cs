@@ -229,16 +229,21 @@ public sealed class TciSession : IDisposable
     private async Task SendHandshakeAsync(CancellationToken ct)
     {
         var state = _radio.Snapshot();
-        string handshake = TciHandshake.BuildHandshake(
+        var commands = TciHandshake.BuildHandshake(
             state,
             state.SampleRate,
             _tx.IsMoxOn,
             _tx.IsTunOn,
             _lastDrivePercent);
 
-        var bytes = Encoding.ASCII.GetBytes(handshake);
-        await _ws.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
-        _log.LogInformation("tci.handshake sent client={Id}", _id);
+        // One TCI command per WebSocket text frame — Thetis TCIServer.sendTextFrame
+        // convention. Some clients only parse the first command in a frame.
+        foreach (var cmd in commands)
+        {
+            var bytes = Encoding.ASCII.GetBytes(cmd);
+            await _ws.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
+        }
+        _log.LogInformation("tci.handshake sent client={Id} commands={Count}", _id, commands.Count);
     }
 
     /// <summary>
@@ -546,6 +551,52 @@ public sealed class TciSession : IDisposable
                     break;
                 case "audio_samplerate":
                     HandleAudioSampleRate(args);
+                    break;
+                case "audio_stream_sample_type":
+                case "audio_stream_channels":
+                case "audio_stream_samples":
+                case "tx_stream_audio_buffering":
+                    HandleStreamConfigEcho(command, args);
+                    break;
+
+                // --- S-meter polling (TCI spec §6) ---
+                case "rx_smeter":
+                case "smeter":
+                case "s_meter":
+                    HandleRxSmeterQuery(args);
+                    break;
+
+                // --- Post-handshake state-sync GETs (spec §3.3) ---
+                case "sql_enable":
+                    HandleStubBoolPerRx(command, args, false);
+                    break;
+                case "sql_level":
+                    HandleStubIntPerRx(command, args, 0);
+                    break;
+                case "rx_anf_enable":
+                    HandleStubBoolPerRx(command, args, false);
+                    break;
+                case "rx_nb_enable":
+                case "rx_nb2_enable":
+                case "rx_bin_enable":
+                    HandleStubBoolPerRx(command, args, false);
+                    break;
+                case "rx_volume":
+                    HandleRxVolume(args);
+                    break;
+                case "agc_auto_ex":
+                    HandleStubBoolPerRx(command, args, true);
+                    break;
+                case "tx_profile_ex":
+                    HandleTxProfileEx(args);
+                    break;
+                case "tx_profiles_ex":
+                    HandleTxProfilesEx(args);
+                    break;
+
+                // --- CAT pass-through (spec §5.9: PS0/PS1/ZZTX0) ---
+                case "run_cat_ex":
+                    HandleRunCatEx(args);
                     break;
 
                 // --- Unknown ---
@@ -1002,6 +1053,115 @@ public sealed class TciSession : IDisposable
             else _audioStreamEnabled.Remove(rx);
         }
         Send(TciProtocol.Command("audio_start", rx, enable));
+    }
+
+    private void HandleStreamConfigEcho(string command, string[] args)
+    {
+        // audio_stream_sample_type, audio_stream_channels, audio_stream_samples,
+        // tx_stream_audio_buffering — server echoes whatever the client sets
+        // (TCI spec §5.8 subscription burst). Zeus doesn't honour deviations
+        // from the handshake-advertised values; the echo is just spec compliance.
+        if (args.Length == 0)
+        {
+            // Query — re-emit the handshake-advertised value
+            string value = command switch
+            {
+                "audio_stream_sample_type" => "float32",
+                "audio_stream_channels" => "2",
+                "audio_stream_samples" => "2048",
+                "tx_stream_audio_buffering" => "50",
+                _ => "0",
+            };
+            Send($"{command}:{value};");
+            return;
+        }
+        Send($"{command}:{args[0]};");
+    }
+
+    private void HandleRxSmeterQuery(string[] args)
+    {
+        // rx_smeter:<rx>,<chan>  — GET form. The server already pushes
+        // rx_smeter values via TciServer.OnSMeter at the rate-limited cadence;
+        // respond to the query with a placeholder. Clients fall back to
+        // deriving S-meter from IQ FFT if no response within 500 ms (spec §6).
+        int rx = 0, chan = 0;
+        if (args.Length >= 1) TciProtocol.TryParseInt(args[0], out rx);
+        if (args.Length >= 2) TciProtocol.TryParseInt(args[1], out chan);
+        Send(TciProtocol.Command("rx_smeter", rx, chan, -120));
+    }
+
+    private void HandleStubBoolPerRx(string command, string[] args, bool defaultValue)
+    {
+        // <command>:<rx>            — GET, returns default
+        // <command>:<rx>,<bool>     — SET, ack-only (no backing state yet)
+        if (args.Length < 1) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+        if (args.Length == 1)
+        {
+            Send(TciProtocol.Command(command, rx, defaultValue));
+            return;
+        }
+        if (TciProtocol.TryParseBool(args[1], out bool value))
+            Send(TciProtocol.Command(command, rx, value));
+    }
+
+    private void HandleStubIntPerRx(string command, string[] args, int defaultValue)
+    {
+        if (args.Length < 1) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+        if (args.Length == 1)
+        {
+            Send(TciProtocol.Command(command, rx, defaultValue));
+            return;
+        }
+        if (TciProtocol.TryParseInt(args[1], out int value))
+            Send(TciProtocol.Command(command, rx, value));
+    }
+
+    private void HandleRxVolume(string[] args)
+    {
+        // rx_volume:<trx>,<rx>           — GET
+        // rx_volume:<trx>,<rx>,<dB>      — SET (typically 0 dB to -60 dB)
+        // Zeus mirrors AfGainDb to TCI. No multi-RX state yet; report 0 dB.
+        if (args.Length < 2) return;
+        if (!TciProtocol.TryParseInt(args[0], out int trx)) return;
+        if (!TciProtocol.TryParseInt(args[1], out int rx)) return;
+        if (args.Length == 2)
+        {
+            Send(TciProtocol.Command("rx_volume", trx, rx, 0));
+            return;
+        }
+        if (TciProtocol.TryParseInt(args[2], out int db))
+            Send(TciProtocol.Command("rx_volume", trx, rx, db));
+    }
+
+    private void HandleTxProfileEx(string[] args)
+    {
+        // tx_profile_ex             — GET active profile name
+        // tx_profile_ex:<name>      — SET active profile (ack-only)
+        if (args.Length == 0)
+        {
+            Send(TciProtocol.Command("tx_profile_ex", "Default"));
+            return;
+        }
+        Send(TciProtocol.Command("tx_profile_ex", args[0]));
+    }
+
+    private void HandleTxProfilesEx(string[] args)
+    {
+        // tx_profiles_ex             — GET list of all configured profiles
+        // Zeus doesn't have a profile system; return a single-entry list.
+        Send(TciProtocol.Command("tx_profiles_ex", "Default"));
+    }
+
+    private void HandleRunCatEx(string[] args)
+    {
+        // run_cat_ex:<KENWOOD_CMD>  — Kenwood CAT pass-through (spec §5.9).
+        // Common uses: PS1 (power on), PS0 (power off), ZZTX0 (force-unkey).
+        // Zeus doesn't have a CAT engine, so we log and ack; the client
+        // does not expect a wire reply.
+        string cmd = args.Length > 0 ? args[0] : "";
+        _log.LogDebug("tci.run_cat_ex received cmd={Cmd} (unimplemented)", cmd);
     }
 
     private void HandleNrEnable(string[] args)

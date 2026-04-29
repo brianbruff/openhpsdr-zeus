@@ -1,0 +1,26 @@
+{
+  "name": "zeus-mobile",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Capacitor wrapper for the Zeus web frontend (Android + iOS)",
+  "scripts": {
+    "build:web": "npm --prefix ../zeus-web run build",
+    "sync": "npm run build:web && cap sync",
+    "open:android": "cap open android",
+    "open:ios": "cap open ios",
+    "run:android": "npm run sync && cap run android",
+    "run:ios": "npm run sync && cap run ios",
+    "add:android": "cap add android && bash scripts/apply-android-patches.sh",
+    "add:ios": "cap add ios && bash scripts/apply-ios-patches.sh",
+    "setup": "bash scripts/setup.sh"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/core": "^6.2.0",
+    "@capacitor/ios": "^6.2.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.0",
+    "typescript": "^5.7.0"
+  }
+}

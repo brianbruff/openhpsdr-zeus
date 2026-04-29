@@ -23,7 +23,14 @@ jobs:
     name: Determine version
     runs-on: ubuntu-latest
     outputs:
+      # Full SemVer string used in artifact filenames (e.g. 0.4.1-dryrun.abc1234).
       version: ${{ steps.parse.outputs.version }}
+      # Numeric MAJOR.MINOR.PATCH for -p:VersionPrefix. .NET's AssemblyVersion /
+      # FileVersion are derived from this in Directory.Build.props and reject
+      # any non-numeric content (CS7034 / CS7035), so the suffix has to ride on
+      # VersionSuffix instead.
+      version-prefix: ${{ steps.parse.outputs.version-prefix }}
+      version-suffix: ${{ steps.parse.outputs.version-suffix }}
       is-release: ${{ steps.parse.outputs.is-release }}
     steps:
       - uses: actions/checkout@v4
@@ -45,23 +52,28 @@ jobs:
               echo "::error::Tag '$GITHUB_REF_NAME' (commit $TAG_SHA) is not reachable from origin/main. Releases must be tagged from main."
               exit 1
             fi
-            VERSION="${GITHUB_REF_NAME#v}"
+            VERSION_PREFIX="${GITHUB_REF_NAME#v}"
+            VERSION_SUFFIX=""
+            VERSION="$VERSION_PREFIX"
+            IS_RELEASE="true"
             echo "Tagged release $GITHUB_REF_NAME → version $VERSION"
-            echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-            echo "is-release=true" >> "$GITHUB_OUTPUT"
           else
             # Branch push or manual dispatch — dry-run path. Read VersionPrefix
-            # from Directory.Build.props and tag the artifact name with a -dryrun
-            # suffix + short SHA so dry-run artifacts can never be confused with
-            # a real release artifact at the same nominal version.
+            # from Directory.Build.props and ride the dryrun.<sha> tag on
+            # VersionSuffix so .NET's AssemblyVersion (which is built from
+            # VersionPrefix only) stays a valid MAJOR.MINOR.PATCH.
             VERSION_PREFIX=$(sed -n 's:.*<VersionPrefix[^>]*>\([^<]*\)</VersionPrefix>.*:\1:p' Directory.Build.props | head -1)
             VERSION_PREFIX="${VERSION_PREFIX:-0.0.0}"
             SHORT_SHA="${GITHUB_SHA:0:7}"
-            VERSION="${VERSION_PREFIX}-dryrun.${SHORT_SHA}"
+            VERSION_SUFFIX="dryrun.${SHORT_SHA}"
+            VERSION="${VERSION_PREFIX}-${VERSION_SUFFIX}"
+            IS_RELEASE="false"
             echo "Dry-run build (trigger=$GITHUB_EVENT_NAME ref=$GITHUB_REF) → version $VERSION"
-            echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-            echo "is-release=false" >> "$GITHUB_OUTPUT"
           fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "version-prefix=${VERSION_PREFIX}" >> "$GITHUB_OUTPUT"
+          echo "version-suffix=${VERSION_SUFFIX}" >> "$GITHUB_OUTPUT"
+          echo "is-release=${IS_RELEASE}" >> "$GITHUB_OUTPUT"
 
   build-release:
     name: Build (${{ matrix.config.os }})
@@ -117,6 +129,8 @@ jobs:
         # Force bash so the backslash line-continuations parse correctly on
         # windows-latest, where the default shell is PowerShell (which
         # treats `--self-contained \` as a unary operator and errors out).
+        # VersionPrefix stays numeric (consumed by AssemblyVersion); the
+        # text suffix rides on VersionSuffix and lands in InformationalVersion.
         shell: bash
         run: |
           dotnet publish Zeus.Server/Zeus.Server.csproj \
@@ -124,7 +138,8 @@ jobs:
             -r ${{ matrix.config.rid }} \
             --self-contained true \
             -p:PublishReadyToRun=true \
-            -p:VersionPrefix=${{ steps.version.outputs.version }} \
+            -p:VersionPrefix=${{ needs.determine-version.outputs.version-prefix }} \
+            -p:VersionSuffix=${{ needs.determine-version.outputs.version-suffix }} \
             -p:DebugType=embedded \
             -p:DebugSymbols=false
 

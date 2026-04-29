@@ -7,6 +7,9 @@
     <Project Path="tests/Zeus.Protocol2.Tests/Zeus.Protocol2.Tests.csproj" />
     <Project Path="tests/Zeus.Server.Tests/Zeus.Server.Tests.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Zeus.PluginScanner/Zeus.PluginScanner.csproj" />
+  </Folder>
   <Project Path="Zeus.Contracts/Zeus.Contracts.csproj" />
   <Project Path="Zeus.Dsp/Zeus.Dsp.csproj" />
   <Project Path="Zeus.PluginHost/Zeus.PluginHost.csproj" />

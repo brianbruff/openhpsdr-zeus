@@ -84,7 +84,11 @@ public static class TciHandshake
         cmds.Add(TciProtocol.Command("audio_stream_samples", 2048));
         cmds.Add(TciProtocol.Command("tx_stream_audio_buffering", 50));
 
-        cmds.Add(TciProtocol.Command("volume", 0));
+        // Master volume tracks RxAfGainDb so TCI clients see the live value
+        // immediately on connect. mon_volume is the TX sidetone bus (TCI spec
+        // §5.5) — independent of RX audio gain — so it stays a placeholder
+        // until Zeus has a real monitor path.
+        cmds.Add(TciProtocol.Command("volume", (int)Math.Round(state.RxAfGainDb)));
         cmds.Add(TciProtocol.Command("mute", false));
         cmds.Add(TciProtocol.Command("mon_volume", -20));
         cmds.Add(TciProtocol.Command("mon_enable", false));

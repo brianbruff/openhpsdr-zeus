@@ -791,12 +791,19 @@ public sealed class TciSession : IDisposable
 
     private void HandleVolume(string[] args)
     {
-        // volume:<db> or volume (query)
+        // volume:<db>  (SET)  or  volume  (GET)
+        // Legacy / Thetis-flavoured master volume — not in the SunSDR TCI
+        // catalog, but real clients emit it. Wire to RxAfGainDb so this and
+        // rx_volume share a single source of truth (RadioService clamps to
+        // [-50, +20] dB to mirror Thetis ptbAF).
         if (args.Length == 0)
         {
-            Send(TciProtocol.Command("volume", 0)); // no master volume yet
+            var state = _radio.Snapshot();
+            Send(TciProtocol.Command("volume", (int)Math.Round(state.RxAfGainDb)));
+            return;
         }
-        // Ignore set — not implemented
+        if (TciProtocol.TryParseDouble(args[0], out double db))
+            _radio.SetRxAfGain(db);
     }
 
     private void HandleMonEnable(string[] args)
@@ -1120,19 +1127,22 @@ public sealed class TciSession : IDisposable
 
     private void HandleRxVolume(string[] args)
     {
-        // rx_volume:<trx>,<rx>           — GET
-        // rx_volume:<trx>,<rx>,<dB>      — SET (typically 0 dB to -60 dB)
-        // Zeus mirrors AfGainDb to TCI. No multi-RX state yet; report 0 dB.
+        // SunSDR TCI spec §5.4 — per-RX volume in dB.
+        //   rx_volume:<trx>,<rx>          GET → echo current dB
+        //   rx_volume:<trx>,<rx>,<dB>     SET → route through SetRxAfGain
+        // Zeus has a single shared AF bus today, so all (trx,rx) combos
+        // mirror RxAfGainDb. RadioService clamps to [-50, +20] dB.
         if (args.Length < 2) return;
         if (!TciProtocol.TryParseInt(args[0], out int trx)) return;
         if (!TciProtocol.TryParseInt(args[1], out int rx)) return;
         if (args.Length == 2)
         {
-            Send(TciProtocol.Command("rx_volume", trx, rx, 0));
+            var state = _radio.Snapshot();
+            Send(TciProtocol.Command("rx_volume", trx, rx, (int)Math.Round(state.RxAfGainDb)));
             return;
         }
-        if (TciProtocol.TryParseInt(args[2], out int db))
-            Send(TciProtocol.Command("rx_volume", trx, rx, db));
+        if (TciProtocol.TryParseDouble(args[2], out double db))
+            _radio.SetRxAfGain(db);
     }
 
     private void HandleTxProfileEx(string[] args)

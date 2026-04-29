@@ -78,6 +78,20 @@ public class TciHandshakeTests
         Assert.Equal("start;", handshake[^2]);
     }
 
+    [Theory]
+    [InlineData(0.0, 0)]
+    [InlineData(-12.4, -12)]
+    [InlineData(-37.6, -38)]
+    [InlineData(20.0, 20)]
+    [InlineData(-50.0, -50)]
+    public void BuildHandshake_VolumeFieldReflectsRxAfGainDb(double rxAfGainDb, int expectedVolume)
+    {
+        var state = CreateTestState(rxAfGainDb: rxAfGainDb);
+        var handshake = TciHandshake.BuildHandshake(state, 192000, false, false, 50);
+
+        Assert.Contains($"volume:{expectedVolume};", handshake);
+    }
+
     [Fact]
     public void BuildHandshake_IncludesAudioStreamNegotiation()
     {
@@ -295,7 +309,8 @@ public class TciHandshakeTests
         long vfoHz = 14200000,
         RxMode mode = RxMode.USB,
         int filterLow = 150,
-        int filterHigh = 2850)
+        int filterHigh = 2850,
+        double rxAfGainDb = 0.0)
     {
         return new StateDto(
             Status: ConnectionStatus.Connected,
@@ -311,6 +326,7 @@ public class TciHandshakeTests
             ZoomLevel: 1,
             AutoAttEnabled: true,
             AttOffsetDb: 0,
-            AdcOverloadWarning: false);
+            AdcOverloadWarning: false,
+            RxAfGainDb: rxAfGainDb);
     }
 }

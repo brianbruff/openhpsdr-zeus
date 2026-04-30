@@ -335,6 +335,7 @@ export function MetersPanelInner({
         onSelectWidget={(uid) =>
           setSelectedUid((current) => (current === uid ? null : uid))
         }
+        onRemoveWidget={removeWidget}
         onLayoutChange={onLayoutChange}
       />
 
@@ -381,6 +382,7 @@ interface MetersCanvasProps {
   widgets: MetersWidgetInstance[];
   selectedUid: string | null;
   onSelectWidget: (uid: string) => void;
+  onRemoveWidget: (uid: string) => void;
   onLayoutChange: (next: Layout) => void;
 }
 
@@ -388,6 +390,7 @@ function MetersCanvas({
   widgets,
   selectedUid,
   onSelectWidget,
+  onRemoveWidget,
   onLayoutChange,
 }: MetersCanvasProps) {
   // useContainerWidth uses ResizeObserver to track the parent's pixel width
@@ -456,6 +459,7 @@ function MetersCanvas({
                 widget={w}
                 selected={w.uid === selectedUid}
                 onSelect={() => onSelectWidget(w.uid)}
+                onRemove={() => onRemoveWidget(w.uid)}
               />
             </div>
           ))}

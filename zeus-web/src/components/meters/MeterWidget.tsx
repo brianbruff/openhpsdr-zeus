@@ -11,7 +11,7 @@
 //   - the row chrome (label + numeric readout + click-to-select handler)
 
 import { useRef, useState, type CSSProperties } from 'react';
-import { GripVertical } from 'lucide-react';
+import { GripVertical, X } from 'lucide-react';
 import { METER_CATALOG } from './meterCatalog';
 import type { MetersWidgetInstance } from './metersConfig';
 import { useMeterReading } from './useMeterReading';
@@ -27,6 +27,7 @@ interface MeterWidgetProps {
   widget: MetersWidgetInstance;
   selected: boolean;
   onSelect: () => void;
+  onRemove?: () => void;
 }
 
 function usePeakHold(value: number, decayPerSec = PEAK_DECAY_PER_SEC_DEFAULT) {
@@ -61,7 +62,12 @@ function formatReadout(unit: string, value: number): string {
   }
 }
 
-export function MeterWidget({ widget, selected, onSelect }: MeterWidgetProps) {
+export function MeterWidget({
+  widget,
+  selected,
+  onSelect,
+  onRemove,
+}: MeterWidgetProps) {
   const def = METER_CATALOG[widget.reading];
   const value = useMeterReading(widget.reading);
   const peak = usePeakHold(value);
@@ -183,11 +189,12 @@ export function MeterWidget({ widget, selected, onSelect }: MeterWidgetProps) {
             alignItems: 'center',
             color: 'var(--fg-3)',
             marginRight: 2,
+            // The grip element itself is the react-draggable handle; we must
+            // NOT stop mousedown propagation here or RGL never sees it.
+            // Click stopPropagation IS still needed so the parent's onClick
+            // (which toggles widget selection) doesn't also fire on grab.
           }}
-          // Stop click on the grip from also toggling the Settings drawer —
-          // grip is for dragging, not selection.
           onClick={(e) => e.stopPropagation()}
-          onMouseDown={(e) => e.stopPropagation()}
         >
           <GripVertical size={12} />
         </span>
@@ -195,6 +202,45 @@ export function MeterWidget({ widget, selected, onSelect }: MeterWidgetProps) {
         <span style={valueStyle}>
           {formatReadout(def.unit, value)} <span style={{ color: 'var(--fg-3)' }}>{def.unit}</span>
         </span>
+        {onRemove ? (
+          <button
+            type="button"
+            aria-label={`Remove ${label}`}
+            title="Remove widget"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            // Prevent mousedown from bubbling into RGL (otherwise grabbing
+            // near the X starts a drag) AND prevent the parent card's
+            // onClick from firing.
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 16,
+              height: 16,
+              marginLeft: 4,
+              borderRadius: 'var(--r-xs)',
+              color: 'var(--fg-3)',
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              flexShrink: 0,
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = 'var(--tx)';
+              e.currentTarget.style.background = 'var(--bg-2)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = 'var(--fg-3)';
+              e.currentTarget.style.background = 'transparent';
+            }}
+          >
+            <X size={12} />
+          </button>
+        ) : null}
       </div>
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
         {body}

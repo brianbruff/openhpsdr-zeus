@@ -88,7 +88,12 @@ jobs:
             rid: win-x64
             artifact: windows-installer
           - os: linux
-            runner: ubuntu-latest
+            # Pinned to ubuntu-22.04 (glibc 2.35) — the self-contained .NET
+            # publish embeds native runtime libs that link against the build
+            # host's glibc, so building on ubuntu-latest (24.04, glibc 2.39)
+            # produces a tarball that fails on Ubuntu 22.04 / Debian 12 / RHEL
+            # 9 with `version GLIBC_2.38 not found`. Match build-native-libs.yml.
+            runner: ubuntu-22.04
             rid: linux-x64
             artifact: linux-tarball
           - os: macos-arm64

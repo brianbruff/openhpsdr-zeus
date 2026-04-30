@@ -59,17 +59,24 @@ import 'flexlayout-react/style/dark.css';
 import '../styles/flex-layout.css';
 import { useWorkspace } from './WorkspaceContext';
 import { useLayoutStore } from '../state/layout-store';
-import { PANELS } from './panels';
+import { PANELS, panelIdFromComponent } from './panels';
 import { DEFAULT_LAYOUT } from './defaultLayout';
 import { TerminatorLines } from '../components/design/TerminatorLines';
 import { AddPanelModal } from './AddPanelModal';
 
 function factory(node: TabNode) {
-  const id = node.getComponent();
-  const panel = id ? PANELS[id] : undefined;
+  const component = node.getComponent();
+  if (!component) return null;
+  // Multi-instance panels have a `<id>-<uuid>` component string; collapse it
+  // back to the registry key so we look up the same PanelDef regardless of
+  // which Meters tile we're rendering.
+  const id = panelIdFromComponent(component);
+  const panel = PANELS[id];
   if (!panel) return null;
   const Component = panel.component;
-  return <Component />;
+  // Pass the TabNode as a prop — multi-instance panels need it to read /
+  // write their per-instance config blob via TabNode.getConfig().
+  return <Component node={node} />;
 }
 
 // FlexWorkspace: renders the movable/dockable panel layout when ?layout=flex
@@ -103,7 +110,10 @@ export function FlexWorkspace() {
     return () => window.removeEventListener('beforeunload', handler);
   }, [syncToServerBeforeUnload]);
 
-  // Get list of existing panel IDs in the layout
+  // Get list of existing panel IDs in the layout. Multi-instance components
+  // are stored as `<id>-<uuid>` strings in the FlexLayout JSON; we collapse
+  // them back to the registry key so the AddPanel modal sees a single id
+  // (and decides whether to allow another based on PanelDef.multiInstance).
   const getExistingPanels = (): Set<string> => {
     if (!model) return new Set();
     const panelIds = new Set<string>();
@@ -112,7 +122,7 @@ export function FlexWorkspace() {
       if (node.getType() === 'tab') {
         const tabNode = node as TabNode;
         const component = tabNode.getComponent();
-        if (component) panelIds.add(component);
+        if (component) panelIds.add(panelIdFromComponent(component));
       }
     });
 
@@ -125,12 +135,21 @@ export function FlexWorkspace() {
     const panel = PANELS[panelId];
     if (!panel) return;
 
+    // Multi-instance panels mint a unique component string per instance so
+    // FlexLayout treats them as distinct nodes (drag, close, save/load
+    // independently). The factory uses panelIdFromComponent() to recover
+    // the registry key. crypto.randomUUID adds ~36 chars to the layout JSON
+    // — paid only on layout-mutation, not per frame.
+    const componentId = panel.multiInstance
+      ? `${panelId}-${typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`}`
+      : panelId;
+
     model.doAction(
       Actions.addNode(
         {
           type: 'tab',
           name: panel.name,
-          component: panelId,
+          component: componentId,
         },
         targetTabSetId,
         DockLocation.CENTER,

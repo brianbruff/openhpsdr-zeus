@@ -67,8 +67,10 @@ export function AddPanelModal({ existingPanels, onAdd, onClose }: AddPanelModalP
   ];
 
   const availablePanels = Object.values(PANELS).filter((panel) => {
-    // Filter out panels that already exist in the layout
-    if (existingPanels.has(panel.id)) return false;
+    // Filter out panels that already exist in the layout — UNLESS the panel
+    // has opted in to multiInstance, in which case duplicates are part of
+    // the feature (e.g. multiple Meters tiles, each with its own widgets).
+    if (existingPanels.has(panel.id) && !panel.multiInstance) return false;
 
     // Filter by category
     if (selectedCategory !== 'all' && panel.category !== selectedCategory) return false;
@@ -184,7 +186,23 @@ export function AddPanelModal({ existingPanels, onAdd, onClose }: AddPanelModalP
                   e.currentTarget.style.borderColor = 'var(--line)';
                 }}
               >
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>{panel.name}</div>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                  {panel.name}
+                  {panel.multiInstance && existingPanels.has(panel.id) && (
+                    <span
+                      style={{
+                        marginLeft: 8,
+                        fontSize: 10,
+                        fontWeight: 400,
+                        color: 'var(--accent)',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.04em',
+                      }}
+                    >
+                      + Add another
+                    </span>
+                  )}
+                </div>
                 <div style={{ fontSize: 11, color: 'var(--fg-2)' }}>
                   {panel.tags.join(' · ')}
                 </div>

@@ -43,6 +43,7 @@
 // License for details.
 
 import type { ComponentType } from 'react';
+import type { TabNode } from 'flexlayout-react';
 import { HeroPanel } from './panels/HeroPanel';
 import { VfoPanel } from './panels/VfoPanel';
 import { SMeterPanel } from './panels/SMeterPanel';
@@ -58,15 +59,28 @@ import { PsFlexPanel } from './panels/PsFlexPanel';
 import { BandPanel } from './panels/BandPanel';
 import { ModePanel } from './panels/ModePanel';
 import { StepPanel } from './panels/StepPanel';
+import { MetersPanel } from './panels/MetersPanel';
 
 export type PanelCategory = 'spectrum' | 'vfo' | 'meters' | 'dsp' | 'log' | 'tools' | 'controls';
+
+/** Optional `node` prop passed by the FlexWorkspace factory for panels that
+ *  need access to their FlexLayout TabNode (e.g. to read/write per-instance
+ *  config blobs that round-trip via the layout JSON). */
+export interface PanelComponentProps {
+  node?: TabNode;
+}
 
 export interface PanelDef {
   id: string;
   name: string;
   category: PanelCategory;
   tags: string[];
-  component: ComponentType;
+  component: ComponentType<PanelComponentProps>;
+  /** When true, the Add Panel modal allows duplicates and the workspace
+   *  mints a unique component id per instance so each tile holds its own
+   *  per-instance config blob. Default false (single-instance, current
+   *  behaviour for every existing panel). */
+  multiInstance?: boolean;
 }
 
 // Panel registry: maps component-id strings (used in the flexlayout JSON model)
@@ -178,4 +192,25 @@ export const PANELS: Record<string, PanelDef> = {
     tags: ['step', 'tuning', 'frequency', 'increment'],
     component: StepPanel,
   },
+  meters: {
+    id: 'meters',
+    name: 'Meters',
+    category: 'meters',
+    tags: ['meters', 'rx', 'tx', 'signal', 'power', 'agc', 'alc', 'configurable'],
+    component: MetersPanel,
+    multiInstance: true,
+  },
 };
+
+/** Component-id strings for multi-instance panels are minted as
+ *  `<id>-<crypto.randomUUID()>` so each tile is a distinct FlexLayout node
+ *  while still resolving to the same PanelDef in the registry. This helper
+ *  strips the suffix to recover the registry key. */
+export function panelIdFromComponent(component: string): string {
+  const dash = component.indexOf('-');
+  if (dash <= 0) return component;
+  const head = component.slice(0, dash);
+  const def = PANELS[head];
+  if (def?.multiInstance) return head;
+  return component;
+}

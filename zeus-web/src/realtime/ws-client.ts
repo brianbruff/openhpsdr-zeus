@@ -48,6 +48,7 @@ import { getAudioClient } from '../audio/audio-client';
 import { useConnectionStore, type WisdomPhase } from '../state/connection-store';
 import { useDisplayStore } from '../state/display-store';
 import { useTxStore } from '../state/tx-store';
+import { useRxMetersStore } from '../state/rx-meters-store';
 import { warnOnce } from '../util/logger';
 import { wsUrl as buildWsUrl } from '../serverUrl';
 
@@ -72,6 +73,15 @@ const TX_METERS_V2_BYTES = 1 + 4 * 20;
 // DspPipelineService; server clamps floor to −160 dBm before send.
 export const MSG_TYPE_RX_METER = 0x14;
 const RX_METER_BYTES = 1 + 4;
+
+// RX meters v2 (RxMetersV2Frame, plan §1.3): 1 type byte + 7 × f32 LE = 29 B.
+// Broadcast at 5 Hz from DspPipelineService; carries SignalPk/SignalAv,
+// AdcPk/AdcAv, AgcGain (signed dB), AgcEnvPk/AgcEnvAv. Cal offset is
+// applied server-side to the dBm fields; ADC + AgcGain are board-independent.
+// 0x14 is kept on the wire in parallel for older clients and the simple
+// SMeterLive view.
+export const MSG_TYPE_RX_METERS_V2 = 0x19;
+const RX_METERS_V2_BYTES = 1 + 4 * 7;
 
 // Alert frame: 1 type byte + 1 kind byte + UTF-8 message (variable length).
 // Server emits when SWR > 2.5 sustained ≥500 ms (PRD FR-6). Kind 0 = SWR trip.
@@ -269,6 +279,26 @@ export function startRealtime(path = '/ws'): () => void {
           }
           const dbm = new DataView(ev.data).getFloat32(1, true);
           useTxStore.getState().setRxDbm(dbm);
+          return;
+        }
+        if (peekType === MSG_TYPE_RX_METERS_V2) {
+          if (ev.data.byteLength < RX_METERS_V2_BYTES) {
+            warnOnce(
+              'ws-rx-meters-v2-short',
+              `rx meters v2 frame too short: ${ev.data.byteLength}`,
+            );
+            return;
+          }
+          const dv = new DataView(ev.data);
+          useRxMetersStore.getState().setMeters({
+            signalPk: dv.getFloat32(1, true),
+            signalAv: dv.getFloat32(5, true),
+            adcPk: dv.getFloat32(9, true),
+            adcAv: dv.getFloat32(13, true),
+            agcGain: dv.getFloat32(17, true),
+            agcEnvPk: dv.getFloat32(21, true),
+            agcEnvAv: dv.getFloat32(25, true),
+          });
           return;
         }
         if (peekType === MSG_TYPE_WISDOM_STATUS) {

@@ -1,0 +1,177 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
+//
+// Wrapper that dispatches a configured `MetersWidgetInstance` to the right
+// presentation primitive (HBar / VBar / Dial / Sparkline / Digital) and
+// owns the shared plumbing that doesn't belong inside the primitives:
+//   - reading the live value via `useMeterReading`
+//   - decaying peak-hold (recipe lifted from TxStageMeters.usePeakHold)
+//   - the row chrome (label + numeric readout + click-to-select handler)
+
+import { useRef, useState, type CSSProperties } from 'react';
+import { METER_CATALOG } from './meterCatalog';
+import type { MetersWidgetInstance } from './metersConfig';
+import { useMeterReading } from './useMeterReading';
+import { HBarMeter, _isSilent } from './widgets/HBarMeter';
+import { VBarMeter } from './widgets/VBarMeter';
+import { DialMeter } from './widgets/DialMeter';
+import { SparklineMeter } from './widgets/SparklineMeter';
+import { DigitalMeter } from './widgets/DigitalMeter';
+
+const PEAK_DECAY_PER_SEC_DEFAULT = 21; // dB/s; full 42 dB level axis in 2 s
+
+interface MeterWidgetProps {
+  widget: MetersWidgetInstance;
+  selected: boolean;
+  onSelect: () => void;
+}
+
+function usePeakHold(value: number, decayPerSec = PEAK_DECAY_PER_SEC_DEFAULT) {
+  const ref = useRef<{ peak: number; ts: number }>({ peak: -Infinity, ts: 0 });
+  if (!isFinite(value) || _isSilent(value)) {
+    ref.current = { peak: -Infinity, ts: 0 };
+    return -Infinity;
+  }
+  const now =
+    typeof performance !== 'undefined' ? performance.now() : Date.now();
+  const prev = ref.current;
+  const dt = prev.ts === 0 ? 0 : Math.max(0, (now - prev.ts) / 1000);
+  const decayed = isFinite(prev.peak) ? prev.peak - decayPerSec * dt : -Infinity;
+  const held = Math.max(value, decayed);
+  ref.current = { peak: held, ts: now };
+  return held;
+}
+
+function formatReadout(unit: string, value: number): string {
+  if (_isSilent(value) || !isFinite(value)) return '—';
+  switch (unit) {
+    case 'ratio':
+      return value.toFixed(2);
+    case 'W':
+      return value < 10 ? value.toFixed(2) : value.toFixed(1);
+    case 'dB':
+    case 'dBFS':
+    case 'dBm':
+      return value.toFixed(0);
+    default:
+      return value.toFixed(1);
+  }
+}
+
+export function MeterWidget({ widget, selected, onSelect }: MeterWidgetProps) {
+  const def = METER_CATALOG[widget.reading];
+  const value = useMeterReading(widget.reading);
+  const peak = usePeakHold(value);
+  const [hovered, setHovered] = useState(false);
+  const label = widget.settings.label ?? def.label;
+
+  const rowStyle: CSSProperties = {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 4,
+    padding: '6px 10px',
+    margin: '4px 8px',
+    background: selected ? 'var(--bg-2)' : 'var(--bg-1)',
+    border: `1px solid ${selected ? 'var(--accent)' : hovered ? 'var(--panel-border)' : 'transparent'}`,
+    borderRadius: 'var(--r-sm)',
+    cursor: 'pointer',
+    transition: 'background var(--dur-fast), border-color var(--dur-fast)',
+  };
+  const headStyle: CSSProperties = {
+    display: 'flex',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: 8,
+  };
+  const labelStyle: CSSProperties = {
+    fontSize: 10,
+    textTransform: 'uppercase',
+    letterSpacing: '0.08em',
+    color: 'var(--fg-2)',
+    fontFamily: 'var(--font-mono)',
+  };
+  const valueStyle: CSSProperties = {
+    fontSize: 12,
+    color: 'var(--fg-1)',
+    fontFamily: 'var(--font-mono)',
+    fontVariantNumeric: 'tabular-nums',
+  };
+
+  // Body geometry varies per widget kind; centre the dial and sparkline.
+  let body: React.ReactNode;
+  switch (widget.kind) {
+    case 'hbar':
+      body = (
+        <HBarMeter
+          value={value}
+          peak={peak}
+          def={def}
+          settings={widget.settings}
+        />
+      );
+      break;
+    case 'vbar':
+      body = (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: 4 }}>
+          <VBarMeter
+            value={value}
+            peak={peak}
+            def={def}
+            settings={widget.settings}
+          />
+        </div>
+      );
+      break;
+    case 'dial':
+      body = (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: 4 }}>
+          <DialMeter value={value} def={def} settings={widget.settings} />
+        </div>
+      );
+      break;
+    case 'sparkline':
+      body = (
+        <div style={{ display: 'flex', justifyContent: 'center' }}>
+          <SparklineMeter value={value} def={def} settings={widget.settings} />
+        </div>
+      );
+      break;
+    case 'digital':
+      body = (
+        <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+          <DigitalMeter value={value} def={def} settings={widget.settings} />
+        </div>
+      );
+      break;
+  }
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={`${label} widget — click to configure`}
+      aria-pressed={selected}
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={rowStyle}
+      data-widget-uid={widget.uid}
+    >
+      <div style={headStyle}>
+        <span style={labelStyle}>{label}</span>
+        <span style={valueStyle}>
+          {formatReadout(def.unit, value)} <span style={{ color: 'var(--fg-3)' }}>{def.unit}</span>
+        </span>
+      </div>
+      {body}
+    </div>
+  );
+}

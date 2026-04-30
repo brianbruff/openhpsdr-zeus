@@ -25,6 +25,12 @@ import { useCallback, useMemo, useState, type CSSProperties } from 'react';
 import { Actions, type TabNode } from 'flexlayout-react';
 import { Settings, ChevronLeft, ChevronRight, X, Trash2 } from 'lucide-react';
 import {
+  ResponsiveGridLayout,
+  useContainerWidth,
+  type Layout,
+  type LayoutItem,
+} from 'react-grid-layout';
+import {
   METER_CATALOG,
   METER_FILTERS,
   METER_READINGS,
@@ -33,10 +39,14 @@ import {
   type MeterReadingId,
 } from '../../components/meters/meterCatalog';
 import {
+  DEFAULT_WIDGET_SPAN,
   defaultWidgetForReading,
   EMPTY_METERS_CONFIG,
+  METERS_GRID_COLS,
+  METERS_GRID_ROW_HEIGHT_PX,
   METERS_WIDGET_KINDS,
   parseMetersPanelConfig,
+  placeWidgetInGrid,
   useMetersPanelConfig,
   type MetersWidgetInstance,
   type MetersWidgetKind,
@@ -129,17 +139,64 @@ export function MetersPanelInner({
 
   const addWidget = useCallback(
     (id: MeterReadingId) => {
-      const widget = defaultWidgetForReading(id);
+      const fresh = defaultWidgetForReading(id);
+      // Auto-place the new widget at the next free row using the kind's
+      // default span; the grid will compact upward at render time.
+      const placed = placeWidgetInGrid(fresh, config.widgets);
       const next: MetersPanelConfig = {
         ...config,
-        widgets: [...config.widgets, widget],
+        widgets: [...config.widgets, placed],
       };
       setConfig(next);
       // Auto-select the new widget so the operator sees its config knobs
       // ready in the Settings drawer if they want to tweak it.
-      setSelectedUid(widget.uid);
+      setSelectedUid(placed.uid);
     },
     [config, setConfig],
+  );
+
+  // Apply auto-placement at render time for any legacy widget that came in
+  // without `layout`. This both feeds RGL the coordinates it requires and
+  // gets persisted on the next layout change. Memoised against widget identity.
+  const placedWidgets = useMemo(() => {
+    const out: MetersWidgetInstance[] = [];
+    for (const w of config.widgets) {
+      if (w.layout) {
+        out.push(w);
+      } else {
+        out.push(placeWidgetInGrid(w, out));
+      }
+    }
+    return out;
+  }, [config.widgets]);
+
+  const onLayoutChange = useCallback(
+    (next: Layout) => {
+      // Map RGL's layout array back into the widget list. We only persist
+      // when at least one coordinate actually changed to avoid loops.
+      const byUid = new Map<string, LayoutItem>(next.map((l) => [l.i, l]));
+      let changed = false;
+      const widgets = placedWidgets.map((w) => {
+        const l = byUid.get(w.uid);
+        if (!l) return w;
+        const cur = w.layout;
+        if (
+          cur &&
+          cur.x === l.x &&
+          cur.y === l.y &&
+          cur.w === l.w &&
+          cur.h === l.h
+        ) {
+          return w;
+        }
+        changed = true;
+        return { ...w, layout: { x: l.x, y: l.y, w: l.w, h: l.h } };
+      });
+      if (changed) {
+        setConfig({ ...config, widgets });
+      }
+    },
+    [config, placedWidgets, setConfig],
   );
 
   const commitTitle = useCallback(() => {
@@ -269,44 +326,17 @@ export function MetersPanelInner({
         ) : null}
       </div>
 
-      {/* Widget canvas */}
-      <div
-        style={{
-          flex: 1,
-          minHeight: 0,
-          overflowY: 'auto',
-          position: 'relative',
-        }}
-        data-testid="meters-canvas"
-      >
-        {config.widgets.length === 0 ? (
-          <div
-            style={{
-              padding: 24,
-              textAlign: 'center',
-              color: 'var(--fg-2)',
-              fontSize: 12,
-              fontFamily: 'var(--font-sans)',
-            }}
-            data-testid="meters-empty-state"
-          >
-            No meters yet — tap ⚙ to configure.
-          </div>
-        ) : (
-          <div style={{ padding: '4px 0' }}>
-            {config.widgets.map((w) => (
-              <MeterWidget
-                key={w.uid}
-                widget={w}
-                selected={w.uid === selectedUid}
-                onSelect={() =>
-                  setSelectedUid((current) => (current === w.uid ? null : w.uid))
-                }
-              />
-            ))}
-          </div>
-        )}
-      </div>
+      {/* Widget canvas — measured by useContainerWidth so the grid sizes to
+          its parent. Empty-state and the grid itself both render inside the
+          same scroll container so layout is consistent. */}
+      <MetersCanvas
+        widgets={placedWidgets}
+        selectedUid={selectedUid}
+        onSelectWidget={(uid) =>
+          setSelectedUid((current) => (current === uid ? null : uid))
+        }
+        onLayoutChange={onLayoutChange}
+      />
 
       {/* Library drawer (left) */}
       <LibraryDrawer
@@ -345,6 +375,94 @@ interface LibraryDrawerProps {
   existing: MetersWidgetInstance[];
   onAdd: (id: MeterReadingId) => void;
   onClose: () => void;
+}
+
+interface MetersCanvasProps {
+  widgets: MetersWidgetInstance[];
+  selectedUid: string | null;
+  onSelectWidget: (uid: string) => void;
+  onLayoutChange: (next: Layout) => void;
+}
+
+function MetersCanvas({
+  widgets,
+  selectedUid,
+  onSelectWidget,
+  onLayoutChange,
+}: MetersCanvasProps) {
+  // useContainerWidth uses ResizeObserver to track the parent's pixel width
+  // and feed it into ResponsiveGridLayout. Replaces the legacy WidthProvider
+  // HOC; renders nothing until measured (mounted=false) to avoid a 1280-px
+  // first-paint flash that snaps to actual width on the second tick.
+  const { width, containerRef, mounted } = useContainerWidth();
+  return (
+    <div
+      ref={containerRef}
+      style={{
+        flex: 1,
+        minHeight: 0,
+        overflowY: 'auto',
+        position: 'relative',
+      }}
+      data-testid="meters-canvas"
+    >
+      {widgets.length === 0 ? (
+        <div
+          style={{
+            padding: 24,
+            textAlign: 'center',
+            color: 'var(--fg-2)',
+            fontSize: 12,
+            fontFamily: 'var(--font-sans)',
+          }}
+          data-testid="meters-empty-state"
+        >
+          No meters yet — tap ⚙ to configure.
+        </div>
+      ) : !mounted ? (
+        // Reserve space silently while ResizeObserver measures.
+        <div style={{ minHeight: 80 }} aria-hidden />
+      ) : (
+        <ResponsiveGridLayout
+          className="meters-grid"
+          width={width}
+          // Same column count + row geometry across breakpoints — the operator
+          // does pixel-grain placement and we don't want their layout
+          // reflowing when the tile is just a bit narrower.
+          breakpoints={{ lg: 0 }}
+          cols={{ lg: METERS_GRID_COLS }}
+          rowHeight={METERS_GRID_ROW_HEIGHT_PX}
+          margin={[6, 6]}
+          containerPadding={[6, 6]}
+          // Drag only via the small grip in each widget's header — clicks on
+          // the body, gear, or numeric readout don't initiate a drag.
+          dragConfig={{ handle: '.meter-widget-drag-handle', bounded: false }}
+          onLayoutChange={onLayoutChange}
+          layouts={{
+            lg: widgets.map((w) => ({
+              i: w.uid,
+              x: w.layout?.x ?? 0,
+              y: w.layout?.y ?? 0,
+              w: w.layout?.w ?? DEFAULT_WIDGET_SPAN[w.kind].w,
+              h: w.layout?.h ?? DEFAULT_WIDGET_SPAN[w.kind].h,
+              minW: 2,
+              minH: 2,
+            })),
+          }}
+        >
+          {widgets.map((w) => (
+            <div key={w.uid} data-grid-uid={w.uid}>
+              <MeterWidget
+                widget={w}
+                selected={w.uid === selectedUid}
+                onSelect={() => onSelectWidget(w.uid)}
+              />
+            </div>
+          ))}
+        </ResponsiveGridLayout>
+      )}
+    </div>
+  );
 }
 
 function LibraryDrawer({

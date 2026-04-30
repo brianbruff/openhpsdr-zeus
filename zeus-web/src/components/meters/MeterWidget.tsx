@@ -11,6 +11,7 @@
 //   - the row chrome (label + numeric readout + click-to-select handler)
 
 import { useRef, useState, type CSSProperties } from 'react';
+import { GripVertical } from 'lucide-react';
 import { METER_CATALOG } from './meterCatalog';
 import type { MetersWidgetInstance } from './metersConfig';
 import { useMeterReading } from './useMeterReading';
@@ -67,16 +68,22 @@ export function MeterWidget({ widget, selected, onSelect }: MeterWidgetProps) {
   const [hovered, setHovered] = useState(false);
   const label = widget.settings.label ?? def.label;
 
+  // Card chrome — fills the grid cell exactly so the resize handle pins to
+  // the visual border, not floating margin. Grid item positioning supplies
+  // top/left; we own the inset look. Class hook lets meters-grid.css drive
+  // hover styling on the parent .react-grid-item.
   const rowStyle: CSSProperties = {
     display: 'flex',
     flexDirection: 'column',
     gap: 4,
-    padding: '6px 10px',
-    margin: '4px 8px',
+    padding: '4px 8px 6px',
+    height: '100%',
+    boxSizing: 'border-box',
     background: selected ? 'var(--bg-2)' : 'var(--bg-1)',
     border: `1px solid ${selected ? 'var(--accent)' : hovered ? 'var(--panel-border)' : 'transparent'}`,
     borderRadius: 'var(--r-sm)',
     cursor: 'pointer',
+    overflow: 'hidden',
     transition: 'background var(--dur-fast), border-color var(--dur-fast)',
   };
   const headStyle: CSSProperties = {
@@ -163,15 +170,35 @@ export function MeterWidget({ widget, selected, onSelect }: MeterWidgetProps) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={rowStyle}
+      className="meter-widget-card"
       data-widget-uid={widget.uid}
     >
       <div style={headStyle}>
-        <span style={labelStyle}>{label}</span>
+        <span
+          className="meter-widget-drag-handle"
+          aria-hidden="true"
+          title="Drag to reposition"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            color: 'var(--fg-3)',
+            marginRight: 2,
+          }}
+          // Stop click on the grip from also toggling the Settings drawer —
+          // grip is for dragging, not selection.
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <GripVertical size={12} />
+        </span>
+        <span style={{ ...labelStyle, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
         <span style={valueStyle}>
           {formatReadout(def.unit, value)} <span style={{ color: 'var(--fg-3)' }}>{def.unit}</span>
         </span>
       </div>
-      {body}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+        {body}
+      </div>
     </div>
   );
 }

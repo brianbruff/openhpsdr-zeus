@@ -1,0 +1,85 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later
+ * Theming overrides for react-grid-layout inside a Meters panel tile.
+ * The library ships its own minimal CSS (imported globally with this file);
+ * everything below maps RGL chrome onto Zeus design tokens. */
+
+@import 'react-grid-layout/css/styles.css';
+@import 'react-resizable/css/styles.css';
+
+.meters-grid.react-grid-layout {
+  position: relative;
+  /* Let the grid size to its content; the parent flex column scrolls. */
+  background: transparent;
+}
+
+/* Each grid item — frame around an individual MeterWidget. */
+.meters-grid .react-grid-item {
+  background: transparent;
+  /* RGL hides items via top/left transitions; keep them snappy. */
+  transition: transform var(--dur-fast) var(--ease-out),
+    width var(--dur-fast) var(--ease-out),
+    height var(--dur-fast) var(--ease-out);
+}
+
+/* Hover affordance — soft outline so the operator sees the cell bounds
+ * before grabbing the drag handle or resize corner. */
+.meters-grid .react-grid-item:hover > .meter-widget-card {
+  border-color: var(--panel-border);
+}
+
+/* Item being dragged — RGL adds .react-draggable-dragging while live. */
+.meters-grid .react-grid-item.react-draggable-dragging {
+  z-index: 4;
+  cursor: grabbing;
+  opacity: 0.9;
+}
+
+/* Item being resized. */
+.meters-grid .react-grid-item.resizing {
+  z-index: 4;
+  opacity: 0.9;
+}
+
+/* Drop placeholder — the dotted ghost RGL renders where the item will land. */
+.meters-grid .react-grid-placeholder {
+  background: var(--accent);
+  opacity: 0.18;
+  border-radius: var(--r-sm);
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+/* Bottom-right resize handle — replace the default arrow image with a token-
+ * coloured chevron drawn in pure CSS so we don't ship the PNG asset. */
+.meters-grid .react-resizable-handle {
+  background-image: none;
+  width: 14px;
+  height: 14px;
+  right: 2px;
+  bottom: 2px;
+  cursor: se-resize;
+}
+.meters-grid .react-resizable-handle::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid var(--fg-2);
+  border-bottom: 2px solid var(--fg-2);
+  opacity: 0.65;
+}
+.meters-grid .react-grid-item:hover .react-resizable-handle::after {
+  opacity: 1;
+  border-color: var(--accent);
+}
+
+/* The drag handle inside each widget — the small grip rendered in the
+ * header strip of MeterWidget. Only this element starts a drag, so clicks
+ * on the body / gear / numeric readout don't kidnap input. */
+.meter-widget-drag-handle {
+  cursor: grab;
+}
+.meter-widget-drag-handle:active {
+  cursor: grabbing;
+}

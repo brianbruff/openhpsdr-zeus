@@ -5,11 +5,14 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_WIDGET_SPAN,
   defaultWidgetForReading,
   EMPTY_METERS_CONFIG,
   newWidgetUid,
   parseMetersPanelConfig,
+  placeWidgetInGrid,
   type MetersPanelConfig,
+  type MetersWidgetInstance,
 } from '../metersConfig';
 import { MeterReadingId } from '../meterCatalog';
 
@@ -126,5 +129,59 @@ describe('metersConfig', () => {
     const json = JSON.stringify(cfg);
     const back = parseMetersPanelConfig(JSON.parse(json));
     expect(back.title).toBe('My Stack');
+  });
+
+  it('round-trips a widget layout (x/y/w/h) through JSON', () => {
+    const cfg: MetersPanelConfig = {
+      schemaVersion: 1,
+      widgets: [
+        {
+          uid: 'p1',
+          reading: MeterReadingId.TxFwdWatts,
+          kind: 'dial',
+          settings: {},
+          layout: { x: 4, y: 2, w: 3, h: 4 },
+        },
+      ],
+    };
+    const back = parseMetersPanelConfig(JSON.parse(JSON.stringify(cfg)));
+    expect(back.widgets[0]?.layout).toEqual({ x: 4, y: 2, w: 3, h: 4 });
+  });
+
+  it('placeWidgetInGrid assigns next-row layout to a widget that lacks one', () => {
+    const existing: MetersWidgetInstance[] = [
+      {
+        uid: 'a',
+        reading: MeterReadingId.RxSignalPk,
+        kind: 'hbar',
+        settings: {},
+        layout: { x: 0, y: 0, w: 6, h: 2 },
+      },
+      {
+        uid: 'b',
+        reading: MeterReadingId.TxSwr,
+        kind: 'digital',
+        settings: {},
+        layout: { x: 6, y: 0, w: 3, h: 2 },
+      },
+    ];
+    const fresh = defaultWidgetForReading(MeterReadingId.TxFwdWatts);
+    expect(fresh.layout).toBeUndefined();
+    const placed = placeWidgetInGrid(fresh, existing);
+    expect(placed.layout?.y).toBe(2); // next free row below the existing pair
+    expect(placed.layout?.x).toBe(0);
+    expect(placed.layout?.w).toBe(DEFAULT_WIDGET_SPAN.dial.w);
+    expect(placed.layout?.h).toBe(DEFAULT_WIDGET_SPAN.dial.h);
+  });
+
+  it('placeWidgetInGrid is a no-op for a widget that already has a layout', () => {
+    const widget: MetersWidgetInstance = {
+      uid: 'has-layout',
+      reading: MeterReadingId.TxAlcGr,
+      kind: 'hbar',
+      settings: {},
+      layout: { x: 1, y: 2, w: 3, h: 4 },
+    };
+    expect(placeWidgetInGrid(widget, [])).toBe(widget);
   });
 });

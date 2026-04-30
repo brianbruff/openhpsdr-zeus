@@ -40,6 +40,17 @@ export const METERS_WIDGET_KINDS: ReadonlyArray<MetersWidgetKind> = [
   'digital',
 ];
 
+/** Grid-cell placement within the canvas's 12-column grid (react-grid-layout
+ *  coordinates). x/y are integer column/row; w/h are integer column/row spans.
+ *  Optional on the wire — widgets without it get auto-placed at the next free
+ *  row on first render and the placement persisted back. */
+export interface WidgetLayout {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 /** A single configured widget inside a Meters tile. */
 export interface MetersWidgetInstance {
   /** Stable per-widget id. Survives re-orders so React keys stay aligned and
@@ -51,7 +62,21 @@ export interface MetersWidgetInstance {
   kind: MetersWidgetKind;
   /** Operator overrides on top of catalog defaults. */
   settings: WidgetSettings;
+  /** Persisted grid placement. Optional for forward/backward compat. */
+  layout?: WidgetLayout;
 }
+
+/** 12-column grid, fixed row height, used by react-grid-layout. */
+export const METERS_GRID_COLS = 12;
+export const METERS_GRID_ROW_HEIGHT_PX = 40;
+/** Per-kind default span when a widget is first added (auto-layout). */
+export const DEFAULT_WIDGET_SPAN: Record<MetersWidgetKind, { w: number; h: number }> = {
+  hbar: { w: 6, h: 2 },
+  vbar: { w: 2, h: 4 },
+  dial: { w: 4, h: 4 },
+  sparkline: { w: 8, h: 3 },
+  digital: { w: 3, h: 2 },
+};
 
 /** Top-level config blob for one Meters tile instance. */
 export interface MetersPanelConfig {
@@ -96,6 +121,19 @@ export function parseMetersPanelConfig(raw: unknown): MetersPanelConfig {
       widget.kind !== 'digital'
     )
       continue;
+    const layoutRaw = (widget as { layout?: unknown }).layout;
+    let layout: WidgetLayout | undefined;
+    if (layoutRaw && typeof layoutRaw === 'object') {
+      const l = layoutRaw as Partial<WidgetLayout>;
+      if (
+        Number.isFinite(l.x) &&
+        Number.isFinite(l.y) &&
+        Number.isFinite(l.w) &&
+        Number.isFinite(l.h)
+      ) {
+        layout = { x: l.x as number, y: l.y as number, w: l.w as number, h: l.h as number };
+      }
+    }
     validWidgets.push({
       uid: widget.uid,
       reading: widget.reading as MeterReadingId,
@@ -104,6 +142,7 @@ export function parseMetersPanelConfig(raw: unknown): MetersPanelConfig {
         widget.settings && typeof widget.settings === 'object'
           ? { ...widget.settings }
           : {},
+      ...(layout ? { layout } : {}),
     });
   }
   return {
@@ -157,5 +196,25 @@ export function defaultWidgetForReading(
     reading: id,
     kind: def.defaultKind,
     settings: {},
+  };
+}
+
+/** Compute a layout placement for a brand-new widget, given the existing
+ *  set. Strategy: use the widget kind's default w/h, then place it at the
+ *  next free row (y = max existing y+h, x = 0). The grid will compact it
+ *  upward into any free space when react-grid-layout renders. */
+export function placeWidgetInGrid(
+  widget: MetersWidgetInstance,
+  others: MetersWidgetInstance[],
+): MetersWidgetInstance {
+  if (widget.layout) return widget;
+  const span = DEFAULT_WIDGET_SPAN[widget.kind];
+  const maxY = others.reduce((m, w) => {
+    if (!w.layout) return m;
+    return Math.max(m, w.layout.y + w.layout.h);
+  }, 0);
+  return {
+    ...widget,
+    layout: { x: 0, y: maxY, w: span.w, h: span.h },
   };
 }

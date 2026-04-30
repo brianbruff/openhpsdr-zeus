@@ -60,15 +60,45 @@ Once the workflow completes:
    - `zeus-X.Y.Z-linux-x64.tar.gz`
 4. Check the release notes are correctly generated
 
-### 5. (Optional) Edit Release Notes
+### 5. Generate Operator-Friendly Release Notes
 
-The release notes are auto-generated but may need customization:
+The workflow creates a basic release template, but operators downloading Zeus need human-readable notes that explain what changed *for them*. Use AI assistance to generate these from the commits since the previous tag.
 
-1. Click "Edit release" on the release page
-2. Add specific changes, bug fixes, new features
-3. Highlight any breaking changes
-4. Add upgrade instructions if needed
-5. Save the edited release
+#### Process
+
+Ask your AI assistant (e.g., `@claude` in GitHub or CLI) to generate release notes from the commits between the previous tag and the current release:
+
+```
+@claude — please generate operator-friendly release notes for this release.
+
+Review commits since the previous tag and organize them into:
+- **New features** — what operators didn't have before
+- **Behaviour changes** — changed defaults, panels, gestures (anything that will feel different)
+- **Bug fixes** — what was broken, what now works
+- **Compatibility / build notes** — platform support, install caveats
+- **Under the hood** (optional, terse) — refactors / internals worth a one-liner
+
+For each item:
+- Lead with what changed *for the operator*, not the commit subject
+- Link the PR or commit at the *end* of the line
+- Skip: README typos, formatting-only commits, CI/build tweaks that don't change the binary, dep bumps with no behaviour change
+- Call out anything platform-limited (e.g., "NR4 currently linux-x64-only")
+```
+
+#### Example Output Format
+
+Instead of raw commits like:
+> feat(dsp/nr2): bring NR2 (EMNR) settings to Thetis parity (#161)
+
+Generate operator-facing descriptions:
+> The NR2 panel now exposes Method, Trained, and Post-Process subsections, matching Thetis. Settings persist per-VFO. (#161)
+
+#### Applying the Notes
+
+1. Once generated, click "Edit release" on the GitHub release page
+2. Replace the auto-generated "Changes" section with the AI-generated notes
+3. Keep the platform-specific install instructions (macOS `xattr`, etc.)
+4. Save the edited release
 
 ### 6. Announce the Release
 
@@ -202,8 +232,9 @@ Use this checklist for each release:
 - [ ] Tag created and pushed (`v{version}`)
 - [ ] Release workflow completed successfully
 - [ ] All 4 artifacts present on release page
-- [ ] Release notes reviewed and accurate
-- [ ] Installation instructions in release notes
+- [ ] Operator-friendly release notes generated (see step 5)
+- [ ] Release notes edited with generated content
+- [ ] Installation instructions verified in release notes
 - [ ] macOS `xattr` warning present in release notes
 - [ ] Release published (not draft)
 - [ ] Announcement posted (if applicable)

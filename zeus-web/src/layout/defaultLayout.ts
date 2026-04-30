@@ -51,9 +51,10 @@
 export const DEFAULT_LAYOUT = {
   global: {
     tabEnableClose: true,
-    tabSetMinHeight: 60,
+    tabSetMinHeight: 40,
     tabSetMinWidth: 80,
     tabSetTabStripHeight: 28,
+    splitterSize: 6,
   },
   borders: [],
   layout: {

@@ -81,6 +81,8 @@ import { AzimuthMap } from './components/design/AzimuthMap';
 import { CONTACTS, bandOf } from './components/design/data';
 import { TuningStepWidget } from './components/TuningStepWidget';
 import { Dockable } from './components/design/Dockable';
+import { CollapsibleBottomSlot } from './components/design/CollapsibleBottomSlot';
+import { useBottomPinStore } from './state/bottom-pin-store';
 import { DspPanel } from './components/DspPanel';
 import { TxFilterPanel } from './components/TxFilterPanel';
 import { LogbookLive } from './components/design/LogbookLive';
@@ -257,6 +259,10 @@ export default function App() {
   const terminatorActive = panBackground === 'beam-map';
   const imageMode = panBackground === 'image' && !!backgroundImage;
   const bgActive = terminatorActive || imageMode;
+  // Per-slot pin state for the bottom row. Layout (pinned-tier vs
+  // chip-tier vs grid-template-columns) is driven by the JSX below
+  // and the .bottom-tier--* rules in layout.css.
+  const bottomPinned = useBottomPinStore((s) => s.pinned);
   // While 'M' is held and the map is showing, the spectrum canvas stack goes
   // pointer-events:none and the Leaflet map underneath takes drag/zoom input.
   // Click-to-tune is suspended for the duration of the modifier.
@@ -1001,23 +1007,69 @@ export default function App() {
         </div>
 
         {/* Bottom row — Logbook + TX Stage Meters on desktop; big PTT on
-            mobile. (QRZ Lookup lives in the side-stack under the S-Meter
-            when terminator is engaged.) */}
+            mobile. The row has two tiers:
+              - .bottom-tier--pinned   : pinned panels share the row width
+                (2fr 1fr when both pinned, 1fr when only one is pinned).
+              - .bottom-tier--unpinned : unpinned chips sit below the
+                pinned tier, left-aligned, auto-sized to their label.
+            Both tiers are conditionally rendered, so when both are
+            unpinned only a thin chip strip remains and the panadapter
+            grows into the freed vertical space. */}
         <div className="bottom-row">
-          <div className="bottom-slot hide-mobile">
-            <Dockable title={logbookTitle} ledOn actions={logbookActions}>
-              <LogbookLive />
-            </Dockable>
-          </div>
-          <div className="bottom-slot hide-mobile">
-            <Dockable
-              title="TX Stage Meters"
-              ledOn={moxOn || tunOn}
-              actions={<OverdriveIndicator />}
-            >
-              <TxStageMeters />
-            </Dockable>
-          </div>
+          {(bottomPinned.logbook || bottomPinned.txmeters) && (
+            <div className={`bottom-tier bottom-tier--pinned hide-mobile ${
+              bottomPinned.logbook && bottomPinned.txmeters ? 'has-both' : 'has-one'
+            }`}>
+              {bottomPinned.logbook && (
+                <div className="bottom-slot">
+                  <CollapsibleBottomSlot
+                    slotId="logbook"
+                    title={logbookTitle}
+                    ledOn
+                    actions={logbookActions}
+                  >
+                    <LogbookLive />
+                  </CollapsibleBottomSlot>
+                </div>
+              )}
+              {bottomPinned.txmeters && (
+                <div className="bottom-slot">
+                  <CollapsibleBottomSlot
+                    slotId="txmeters"
+                    title="TX Stage Meters"
+                    ledOn={moxOn || tunOn}
+                    actions={<OverdriveIndicator />}
+                  >
+                    <TxStageMeters />
+                  </CollapsibleBottomSlot>
+                </div>
+              )}
+            </div>
+          )}
+          {(!bottomPinned.logbook || !bottomPinned.txmeters) && (
+            <div className="bottom-tier bottom-tier--unpinned hide-mobile">
+              {!bottomPinned.logbook && (
+                <CollapsibleBottomSlot
+                  slotId="logbook"
+                  title={logbookTitle}
+                  ledOn
+                  actions={logbookActions}
+                >
+                  <LogbookLive />
+                </CollapsibleBottomSlot>
+              )}
+              {!bottomPinned.txmeters && (
+                <CollapsibleBottomSlot
+                  slotId="txmeters"
+                  title="TX Stage Meters"
+                  ledOn={moxOn || tunOn}
+                  actions={<OverdriveIndicator />}
+                >
+                  <TxStageMeters />
+                </CollapsibleBottomSlot>
+              )}
+            </div>
+          )}
           <div className="bottom-slot show-mobile mobile-ptt-slot">
             <MobilePttButton />
           </div>

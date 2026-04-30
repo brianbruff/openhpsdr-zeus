@@ -387,7 +387,10 @@
 .workspace {
   display: grid;
   grid-template-columns: 1fr 320px;
-  grid-template-rows: 1fr 200px;
+  /* Bottom track sizes to its content (pinned tier + optional chip tier),
+     so when both bottom panels are unpinned the row shrinks to a thin
+     chip strip and the hero greedy-1fr row grows into the freed space. */
+  grid-template-rows: 1fr auto;
   gap: 6px;
   overflow: hidden;
   min-height: 0;
@@ -413,13 +416,46 @@
 .bottom-row {
   grid-column: 1;
   grid-row: 2;
-  display: grid;
-  grid-template-columns: 2fr 1fr;
+  display: flex;
+  flex-direction: column;
   gap: 6px;
   min-height: 0;
 }
+
+/* Pinned tier — full-bodied panels. When both are pinned, Logbook gets
+   2fr and TX Stage Meters gets 1fr (historical split). When only one
+   is pinned, that one fills the whole row.
+   Fixed 200 px height so the panel content has its usual room. */
+.bottom-tier--pinned {
+  display: grid;
+  gap: 6px;
+  height: 200px;
+  min-height: 0;
+}
+.bottom-tier--pinned.has-both { grid-template-columns: 2fr 1fr; }
+.bottom-tier--pinned.has-one  { grid-template-columns: 1fr; }
 .bottom-slot { display: flex; min-height: 0; }
 .bottom-slot > * { flex: 1; min-height: 0; }
+
+/* Unpinned tier — chips, left-aligned, content-width. Sits below the
+   pinned tier so a chip never steals horizontal space from a pinned
+   sibling. The .panel--unpinned class on the chip's panel hides the
+   panel body so only the head (LED + title + actions + pin icon)
+   shows; see .panel--unpinned below. */
+.bottom-tier--unpinned {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-start;
+  flex: 0 0 auto;
+}
+.bottom-tier--unpinned > .panel--unpinned {
+  flex: 0 0 auto;
+}
+.panel--unpinned .panel-body {
+  display: none;
+}
 
 /* ===== Spectrum + waterfall ===== */
 .hero { height: 100%; }

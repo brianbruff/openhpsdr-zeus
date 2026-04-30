@@ -668,6 +668,18 @@ public static class ZeusEndpoints
             return Results.Ok(store.Get());
         });
 
+        // Classic-layout bottom-row pin state — Logbook + TX Stage Meters.
+        // GET returns current state; PUT replaces both flags atomically.
+        // Persisted in zeus-prefs.db so the layout choice follows the
+        // operator across browsers / devices.
+        app.MapGet("/api/bottom-pin", (BottomPinStore store) => Results.Ok(store.Get()));
+
+        app.MapPut("/api/bottom-pin", (BottomPinSetRequest req, BottomPinStore store) =>
+        {
+            store.Save(req.Logbook, req.TxMeters);
+            return Results.Ok(store.Get());
+        });
+
         // Radio selection — operator preference seeding, with discovery as the
         // tiebreaker. Preferred=="Auto" removes the override (stored as absence,
         // not a sentinel enum value). Effective = Connected when connected (which

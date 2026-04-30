@@ -399,6 +399,19 @@ public sealed record DisplaySettingsSetRequest(
     string Mode,
     string Fit);
 
+// Per-slot pin state for the classic-layout bottom row (Logbook + TX
+// Stage Meters). True = panel is pinned (full body visible). False =
+// collapsed to a chip strip below the pinned tier. Persisted server-side
+// so the layout choice follows the operator across browsers / devices,
+// same as DisplaySettings.
+public sealed record BottomPinDto(
+    bool Logbook,
+    bool TxMeters);
+
+public sealed record BottomPinSetRequest(
+    bool Logbook,
+    bool TxMeters);
+
 // ---- PureSignal request records ----
 // PsControlSetRequest = master arm (Enabled) + mode (Auto vs Single).
 // PsAdvancedSetRequest = nullable so partial updates from the settings

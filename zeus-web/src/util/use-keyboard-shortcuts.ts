@@ -76,8 +76,9 @@ function isEditableTarget(el: EventTarget | null): boolean {
 
 /**
  * Window-scoped arrow-key shortcuts:
- *   ←/→ nudge the VFO down/up by the operator's selected tune step
- *   ↑/↓ step zoom in/out by one level
+ *   ←/→             nudge the VFO down/up by the operator's selected tune step
+ *   ↑/↓             step zoom in/out by one level
+ *   Option+↑/↓      zoom in/out (Mac muscle-memory alias for plain ↑/↓)
  *   Space (press-and-hold) keys MOX; release drops back to RX.
  *
  * Skips editable targets so typing into an <input> still works, and requires
@@ -154,8 +155,25 @@ export function useKeyboardShortcuts() {
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (isEditableTarget(e.target)) return;
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (useConnectionStore.getState().status !== 'Connected') return;
+
+      // Option/Alt + Up/Down zooms the panadapter. Handled before the
+      // modifier early-return below so the alt path is the only modified
+      // shortcut we honour — alt+left/right and ctrl/meta+anything still
+      // fall through to the OS / browser defaults.
+      if (e.altKey && !e.ctrlKey && !e.metaKey) {
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          bumpZoom(1);
+          return;
+        }
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          bumpZoom(-1);
+          return;
+        }
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
 
       switch (e.key) {
         case 'ArrowLeft':

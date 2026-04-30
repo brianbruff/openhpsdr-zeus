@@ -521,6 +521,25 @@ public class WdspDspEngineTests
             double adcAv = NativeMethods.GetRXAMeter(channel, 3);
             Assert.True(totalDrained > 0, $"expected audio to drain; S_AV={sAv:F1} ADC_AV={adcAv:F1}");
             Assert.True(sAv > -399.0, $"RXA_S_AV still at -400 sentinel; ADC_AV={adcAv:F1}");
+
+            // Meters Panel PR 1: assert that the full RxStageMeters snapshot
+            // also escapes the −400 sentinel once IQ has flowed. Each of the
+            // 7 indices comes from a different point in the WDSP RXA chain
+            // (smeter / adcmeter / wcpAGC), so a sentinel on any one of them
+            // would mean that stage hasn't ticked. AgcGain is signed and can
+            // legitimately read 0 when AGC is disengaged, so we use a wider
+            // bound for it (anything above −300 means it ticked).
+            var rx = engine.GetRxStageMeters(channel);
+            Assert.True(rx.SignalPk > -399.0, $"RxStageMeters.SignalPk at sentinel ({rx.SignalPk:F1})");
+            Assert.True(rx.SignalAv > -399.0, $"RxStageMeters.SignalAv at sentinel ({rx.SignalAv:F1})");
+            Assert.True(rx.AdcPk > -399.0, $"RxStageMeters.AdcPk at sentinel ({rx.AdcPk:F1})");
+            Assert.True(rx.AdcAv > -399.0, $"RxStageMeters.AdcAv at sentinel ({rx.AdcAv:F1})");
+            // AgcGain is signed dB (can be 0 when AGC is off, +30 boosting,
+            // −12 cutting). Sentinel for this index would be ~ −400 like the
+            // others; assert it's above −300 to stay conservative.
+            Assert.True(rx.AgcGain > -300.0, $"RxStageMeters.AgcGain at sentinel ({rx.AgcGain:F1})");
+            Assert.True(rx.AgcEnvPk > -399.0, $"RxStageMeters.AgcEnvPk at sentinel ({rx.AgcEnvPk:F1})");
+            Assert.True(rx.AgcEnvAv > -399.0, $"RxStageMeters.AgcEnvAv at sentinel ({rx.AgcEnvAv:F1})");
         }
         finally
         {

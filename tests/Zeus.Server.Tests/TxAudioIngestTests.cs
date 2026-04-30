@@ -97,6 +97,7 @@ public class TxAudioIngestTests
         public int OpenTxChannel(int outputRateHz = 48_000) => 0;
         public void SetMox(bool moxOn) { }
         public double GetRxaSignalDbm(int channelId) => -140.0;
+        public RxStageMeters GetRxStageMeters(int channelId) => RxStageMeters.Silent;
         public void SetTxMode(RxMode mode) { }
         public void SetTxFilter(int lowHz, int highHz) { }
         public void SetTxPanelGain(double linearGain) { }

@@ -94,4 +94,13 @@ public enum MsgType : byte
     // and the GetPSMaxTX envelope peak. Bare-payload like TxMetersV2 (no
     // 16-byte header) — same 10 Hz rate logic.
     PsMeters = 0x18,
+
+    // Server → client (RX telemetry v2). Compatible additive extension of
+    // RxMeter (0x14): carries the full set of RXA stage meters — signal
+    // peak/avg (calibrated dBm), ADC peak/avg (dBFS), AGC gain (signed dB,
+    // positive = boosting), and AGC envelope peak/avg (calibrated dBm).
+    // Bare-payload like TxMetersV2 (no 16-byte header), broadcast at the
+    // same 5 Hz cadence as RxMeter. The legacy 5-byte 0x14 frame stays in
+    // flight for older clients (e.g. SMeterLive) — 0x19 is purely additive.
+    RxMetersV2 = 0x19,
 }

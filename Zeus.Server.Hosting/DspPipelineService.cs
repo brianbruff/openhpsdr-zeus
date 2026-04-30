@@ -1111,6 +1111,54 @@ public class DspPipelineService : BackgroundService
             if (!double.IsFinite(dbm)) dbm = -160.0;
             _hub.Broadcast(new RxMeterFrame((float)dbm));
             RxMeterUpdated?.Invoke(channel, dbm);
+
+            // Additive 0x19 broadcast (RxMetersV2Frame). Carries the full
+            // set of WDSP RXA stage readings so the configurable Meters
+            // Panel can render any of them; older clients that only know
+            // 0x14 ignore this frame. Same 5 Hz cadence as 0x14 above.
+            //
+            // Cal offset: HL2 / non-ANAN default per Thetis
+            // clsHardwareSpecific.cs:428. TODO(meters/cal-offset): replace
+            // with a per-board lookup (e.g.
+            // RadioMeterCalibration.RxOffsetDb(HpsdrBoardKind)) and remove
+            // the duplicate constant inside WdspDspEngine.GetRxaSignalDbm
+            // once the abstraction exists. Tracked as PR-1 follow-up per
+            // plan §7 Q3 and CLAUDE.md "use per-board abstractions".
+            const double rxCalOffsetDb = 0.98;
+            var rx = engine.GetRxStageMeters(channel);
+            var v2 = BuildRxMetersV2(rx, rxCalOffsetDb);
+            _hub.Broadcast(v2);
+            RxMetersV2Updated?.Invoke(channel, v2);
         }
+    }
+
+    /// <summary>
+    /// Raised when an RXA stage-meter snapshot is broadcast (approximately
+    /// 5 Hz, alongside <see cref="RxMeterUpdated"/>). Arguments:
+    /// (channelId, frame). Test seam — the broadcast itself is a no-op
+    /// when no clients are attached, so this event lets unit tests
+    /// observe the encoded frame without instantiating a WebSocket.
+    /// </summary>
+    public event Action<int, RxMetersV2Frame>? RxMetersV2Updated;
+
+    /// <summary>
+    /// Build the wire frame from a raw <see cref="RxStageMeters"/>
+    /// snapshot, applying <paramref name="calOffsetDb"/> only to the
+    /// dBm-scale fields (Signal*, AgcEnv*). ADC* is dBFS (raw ADC,
+    /// board-independent) and AgcGain is dB of insertion gain — both get
+    /// the raw value. Exposed for unit tests so the encoding rule can be
+    /// asserted without spinning up a hub or pipeline tick.
+    /// </summary>
+    public static RxMetersV2Frame BuildRxMetersV2(in RxStageMeters rx, double calOffsetDb)
+    {
+        float cal = (float)calOffsetDb;
+        return new RxMetersV2Frame(
+            SignalPk: rx.SignalPk + cal,
+            SignalAv: rx.SignalAv + cal,
+            AdcPk: rx.AdcPk,
+            AdcAv: rx.AdcAv,
+            AgcGain: rx.AgcGain,
+            AgcEnvPk: rx.AgcEnvPk + cal,
+            AgcEnvAv: rx.AgcEnvAv + cal);
     }
 }

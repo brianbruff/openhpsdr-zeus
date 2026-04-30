@@ -148,6 +148,11 @@ public sealed class SyntheticDspEngine : IDspEngine
     // "below noise floor" on the S-meter.
     public double GetRxaSignalDbm(int channelId) => -140.0;
 
+    // No WDSP RXA chain on synthetic — return the silent record so the
+    // 0x19 broadcast publishes a consistent (sentinel-shaped) frame even
+    // when the real engine isn't loaded.
+    public RxStageMeters GetRxStageMeters(int channelId) => RxStageMeters.Silent;
+
     // Synthetic has no TXA chain. SetTxMode stashes nothing, ProcessTxBlock
     // reports "no IQ produced" so TX-side callers skip ring writes. Block size
     // mirrors WDSP so tests that round-trip through the interface can assume

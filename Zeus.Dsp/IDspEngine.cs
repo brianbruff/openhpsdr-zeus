@@ -111,6 +111,15 @@ public interface IDspEngine : IDisposable
     /// pipeline tick; WDSP's meter struct is lock-guarded internally.</summary>
     double GetRxaSignalDbm(int channelId);
 
+    /// <summary>RXA per-stage readings (signal peak/avg, ADC peak/avg, AGC
+    /// gain, AGC envelope peak/avg) sampled from the WDSP metering ring in a
+    /// single pass. Returns <see cref="RxStageMeters.Silent"/> on the
+    /// synthetic engine or when the channel is closed. Cal offset is NOT
+    /// applied here — caller (DspPipelineService) decides whether to add the
+    /// per-board offset before broadcasting, so unit tests can assert raw
+    /// WDSP output. Safe to call from the pipeline tick.</summary>
+    RxStageMeters GetRxStageMeters(int channelId);
+
     /// <summary>Set TXA modulator mode (USB/LSB/FM/AM/...). Calls
     /// SetTXAMode internally on WdspDspEngine; no-op for Synthetic and when no
     /// TXA is open.</summary>

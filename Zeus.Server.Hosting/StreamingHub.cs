@@ -259,6 +259,25 @@ public sealed class StreamingHub
         }
     }
 
+    public void Broadcast(in RxMetersV2Frame frame)
+    {
+        if (_clients.IsEmpty) return;
+
+        int total = RxMetersV2Frame.ByteLength;
+        var rented = ArrayPool<byte>.Shared.Rent(total);
+        try
+        {
+            var writer = new FixedBufferWriter(rented, total);
+            frame.Serialize(writer);
+            var payload = new ReadOnlyMemory<byte>(rented, 0, total).ToArray();
+            foreach (var client in _clients.Values) client.TryEnqueue(payload);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
     public void Broadcast(in PaTempFrame frame)
     {
         if (_clients.IsEmpty) return;

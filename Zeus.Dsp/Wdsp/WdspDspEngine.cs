@@ -195,6 +195,17 @@ public sealed class WdspDspEngine : IDspEngine
     private TxStageMeters? _latestTxStageMeters;
     private readonly object _txMeterPublishLock = new();
 
+    // Latest per-stage RX meters, published atomically each time
+    // GetRxStageMeters is called from the pipeline tick. The reader sees a
+    // consistent snapshot across all 7 indices without racing against a
+    // concurrent re-read. Mirrors the TX path's _latestTxStageMeters /
+    // _txMeterPublishLock pattern. The lock is uncontended in steady state —
+    // GetRxStageMeters runs from the pipeline tick at 5 Hz; if a future
+    // caller polls from a second thread the snapshot field still gives them
+    // a coherent set rather than a half-updated tuple.
+    private RxStageMeters _latestRxStageMeters = RxStageMeters.Silent;
+    private readonly object _rxMeterPublishLock = new();
+
     // TX panadapter analyzer. Separate WDSP `disp` slot from RXA's, fed with
     // the post-CFIR IQ from ProcessTxBlock so the operator can see the on-air
     // signal during MOX / TUN. The analyzer runs at the TXA output rate
@@ -889,6 +900,39 @@ public sealed class WdspDspEngine : IDspEngine
                 sAv, adcAv, agcGain, agcAv);
         }
         return sAv + Hl2MeterCalOffsetDb;
+    }
+
+    // Full RXA meter snapshot — fetches all 7 indices in one pass and
+    // publishes under _rxMeterPublishLock so callers see a consistent set.
+    // Indices per WDSP RXA.h:47-57 enum rxaMeterType:
+    //   0  RXA_S_PK     1  RXA_S_AV     (signal peak / avg, dBm)
+    //   2  RXA_ADC_PK   3  RXA_ADC_AV   (ADC input peak / avg, dBFS)
+    //   4  RXA_AGC_GAIN              (AGC insertion gain, signed dB)
+    //   5  RXA_AGC_PK   6  RXA_AGC_AV   (AGC envelope peak / avg, dBm)
+    //
+    // This helper is the canonical source for the 0x19 RxMetersV2Frame
+    // broadcast in DspPipelineService. The pre-existing diagnostic reads
+    // inside GetRxaSignalDbm (RXA_ADC_AV, RXA_AGC_GAIN, RXA_AGC_AV at 1 Hz)
+    // are deliberately retained — they log a different cadence and tell us
+    // whether the chain is alive when sAv is at sentinel.
+    //
+    // Cal offset is NOT applied here. The caller decides whether to add it
+    // before serializing, so unit tests can assert raw WDSP output and a
+    // future per-board calibration table can plug in at the broadcast seam
+    // without re-touching this method. See plan §2.1 / §2.3.
+    public RxStageMeters GetRxStageMeters(int channelId)
+    {
+        if (!_channels.ContainsKey(channelId)) return RxStageMeters.Silent;
+        var snap = new RxStageMeters(
+            SignalPk: (float)NativeMethods.GetRXAMeter(channelId, 0),
+            SignalAv: (float)NativeMethods.GetRXAMeter(channelId, 1),
+            AdcPk: (float)NativeMethods.GetRXAMeter(channelId, 2),
+            AdcAv: (float)NativeMethods.GetRXAMeter(channelId, 3),
+            AgcGain: (float)NativeMethods.GetRXAMeter(channelId, 4),
+            AgcEnvPk: (float)NativeMethods.GetRXAMeter(channelId, 5),
+            AgcEnvAv: (float)NativeMethods.GetRXAMeter(channelId, 6));
+        lock (_rxMeterPublishLock) { _latestRxStageMeters = snap; }
+        return snap;
     }
 
     public bool TryGetDisplayPixels(int channelId, DisplayPixout which, Span<float> dbOut)

@@ -17,6 +17,7 @@
 // matching Thetis's Setup-form pattern.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { create } from 'zustand';
 import {
   Activity,
   BarChart3,
@@ -56,17 +57,27 @@ export type NrSettingsSectionProps = {
   mode: NrSettingsMode;
 };
 
-export function NrSettingsSection({ mode }: NrSettingsSectionProps) {
-  // Collapsed by default — the dense gauge panel is too much to keep on
-  // screen for the casual operator. The chevron in the title bar telegraphs
-  // that there's more behind the click.
-  const [expanded, setExpanded] = useState(false);
+// Per-mode disclosure state lives in a global store, not local component
+// state, so the panel survives any FlexLayout re-render that unmounts the
+// DSP tab content (drag, dock, tabset reflow). Keyed by mode so each NR
+// algorithm's accordion remembers its own open/closed state.
+type NrSettingsUiState = {
+  expanded: Record<NrSettingsMode, boolean>;
+  toggle: (mode: NrSettingsMode) => void;
+};
 
-  // Reset when the user cycles to a different NR algorithm — each panel's
-  // disclosure state stays local to its own session.
-  useEffect(() => {
-    setExpanded(false);
-  }, [mode]);
+const useNrSettingsUi = create<NrSettingsUiState>((set) => ({
+  expanded: { Anr: false, Emnr: false, Sbnr: false },
+  toggle: (mode) =>
+    set((s) => ({ expanded: { ...s.expanded, [mode]: !s.expanded[mode] } })),
+}));
+
+export function NrSettingsSection({ mode }: NrSettingsSectionProps) {
+  // Persisted disclosure: collapsed by default (the dense gauge panel is
+  // too much for the casual operator), but stays open across remounts once
+  // the user opens it. The chevron telegraphs the click target.
+  const expanded = useNrSettingsUi((s) => s.expanded[mode]);
+  const toggle = useNrSettingsUi((s) => s.toggle);
 
   const title =
     mode === 'Anr' ? 'NR1 — ANR' : mode === 'Emnr' ? 'NR2 — EMNR' : 'NR4 — SBNR';
@@ -77,7 +88,15 @@ export function NrSettingsSection({ mode }: NrSettingsSectionProps) {
         type="button"
         className="nr-settings__title-btn"
         aria-expanded={expanded}
-        onClick={() => setExpanded((v) => !v)}
+        onClick={(e) => {
+          // Belt-and-braces: stop bubbling so any pointer-down on the
+          // ancestor flexlayout tabset can't fire its drag-detection on
+          // an accordion-toggle click. (The factory wrapper in
+          // FlexWorkspace also catches this, but covering it here keeps
+          // the fix robust to changes in the wrapper.)
+          e.stopPropagation();
+          toggle(mode);
+        }}
       >
         <span className="nr-settings__chevron" aria-hidden>
           {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}

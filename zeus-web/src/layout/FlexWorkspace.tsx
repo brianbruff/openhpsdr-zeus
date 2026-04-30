@@ -42,7 +42,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent } from 'react';
 import {
   Actions,
   BorderNode,
@@ -64,12 +64,30 @@ import { DEFAULT_LAYOUT } from './defaultLayout';
 import { TerminatorLines } from '../components/design/TerminatorLines';
 import { AddPanelModal } from './AddPanelModal';
 
+// Stop pointer/mouse-down events inside panel content from bubbling up to
+// flexlayout-react's parent tabset, which uses them to start its own
+// drag-detection. When that detection fires on a normal control click it
+// triggers Actions.selectTab and forces FlexLayout to re-render the active
+// tab — symptoms include the panadapter canvas restarting, accordion
+// buttons appearing dead because their local useState resets on remount,
+// and inline forms losing focus mid-keystroke. The tab-strip header lives
+// outside this wrapper, so tab dragging / reordering / docking are all
+// unaffected.
+const stopPropagationProps = {
+  onPointerDown: (e: PointerEvent) => e.stopPropagation(),
+  onMouseDown: (e: MouseEvent) => e.stopPropagation(),
+} as const;
+
 function factory(node: TabNode) {
   const id = node.getComponent();
   const panel = id ? PANELS[id] : undefined;
   if (!panel) return null;
   const Component = panel.component;
-  return <Component />;
+  return (
+    <div className="flex-panel-content" style={{ width: '100%', height: '100%' }} {...stopPropagationProps}>
+      <Component />
+    </div>
+  );
 }
 
 // FlexWorkspace: renders the movable/dockable panel layout when ?layout=flex

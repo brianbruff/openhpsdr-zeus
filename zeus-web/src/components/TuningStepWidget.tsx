@@ -76,7 +76,6 @@ export function TuningStepWidget() {
       {/* Desktop: single-line grid of equal-width step buttons. Cells use
           minmax(0, 1fr) so the row shrinks gracefully with the panel. */}
       <div className="ctrl-group hide-mobile" style={{ width: '100%' }}>
-        <div className="label-xs ctrl-lbl">TUNE STEP</div>
         <div className="step-grid">
           {TUNING_STEPS.map((step) => (
             <button
@@ -99,7 +98,6 @@ export function TuningStepWidget() {
 
       {/* Mobile: dropdown */}
       <div className="ctrl-group show-mobile" style={{ display: 'none' }}>
-        <div className="label-xs ctrl-lbl">TUNE STEP</div>
         <select
           value={stepHz}
           onChange={(e) => setStepHz(Number(e.target.value))}

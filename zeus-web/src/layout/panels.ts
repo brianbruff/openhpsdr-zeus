@@ -193,14 +193,14 @@ export const PANELS: Record<string, PanelDef> = {
   },
   band: {
     id: 'band',
-    name: 'Band Buttons',
+    name: 'Band',
     category: 'controls',
     tags: ['band', 'frequency', 'hf', 'tuning'],
     component: BandPanel,
   },
   mode: {
     id: 'mode',
-    name: 'Mode Buttons',
+    name: 'Mode',
     category: 'controls',
     tags: ['mode', 'modulation', 'ssb', 'cw', 'am', 'fm'],
     component: ModePanel,

@@ -23,7 +23,10 @@
   width: 100%;
   height: 100%;
   overflow: auto;
-  background: var(--bg-workspace, var(--bg-app));
+  /* Use the dark token (--bg-0) for the workspace ground so the gap
+   * between tiles reads like the dark band between the top toolbar
+   * and the second control row — not the blue-gray gutter. */
+  background: var(--bg-0);
 }
 
 .all-panels-grid.react-grid-layout {
@@ -194,7 +197,12 @@
   flex: 1;
   min-height: 0;
   position: relative;
-  overflow: hidden;
+  /* Auto so panel content (DSP NR sub-controls, full Tuning Step grid,
+   * Logbook rows, etc.) can scroll inside the tile when the operator's
+   * chosen tile size doesn't accommodate everything. Tiles whose body
+   * is a fixed-size canvas (panadapter, world map) don't trigger a
+   * scrollbar because their content fits exactly. */
+  overflow: auto;
 }
 
 /* Workspace-level "+ Add Panel" button — fixed top-right of the workspace

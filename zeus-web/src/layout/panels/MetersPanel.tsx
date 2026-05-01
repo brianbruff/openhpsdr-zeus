@@ -22,7 +22,6 @@
 // translateX use the existing --dur-fast / --dur-med tokens.
 
 import { useCallback, useMemo, useState, type CSSProperties } from 'react';
-import { Actions, type TabNode } from 'flexlayout-react';
 import { Settings, ChevronLeft, ChevronRight, X, Trash2 } from 'lucide-react';
 import {
   ResponsiveGridLayout,
@@ -47,7 +46,6 @@ import {
   METERS_WIDGET_KINDS,
   parseMetersPanelConfig,
   placeWidgetInGrid,
-  useMetersPanelConfig,
   type MetersWidgetInstance,
   type MetersWidgetKind,
   type MetersPanelConfig,
@@ -55,36 +53,33 @@ import {
 import { MeterWidget } from '../../components/meters/MeterWidget';
 
 interface MetersPanelProps {
-  node?: TabNode;
+  /** Per-instance config blob. Provided by `PanelTile` from the workspace
+   *  store; defaults to EMPTY_METERS_CONFIG so the panel still renders if
+   *  it's mounted standalone (tests, design previews). */
+  config?: MetersPanelConfig;
+  /** Persistence hook. The workspace store wires this to
+   *  `updateTileInstanceConfig(uid, next)`. No-op default keeps the panel
+   *  usable in non-persistent contexts. */
+  setConfig?: (next: MetersPanelConfig) => void;
+  /** Optional title-rename callback. Reserved for future workspace-level
+   *  rename UX (the v1 workspace doesn't use this — see all-panels plan §10
+   *  Q3). MetersPanel still owns the in-header title editor. */
+  renameTab?: (name: string) => void;
 }
 
-export function MetersPanel({ node }: MetersPanelProps) {
-  // FlexLayout always passes the TabNode as a prop when wired through the
-  // factory; in dev / tests it can be omitted, in which case we fall back
-  // to a static empty config so the panel still renders without crashing.
-  if (!node) {
-    return <MetersPanelInner config={EMPTY_METERS_CONFIG} setConfig={() => {}} />;
-  }
-  return <MetersPanelBound node={node} />;
-}
-
-function MetersPanelBound({ node }: { node: TabNode }) {
-  const { config, setConfig } = useMetersPanelConfig(node);
-  const renameTab = useCallback(
-    (next: string) => {
-      const model = node.getModel();
-      if (model) model.doAction(Actions.renameTab(node.getId(), next));
-    },
-    [node],
-  );
+export function MetersPanel({ config, setConfig, renameTab }: MetersPanelProps) {
+  const effectiveConfig = config ?? EMPTY_METERS_CONFIG;
+  const effectiveSet = setConfig ?? noop;
   return (
     <MetersPanelInner
-      config={config}
-      setConfig={setConfig}
+      config={effectiveConfig}
+      setConfig={effectiveSet}
       renameTab={renameTab}
     />
   );
 }
+
+function noop() {}
 
 interface MetersPanelInnerProps {
   config: MetersPanelConfig;

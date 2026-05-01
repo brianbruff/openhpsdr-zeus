@@ -12,8 +12,6 @@
 // which fires `onModelChange` on the FlexWorkspace, which writes the layout
 // JSON back to `useLayoutStore` and triggers the debounced server PUT.
 
-import { useCallback, useMemo } from 'react';
-import { Actions, type Model, type TabNode } from 'flexlayout-react';
 import { MeterReadingId, METER_CATALOG } from './meterCatalog';
 
 /** Operator-overridable rendering knobs. All fields optional — defaults come
@@ -150,31 +148,6 @@ export function parseMetersPanelConfig(raw: unknown): MetersPanelConfig {
     widgets: validWidgets,
     title: typeof obj.title === 'string' ? obj.title : undefined,
   };
-}
-
-/**
- * React hook bound to a flexlayout TabNode that exposes the parsed
- * MetersPanelConfig + an updater. Updates are written through
- * `Actions.updateNodeAttributes`, which the FlexWorkspace's `onModelChange`
- * captures and persists.
- */
-export function useMetersPanelConfig(node: TabNode): {
-  config: MetersPanelConfig;
-  setConfig: (next: MetersPanelConfig) => void;
-} {
-  const raw = node.getConfig();
-  const config = useMemo(() => parseMetersPanelConfig(raw), [raw]);
-  const setConfig = useCallback(
-    (next: MetersPanelConfig) => {
-      const model: Model | undefined = node.getModel();
-      if (!model) return;
-      model.doAction(
-        Actions.updateNodeAttributes(node.getId(), { config: next }),
-      );
-    },
-    [node],
-  );
-  return { config, setConfig };
 }
 
 /** Generate a stable, locally-unique widget UID. Uses crypto.randomUUID()

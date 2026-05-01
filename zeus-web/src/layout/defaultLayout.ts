@@ -1,156 +1,54 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
 //
-// This program is free software: you can redistribute it and/or modify it
-// under the terms of the GNU General Public License as published by the
-// Free Software Foundation, either version 2 of the License, or (at your
-// option) any later version. See the LICENSE file at the root of this
-// repository for the full text, or https://www.gnu.org/licenses/.
+// Default workspace layout for the react-grid-layout (RGL) substrate. 12-col
+// grid; positions chosen to approximate the previous flexlayout-react default
+// shape so operators see the same panel set in roughly the same places after
+// the substrate swap (LAYOUT_SCHEMA_VERSION 5→6 wipes the saved layout JSON
+// on first load).
 //
-// Zeus is an independent reimplementation in .NET — not a fork. Its
-// Protocol-1 / Protocol-2 framing, WDSP integration, meter pipelines, and
-// TX behaviour were informed by studying the Thetis project
-// (https://github.com/ramdor/Thetis), the authoritative reference
-// implementation in the OpenHPSDR ecosystem. Zeus gratefully acknowledges
-// the Thetis contributors whose work made this possible:
+// ASCII sanity check (columns 0..11):
 //
-//   Richard Samphire (MW0LGE), Warren Pratt (NR0V),
-//   Laurence Barker (G8NJJ),   Rick Koch (N1GP),
-//   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
-//   Doug Wigley (W5WC),        FlexRadio Systems,
-//   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
-//   Sigi Jetzlsperger (DH1KLM).
-//
-// Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
-// and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
-// here. See ATTRIBUTIONS.md at the repository root for the full provenance
-// statement and per-component attribution.
-//
-// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
-// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
-// Wüllen (DL1YCF); and by DeskHPSDR
-// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
-// Both are GPL-2.0-or-later.
-//
-// WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
-// (NR0V), distributed under GPL v2 or later.
-//
-// Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
-// License for details.
+//   ┌───────────────────────────────────────────────┬─────────────┐  y=0
+//   │              filter (0..8, h=2)                │             │
+//   ├───────────────────────────────────────────────┤    vfo      │  y=2
+//   │                                                │  (h=4)      │
+//   │                                                ├─────────────┤  y=4
+//   │                                                │   smeter    │
+//   │              hero (0..8, h=12)                 │   (h=2)     │  y=6
+//   │                                                ├─────────────┤
+//   │                                                │     dsp     │
+//   │                                                │   (h=3)     │  y=9
+//   │                                                ├─────────────┤
+//   │                                                │             │
+//   │                                                │  azimuth    │
+//   │                                                │   (h=8)     │  y=14
+//   ├──────────────┬────────────┬────────────────────┤             │
+//   │     qrz      │  logbook   │   txmeters         │             │
+//   │   (h=6)      │   (h=6)    │     (h=6)          │             │  y=17
+//   │              │            │                    ├─────────────┤
+//   │              │            │                    │   step (h=3)│
+//   └──────────────┴────────────┴────────────────────┴─────────────┘  y=20
 
-// Default flexlayout-react model that replicates the current CSS grid:
-//   left column (75%): hero spectrum (70%) + bottom row [QRZ + logbook + tx meters] (30%)
-//   right column (25%): VFO + SMeter + DSP + Azimuth + Step (stacked)
-//
-// Phase 1 — operators who never drag panels see the same screen as today.
-// Weights are approximate; flexlayout distributes remaining space proportionally.
-export const DEFAULT_LAYOUT = {
-  global: {
-    tabEnableClose: true,
-    tabSetMinHeight: 40,
-    tabSetMinWidth: 80,
-    tabSetTabStripHeight: 28,
-    splitterSize: 6,
-  },
-  borders: [],
-  layout: {
-    type: 'row',
-    children: [
-      {
-        // Left column: filter ribbon on top, hero in the middle, bottom row below
-        type: 'row',
-        weight: 75,
-        children: [
-          {
-            type: 'tabset',
-            weight: 14,
-            children: [
-              { type: 'tab', name: 'Bandwidth Filter', component: 'filter' },
-            ],
-          },
-          {
-            type: 'tabset',
-            weight: 58,
-            children: [
-              { type: 'tab', name: 'Panadapter · World Map', component: 'hero' },
-            ],
-          },
-          {
-            // Bottom row: QRZ lookup + logbook + TX meters side by side
-            type: 'row',
-            weight: 28,
-            children: [
-              {
-                type: 'tabset',
-                weight: 30,
-                children: [
-                  { type: 'tab', name: 'QRZ Lookup', component: 'qrz' },
-                ],
-              },
-              {
-                type: 'tabset',
-                weight: 40,
-                children: [
-                  { type: 'tab', name: 'Logbook', component: 'logbook' },
-                ],
-              },
-              {
-                type: 'tabset',
-                weight: 30,
-                children: [
-                  { type: 'tab', name: 'TX Stage Meters', component: 'txmeters' },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-      {
-        // Right column: side stack panels stacked vertically
-        type: 'row',
-        weight: 25,
-        children: [
-          {
-            type: 'tabset',
-            weight: 21,
-            children: [
-              { type: 'tab', name: 'Frequency · VFO', component: 'vfo' },
-            ],
-          },
-          {
-            type: 'tabset',
-            weight: 15,
-            children: [
-              { type: 'tab', name: 'S-Meter', component: 'smeter' },
-            ],
-          },
-          {
-            type: 'tabset',
-            weight: 15,
-            children: [
-              { type: 'tab', name: 'DSP', component: 'dsp' },
-            ],
-          },
-          {
-            type: 'tabset',
-            weight: 40,
-            children: [
-              { type: 'tab', name: 'Azimuth Map', component: 'azimuth' },
-            ],
-          },
-          {
-            type: 'tabset',
-            weight: 15,
-            children: [
-              { type: 'tab', name: 'Tuning Step', component: 'step' },
-            ],
-          },
-        ],
-      },
-    ],
-  },
-} as const;
+import type { WorkspaceLayout } from './workspace';
+
+export const DEFAULT_WORKSPACE_LAYOUT: WorkspaceLayout = {
+  schemaVersion: 6,
+  tiles: [
+    // Stable uids (not random) for the default layout — lets a future
+    // migration map "the old default 'qrz' tile" to a new layout without
+    // losing operator overrides.
+    { uid: 'tile-filter',   panelId: 'filter',   x: 0, y: 0,  w: 9, h: 2 },
+    { uid: 'tile-hero',     panelId: 'hero',     x: 0, y: 2,  w: 9, h: 12 },
+    { uid: 'tile-qrz',      panelId: 'qrz',      x: 0, y: 14, w: 3, h: 6 },
+    { uid: 'tile-logbook',  panelId: 'logbook',  x: 3, y: 14, w: 3, h: 6 },
+    { uid: 'tile-txmeters', panelId: 'txmeters', x: 6, y: 14, w: 3, h: 6 },
+    { uid: 'tile-vfo',      panelId: 'vfo',      x: 9, y: 0,  w: 3, h: 4 },
+    { uid: 'tile-smeter',   panelId: 'smeter',   x: 9, y: 4,  w: 3, h: 2 },
+    { uid: 'tile-dsp',      panelId: 'dsp',      x: 9, y: 6,  w: 3, h: 3 },
+    { uid: 'tile-azimuth',  panelId: 'azimuth',  x: 9, y: 9,  w: 3, h: 8 },
+    { uid: 'tile-step',     panelId: 'step',     x: 9, y: 17, w: 3, h: 3 },
+  ],
+};

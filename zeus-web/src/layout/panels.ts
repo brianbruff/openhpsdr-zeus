@@ -43,7 +43,6 @@
 // License for details.
 
 import type { ComponentType } from 'react';
-import type { TabNode } from 'flexlayout-react';
 import { HeroPanel } from './panels/HeroPanel';
 import { VfoPanel } from './panels/VfoPanel';
 import { SMeterPanel } from './panels/SMeterPanel';
@@ -63,12 +62,33 @@ import { MetersPanel } from './panels/MetersPanel';
 
 export type PanelCategory = 'spectrum' | 'vfo' | 'meters' | 'dsp' | 'log' | 'tools' | 'controls';
 
-/** Optional `node` prop passed by the FlexWorkspace factory for panels that
- *  need access to their FlexLayout TabNode (e.g. to read/write per-instance
- *  config blobs that round-trip via the layout JSON). */
-export interface PanelComponentProps {
-  node?: TabNode;
-}
+/** Human-friendly category labels for the Add Panel modal's left rail. The
+ *  rail shows these in a fixed order; "All" is rendered separately as a
+ *  passthrough chip. */
+export const PANEL_CATEGORIES: ReadonlyArray<PanelCategory> = [
+  'spectrum',
+  'vfo',
+  'meters',
+  'dsp',
+  'log',
+  'tools',
+  'controls',
+];
+export const PANEL_CATEGORY_LABELS: Record<PanelCategory, string> = {
+  spectrum: 'Spectrum',
+  vfo: 'VFO',
+  meters: 'Meters',
+  dsp: 'DSP',
+  log: 'Log',
+  tools: 'Tools',
+  controls: 'Controls',
+};
+
+/** Most panels render with no props — the workspace tile renders them as
+ *  `<def.component />`. Multi-instance panels with per-instance config
+ *  (just `meters` today) take a typed prop pair instead; `PanelTile` knows
+ *  to switch on `def.id === 'meters'` for that wiring. */
+export type PanelComponentProps = Record<string, never>;
 
 export interface PanelDef {
   id: string;
@@ -77,9 +97,9 @@ export interface PanelDef {
   tags: string[];
   component: ComponentType<PanelComponentProps>;
   /** When true, the Add Panel modal allows duplicates and the workspace
-   *  mints a unique component id per instance so each tile holds its own
+   *  store mints a unique tile uid per instance so each tile holds its own
    *  per-instance config blob. Default false (single-instance, current
-   *  behaviour for every existing panel). */
+   *  behaviour for every panel except `meters`). */
   multiInstance?: boolean;
 }
 
@@ -202,15 +222,3 @@ export const PANELS: Record<string, PanelDef> = {
   },
 };
 
-/** Component-id strings for multi-instance panels are minted as
- *  `<id>-<crypto.randomUUID()>` so each tile is a distinct FlexLayout node
- *  while still resolving to the same PanelDef in the registry. This helper
- *  strips the suffix to recover the registry key. */
-export function panelIdFromComponent(component: string): string {
-  const dash = component.indexOf('-');
-  if (dash <= 0) return component;
-  const head = component.slice(0, dash);
-  const def = PANELS[head];
-  if (def?.multiInstance) return head;
-  return component;
-}

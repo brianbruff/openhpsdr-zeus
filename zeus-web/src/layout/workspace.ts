@@ -17,10 +17,13 @@ export const WORKSPACE_GRID_COLS = 12;
 /** Outer-grid row height in CSS pixels. Smaller than MetersPanel's 40 px
  *  inner row so the workspace can do finer pixel-grain placement. */
 export const WORKSPACE_ROW_HEIGHT_PX = 30;
-/** Default minW/minH for every tile. Per-panel minimums can be added later
- *  via DEFAULT_TILE_SPAN if a real bug surfaces (plan §10 Q6). */
-export const WORKSPACE_TILE_MIN_W = 2;
-export const WORKSPACE_TILE_MIN_H = 2;
+/** Default minW/minH for every tile. minW=1 (≈ 1/12 of the workspace
+ *  width) lets short-control tiles like Mode / Tuning Step / Band shrink
+ *  down to a narrow column when the operator wants to dock them tight,
+ *  while RGL's `.btn-row.wrap` flex-wrap keeps the buttons spilling onto
+ *  additional rows as the column narrows. */
+export const WORKSPACE_TILE_MIN_W = 1;
+export const WORKSPACE_TILE_MIN_H = 1;
 
 /** A single workspace tile. The same panelId may appear on multiple tiles
  *  for multi-instance panels (just `meters` today); the per-tile uid is the

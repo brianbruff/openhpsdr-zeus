@@ -42,7 +42,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Actions,
   BorderNode,
@@ -73,10 +73,46 @@ import { AddPanelModal } from './AddPanelModal';
 // and inline forms losing focus mid-keystroke. The tab-strip header lives
 // outside this wrapper, so tab dragging / reordering / docking are all
 // unaffected.
-const stopPropagationProps = {
-  onPointerDown: (e: PointerEvent) => e.stopPropagation(),
-  onMouseDown: (e: MouseEvent) => e.stopPropagation(),
-} as const;
+//
+// Why a NATIVE listener (and not React's onPointerDown):
+// flexlayout-react attaches its drag/activate listener directly to its
+// `flexlayout__tab` div via `selfRef.current.addEventListener('pointerdown',
+// ...)` (see flexlayout-react/dist/index.js, the Tab component). React 17+
+// delegates synthetic events at the root container, so by the time React's
+// onPointerDown handler runs, the native event has ALREADY bubbled up to
+// flexlayout__tab and triggered its native listener. React's
+// `e.stopPropagation()` is too late. Attaching our own native listener on
+// the wrapper (a level below flexlayout__tab) and stopping propagation
+// there blocks the native bubble before it reaches the parent's listener.
+function FlexPanelContent({ children }: { children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const stop = (e: Event) => {
+      // Stop native bubbling so flexlayout's pointerdown listener on the
+      // parent flexlayout__tab div never fires for clicks inside the
+      // panel body. The tab-strip header sits outside this wrapper, so
+      // tab dragging / reordering / activation by tab-click still work.
+      e.stopPropagation();
+    };
+    el.addEventListener('pointerdown', stop);
+    el.addEventListener('mousedown', stop);
+    return () => {
+      el.removeEventListener('pointerdown', stop);
+      el.removeEventListener('mousedown', stop);
+    };
+  }, []);
+  return (
+    <div
+      ref={ref}
+      className="flex-panel-content"
+      style={{ width: '100%', height: '100%' }}
+    >
+      {children}
+    </div>
+  );
+}
 
 function factory(node: TabNode) {
   const component = node.getComponent();
@@ -88,14 +124,16 @@ function factory(node: TabNode) {
   const panel = PANELS[id];
   if (!panel) return null;
   const Component = panel.component;
-  // Wrap with stopPropagationProps so panel-body clicks/drags don't bubble
-  // into flexlayout's tab-drag detection (#204). Pass `node` so multi-
-  // instance panels (Meters) can read/write their per-instance config blob
-  // via TabNode.getConfig().
+  // FlexPanelContent attaches a native pointerdown/mousedown listener that
+  // stopPropagation's so panel-body clicks don't bubble into flexlayout's
+  // own native tab-drag/activate listener (extends #204; see comment on
+  // FlexPanelContent for why React onPointerDown isn't enough). Pass `node`
+  // so multi-instance panels (Meters) can read/write their per-instance
+  // config blob via TabNode.getConfig().
   return (
-    <div className="flex-panel-content" style={{ width: '100%', height: '100%' }} {...stopPropagationProps}>
+    <FlexPanelContent>
       <Component node={node} />
-    </div>
+    </FlexPanelContent>
   );
 }
 

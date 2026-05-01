@@ -54,6 +54,7 @@ import {
 import { useConnectionStore } from '../state/connection-store';
 import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 import { useTxStore } from '../state/tx-store';
+import { ACTIVE_MAP_REF } from '../state/active-map-ref';
 
 // The arrow-key tune step follows the operator's TuningStepWidget choice
 // (toolbar-favorites-store.stepHz). Read at event time inside bumpTune so
@@ -157,19 +158,23 @@ export function useKeyboardShortcuts() {
       if (isEditableTarget(e.target)) return;
       if (useConnectionStore.getState().status !== 'Connected') return;
 
-      // Option/Alt + Up/Down zooms the panadapter. Handled before the
-      // modifier early-return below so the alt path is the only modified
-      // shortcut we honour — alt+left/right and ctrl/meta+anything still
-      // fall through to the OS / browser defaults.
+      // Option/Alt + Up/Down zooms the world map (background overlay), not
+      // the panadapter. Handled before the modifier early-return below so
+      // the alt path is the only modified shortcut we honour. If the map
+      // isn't mounted (mobile shell, no LeafletWorldMap), the shortcut is
+      // a no-op rather than falling back to panadapter zoom — keeping the
+      // binding's meaning consistent across layouts.
       if (e.altKey && !e.ctrlKey && !e.metaKey) {
         if (e.key === 'ArrowUp') {
           e.preventDefault();
-          bumpZoom(1);
+          const m = ACTIVE_MAP_REF.current;
+          if (m) m.setZoom(m.getZoom() + 1, { animate: false });
           return;
         }
         if (e.key === 'ArrowDown') {
           e.preventDefault();
-          bumpZoom(-1);
+          const m = ACTIVE_MAP_REF.current;
+          if (m) m.setZoom(m.getZoom() - 1, { animate: false });
           return;
         }
       }

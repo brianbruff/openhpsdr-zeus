@@ -50,21 +50,16 @@ type TuningStep = {
   label: string;
 };
 
-// Thetis-compatible tuning steps, from fine to coarse
+// Operator-curated step set: the values an operator actually uses on the
+// air. Anything bigger than 5 kHz is one Band-button click away anyway.
 const TUNING_STEPS: readonly TuningStep[] = [
   { hz: 1, label: '1 Hz' },
   { hz: 10, label: '10 Hz' },
   { hz: 50, label: '50 Hz' },
   { hz: 100, label: '100 Hz' },
-  { hz: 250, label: '250 Hz' },
   { hz: 500, label: '500 Hz' },
   { hz: 1_000, label: '1 kHz' },
   { hz: 5_000, label: '5 kHz' },
-  { hz: 9_000, label: '9 kHz' },
-  { hz: 10_000, label: '10 kHz' },
-  { hz: 100_000, label: '100 kHz' },
-  { hz: 250_000, label: '250 kHz' },
-  { hz: 1_000_000, label: '1 MHz' },
 ];
 
 export function TuningStepWidget() {

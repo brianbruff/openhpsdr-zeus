@@ -180,9 +180,18 @@ function WorkspaceCanvas({
           rowHeight={WORKSPACE_ROW_HEIGHT_PX}
           margin={[6, 6]}
           containerPadding={[6, 6]}
-          // Drag only via the grip in each tile's chrome — clicks on the
-          // body or the X don't kidnap input.
-          dragConfig={{ handle: '.workspace-tile-drag-handle', bounded: false }}
+          // Drag from anywhere in the tile header (the grip + title strip),
+          // EXCEPT the close button. A tiny grip-only handle is too small to
+          // grab — and panels that have their own pointer logic in the body
+          // (panadapter canvas's pan/tune gesture, sliders) also need a
+          // generous header target so the operator can reposition the tile
+          // without getting their input stolen by the body. dragConfig.cancel
+          // excludes the X so close clicks still register.
+          dragConfig={{
+            handle: '.workspace-tile-header',
+            cancel: '.workspace-tile-close',
+            bounded: false,
+          }}
           onLayoutChange={onLayoutChange}
           layouts={rglLayouts}
         >

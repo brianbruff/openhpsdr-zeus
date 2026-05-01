@@ -140,6 +140,11 @@ public class DspPipelineService : BackgroundService
     // reads from the pipeline thread — no compound mutation, just a bool.
     private volatile bool _psMonitorEnabled;
     private long _psMonitorTickCount;
+    // TX Monitor latch (issue #106 follow-up). Same change-detect pattern as
+    // _psMonitorEnabled — UpdateState writes when StateDto.TxMonitorEnabled
+    // flips, and the latch fires engine.SetTxMonitorEnabled exactly once per
+    // edge so we don't spam the engine on every tick with the same value.
+    private bool _appliedTxMonitorEnabled;
     // Set by DisconnectP2Async so the next OnRadioStateChanged after a
     // fresh ConnectP2Async re-pushes every PS field regardless of equality
     // — necessary because the new WdspDspEngine instance starts with field
@@ -548,6 +553,18 @@ public class DspPipelineService : BackgroundService
             _psMonitorEnabled = s.PsMonitorEnabled;
         }
 
+        // TX Monitor (issue #106 follow-up) — engages the engine's parallel
+        // demod path on the post-CFIR TX IQ. Edge-triggered call to the
+        // engine so a re-tick with the same flag is a no-op. The engine
+        // tolerates being called before TXA is open (lazy-open inside) so
+        // ordering vs SetTxMode/SetTxFilter above doesn't matter.
+        if (_appliedTxMonitorEnabled != s.TxMonitorEnabled)
+        {
+            _log.LogInformation("txMonitor.latch enabled={Enabled}", s.TxMonitorEnabled);
+            engine.SetTxMonitorEnabled(s.TxMonitorEnabled);
+            _appliedTxMonitorEnabled = s.TxMonitorEnabled;
+        }
+
         // Resync done — clear the flag so subsequent state changes use
         // normal change-detect (no spurious wire writes on each tick).
         _psResyncRequired = false;
@@ -839,6 +856,10 @@ public class DspPipelineService : BackgroundService
         // settings back, calcc runs on wrong hw_scale, and PS doesn't
         // converge after a reconnect. See `project_ps_reconnect_state_loss.md`.
         _psResyncRequired = true;
+        // TX-monitor: same re-push problem as PS — the new engine starts at
+        // monitor=off, so if the operator had it on the latch's change-detect
+        // would skip the push. Reset the latch so the next UpdateState fires.
+        _appliedTxMonitorEnabled = false;
         _radio.MarkProtocol2Connected(radioEndpoint.ToString(), rateHz);
         // P2 G2/MkII default HW peak = 0.6121; ANAN-7000/8000 = 0.2899. The
         // RadioService switch covers both so we don't bake a value in here.
@@ -930,6 +951,7 @@ public class DspPipelineService : BackgroundService
         // engine never gets the operator's settings. See
         // `project_ps_reconnect_state_loss.md` for the rack reproduction.
         _psResyncRequired = true;
+        _appliedTxMonitorEnabled = false;
         _radio.MarkProtocol2Disconnected();
         _log.LogInformation("dsp.pipeline p2 disconnected, engine=synthetic");
     }
@@ -1086,29 +1108,65 @@ public class DspPipelineService : BackgroundService
 
         _hub.Broadcast(frame);
 
+        // Audio broadcast — when TX monitor is on, replace RX audio with the
+        // monitor channel's demodulated TX audio so the operator hears the
+        // chain output (post-bandpass / post-CFIR, demodulated back to mono)
+        // instead of band RX. This unifies "monitor while keyed" (Thetis MON
+        // semantics) and "audition without keying" (audio passes through the
+        // chain so VST plugins receive samples and their meters animate). RX
+        // is drained anyway so the WDSP audio ring doesn't back up — we just
+        // don't broadcast it. The VST RX seam still fires on the drained RX
+        // so RX-side plugins keep running even while monitor is on.
+        bool txMonitorOn = engine.IsTxMonitorOn;
         int audioSampleCount = engine.ReadAudio(channel, audioBuf);
         if (audioSampleCount > 0)
         {
-            // VST plugin-host seam — RX side, between WDSP audio drain and
-            // hub broadcast (docs/proposals/vst-host.md). When the chain is
-            // disabled inside the engine, ProcessRxVstChain short-circuits on
-            // a volatile-bool read and returns false — `audioBuf` is
-            // bit-identical to the seam-absent flow. When the chain is
-            // enabled, the engine dispatches through the VstChainHandler
-            // delegate that VstHostHostedService installed at startup.
-            engine.ProcessRxVstChain(
-                audioBuf.AsSpan(0, audioSampleCount), audioSampleCount, AudioOutputRateHz);
+            // VST plugin host is TX-only by design (operator decision
+            // 2026-04-30). The chain is configured for the TX bandwidth,
+            // tuned for voice processing, and shares one set of plugin
+            // instances with the TX seam — routing RX through it would
+            // (a) apply TX-tuned effects to band audio (sounds wrong),
+            // (b) inherit IIR state from the most recent TX block, and
+            // (c) waste CPU on RX when the operator only wants chain
+            // processing on transmit. The RX-side seam method on
+            // IDspEngine remains in place for any future "RX insert"
+            // feature, but the audio pipeline does not call it.
 
-            var audioFrame = new AudioFrame(
-                Seq: ++_audioSeq,
-                TsUnixMs: nowMs,
-                RxId: 0,
-                Channels: 1,
-                SampleRateHz: (uint)AudioOutputRateHz,
-                SampleCount: (ushort)audioSampleCount,
-                Samples: new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
-            _hub.Broadcast(audioFrame);
-            RxAudioAvailable?.Invoke(0, AudioOutputRateHz, new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
+            if (!txMonitorOn)
+            {
+                var audioFrame = new AudioFrame(
+                    Seq: ++_audioSeq,
+                    TsUnixMs: nowMs,
+                    RxId: 0,
+                    Channels: 1,
+                    SampleRateHz: (uint)AudioOutputRateHz,
+                    SampleCount: (ushort)audioSampleCount,
+                    Samples: new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
+                _hub.Broadcast(audioFrame);
+                RxAudioAvailable?.Invoke(0, AudioOutputRateHz, new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
+            }
+        }
+        if (txMonitorOn)
+        {
+            // Drain whatever the monitor RXA produced this tick. The buffer
+            // shape matches the RX path (mono float32 @ 48 kHz) so it slots
+            // into the same AudioFrame format with no front-end change. When
+            // the chain is idle (no MOX, no mic) the monitor channel produces
+            // silence, which is the correct behaviour for "audition mode but
+            // operator isn't talking".
+            int monCount = engine.ReadTxMonitorAudio(audioBuf.AsSpan());
+            if (monCount > 0)
+            {
+                var monFrame = new AudioFrame(
+                    Seq: ++_audioSeq,
+                    TsUnixMs: nowMs,
+                    RxId: 0,
+                    Channels: 1,
+                    SampleRateHz: (uint)AudioOutputRateHz,
+                    SampleCount: (ushort)monCount,
+                    Samples: new ReadOnlyMemory<float>(audioBuf, 0, monCount));
+                _hub.Broadcast(monFrame);
+            }
         }
 
         if (++_rxMeterTickMod >= RxMeterTickModulus)

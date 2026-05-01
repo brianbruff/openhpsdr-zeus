@@ -99,6 +99,9 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
     /// <inheritdoc />
     public event EventHandler<EditorResizedEventArgs>? SlotEditorResized;
 
+    /// <inheritdoc />
+    public event EventHandler<ParamChangedEventArgs>? SlotParamChanged;
+
     /// <summary>Current sidecar PID, or null if no sidecar is running.</summary>
     public int? CurrentProcessId
     {
@@ -242,6 +245,7 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
             // Wire the channel's async editor events through as our own.
             channel.EditorClosed  += OnChannelEditorClosed;
             channel.EditorResized += OnChannelEditorResized;
+            channel.ParamChanged  += OnChannelParamChanged;
 
             lock (_gate)
             {
@@ -381,6 +385,7 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
         {
             channel.EditorClosed  -= OnChannelEditorClosed;
             channel.EditorResized -= OnChannelEditorResized;
+            channel.ParamChanged  -= OnChannelParamChanged;
         }
 
         // Send Goodbye if the channel is up; tolerate any failure.
@@ -804,10 +809,37 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
         var req = new SlotUnloadPluginRequest(slotIdx);
         await channel.SendAsync(ControlTag.SlotUnloadPlugin, req.Encode(), ct)
             .ConfigureAwait(false);
+        // Bumped from 2s → 10s 2026-04-30. Linux VST2 plugins (LSP family,
+        // ZAM family) often run background animation/worker threads that
+        // are joined inside effClose; on a slow box that easily exceeds
+        // the old 2s budget. 10s matches LoadPluginTimeout and gives
+        // well-behaved plugins room to clean up properly. The slot's
+        // local cache is cleared either way so a timeout doesn't leave
+        // the operator-visible state stuck pointing at a half-torn-down
+        // plugin.
         using var unloadCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        unloadCts.CancelAfter(TimeSpan.FromSeconds(2));
-        var frame = await ReceiveExpected(channel,
-            ControlTag.SlotUnloadPluginResult, unloadCts.Token).ConfigureAwait(false);
+        unloadCts.CancelAfter(TimeSpan.FromSeconds(10));
+        ControlFrame? frame = null;
+        try
+        {
+            frame = await ReceiveExpected(channel,
+                ControlTag.SlotUnloadPluginResult, unloadCts.Token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Sidecar didn't reply within the budget OR the HTTP fetch
+            // gave up first (browser timeout < our budget). Either way,
+            // clear our local cache so the operator can re-attempt or
+            // load a different plugin — keeping the slot pinned to a
+            // possibly-still-loaded plugin would surface as "won't let
+            // me unload it." If the sidecar truly hung in effClose
+            // (Linux VST2 plugins with internal worker threads can do
+            // this), the operator's escape hatch is the master VST
+            // chain toggle, which kills+respawns the sidecar.
+            _log.LogWarning(
+                $"PluginHostManager: slot {slotIdx} Unload cancelled / timed out; clearing local cache anyway");
+        }
         lock (_gate)
         {
             var prev = _slots[slotIdx];
@@ -1125,8 +1157,14 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
             var req = new SetChainEnabledRequest(enabled);
             await channel.SendAsync(ControlTag.SetChainEnabled, req.Encode(), ct)
                 .ConfigureAwait(false);
+            // 10s budget — was 2s pre-Wave 7. The sidecar's controlReader is
+            // single-threaded; if a slow Load/Unload (e.g. a Linux VST2
+            // plugin whose effClose blocks on internal threads) is in flight,
+            // the SetChainEnabled reply queues behind it. 10s gives well-
+            // behaved plugins room to finish so the operator's chain toggle
+            // doesn't fail mid-cleanup.
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(2));
+            cts.CancelAfter(TimeSpan.FromSeconds(10));
             var frame = await ReceiveExpected(channel,
                 ControlTag.SetChainEnabledResult, cts.Token).ConfigureAwait(false);
             if (frame == null) return;
@@ -1186,6 +1224,50 @@ public sealed class PluginHostManager : IPluginHost, IDisposable, IAsyncDisposab
     private void OnChannelEditorResized(object? sender, EditorResizedEventArgs e)
     {
         SlotEditorResized?.Invoke(this, e);
+    }
+
+    // Wave 7 — sidecar reported an editor-driven (or plugin-internal) param
+    // change. Update the cached ChainSlot.Parameters snapshot so the next
+    // persistence flush picks up the new value, then re-fire so listeners
+    // (VstHostHostedService for ScheduleSave; future SignalR push) see it.
+    private void OnChannelParamChanged(object? sender, ParamChangedEventArgs e)
+    {
+        // Update the in-memory parameter cache. We mutate the slot record
+        // under the same _gate the rest of the chain mutators use so a
+        // concurrent ListSlotParameters refresh / Snapshot doesn't see a
+        // torn record. If the slot has no cached parameters yet, ignore
+        // — ListSlotParameters refreshes the cache on next call.
+        if (e.SlotIdx < 0 || e.SlotIdx >= ChainConstants.MaxSlots) return;
+        lock (_gate)
+        {
+            var prev = _slots[e.SlotIdx];
+            if (prev.Plugin is null) return;
+            if (prev.Parameters.Count == 0) goto raise;
+            // Find the param and rebuild the list with the new value.
+            // Scan inline — parameter lists are typically <100 entries
+            // and this fires per knob-tick, so a dictionary cache would
+            // add complexity for negligible gain.
+            var list = new List<PluginParameter>(prev.Parameters.Count);
+            bool found = false;
+            foreach (var p in prev.Parameters)
+            {
+                if (p.Id == e.ParamId)
+                {
+                    list.Add(p with { CurrentValue = e.NormalizedValue });
+                    found = true;
+                }
+                else
+                {
+                    list.Add(p);
+                }
+            }
+            if (found)
+            {
+                _slots[e.SlotIdx] = prev with { Parameters = list };
+            }
+        }
+        raise:
+        SlotParamChanged?.Invoke(this, e);
     }
 
     private void OnSidecarExited(object? sender, SidecarExitedEventArgs e)

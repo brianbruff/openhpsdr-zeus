@@ -283,6 +283,34 @@ public interface IDspEngine : IDisposable
     /// </summary>
     bool ProcessRxVstChain(Span<float> audio, int frames, int sampleRateHz);
 
+    // ----------------- TX Monitor (audition path, issue #106 follow-up) ----
+    // Lets the operator hear the post-bandpass / post-CFIR TX audio on a local
+    // audio sink — with or without keying — so they can dial in the VST chain,
+    // EQ, leveler, and bandwidth profile pre-RF. Implemented in the WDSP
+    // engine as a private RXA channel that demodulates the on-air IQ back to
+    // 48 kHz mono audio. Synthetic no-ops; ReadTxMonitorAudio returns 0.
+
+    /// <summary>Operator toggle for the TX-monitor audition path. When true,
+    /// the engine starts demodulating the post-CFIR TX IQ and exposes the
+    /// resulting mono audio via <see cref="ReadTxMonitorAudio"/>. When false,
+    /// stops feeding the monitor channel; subsequent ReadTxMonitorAudio calls
+    /// return 0 once the ring drains. Idempotent and cheap to call repeatedly.
+    /// No-op on Synthetic.</summary>
+    void SetTxMonitorEnabled(bool enabled);
+
+    /// <summary>Drain demodulated TX-monitor audio. Same shape as
+    /// <see cref="ReadAudio"/> — returns the number of mono float32 samples
+    /// written into <paramref name="output"/>. Returns 0 when monitor is off,
+    /// when the channel hasn't been opened yet, or when no samples are queued.
+    /// Synthetic returns 0 unconditionally.</summary>
+    int ReadTxMonitorAudio(Span<float> output);
+
+    /// <summary>Volatile read of the operator's monitor request flag. Used by
+    /// the audio-broadcast pipeline to decide whether to substitute monitor
+    /// audio for the RX AudioFrame. Reflects the toggle, not whether the
+    /// monitor channel is fully spun up. Synthetic returns false.</summary>
+    bool IsTxMonitorOn { get; }
+
     /// <summary>Process a TX mono mic block BEFORE the WDSP TXA chain.
     /// Operates on the 48 kHz mono mic buffer (same audio the operator
     /// just spoke into) before fexchange2 modulates / filters / compresses.

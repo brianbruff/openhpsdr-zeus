@@ -15,8 +15,10 @@
 // operator's desktop, NOT inside the browser. The submenu lives inside
 // TxAudioToolsPanel beside CFC.
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
+import { setTxMonitor } from '../api/client';
+import { useTxStore } from '../state/tx-store';
 import { useVstHostStore } from '../state/vst-host-store';
 import { VST_HOST_SLOT_COUNT } from '../api/vst-host';
 import { VstHostPluginBrowser } from './VstHostPluginBrowser';
@@ -39,6 +41,19 @@ export function VstHostSubmenu() {
   // While a master-toggle POST is in flight, lock the toggle so a second
   // click doesn't race the first.
   const [masterPending, setMasterPending] = useState(false);
+
+  // TX Monitor — audition path so the operator can hear the chain output
+  // (post-bandpass / post-CFIR demod) at the actual TX bandwidth without
+  // keying. Lives in this submenu (not the main GUI) per maintainer rule.
+  // Optimistic local toggle + POST with rollback on failure, same shape as
+  // MoxButton / PsMonitor.
+  const txMonitorOn = useTxStore((s) => s.txMonitorEnabled);
+  const setTxMonitorLocal = useTxStore((s) => s.setTxMonitorEnabled);
+  const onTxMonitorClick = useCallback(() => {
+    const next = !txMonitorOn;
+    setTxMonitorLocal(next);
+    setTxMonitor(next).catch(() => setTxMonitorLocal(!next));
+  }, [txMonitorOn, setTxMonitorLocal]);
 
   useEffect(() => {
     // First mount kicks the initial /api/plughost/state fetch. WS
@@ -111,6 +126,19 @@ export function VstHostSubmenu() {
           />
           VST Chain
         </label>
+        <button
+          type="button"
+          onClick={onTxMonitorClick}
+          className={`btn tx-btn ${txMonitorOn ? 'tx' : ''}`}
+          title={
+            txMonitorOn
+              ? 'Monitor on — auditioning TX audio at TX bandwidth (RX muted)'
+              : 'Monitor off (click to audition TX chain at TX bandwidth)'
+          }
+        >
+          <span className={`led ${txMonitorOn ? 'tx' : ''}`} style={{ marginRight: 8 }} />
+          MONITOR
+        </button>
         <button
           type="button"
           className="btn sm"

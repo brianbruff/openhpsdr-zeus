@@ -162,15 +162,20 @@ public sealed class TxAudioIngest : IDisposable
             return;
         }
 
-        // Gate: only accumulate while MOX is asserted. Mic samples arriving
-        // outside a transmit window would otherwise leak into the first WDSP
-        // block of the next key-down. The ring is cleared exactly once per
-        // MOX falling edge — clearing on every non-MOX frame caused a race at
-        // the rising edge where client-optimistic mic frames (client thinks
-        // MOX is on before /api/tx/mox completes) wiped IQ the server had
-        // already produced.
+        // Gate: process mic samples when MOX is on (normal TX) OR when the TX
+        // monitor is on (audition without keying so the operator can hear
+        // their VST chain / EQ / leveler before going on the air). When both
+        // are off the chain doesn't run — pre-monitor behaviour, plus the
+        // mic-leak protection that motivated the original gate.
+        //
+        // The ring-clear / accumulator-clear on the MOX falling edge stays
+        // tied to MOX, not monitor: dropping accumulator state on a monitor
+        // toggle would chop mid-syllable for no benefit, and the IQ ring is
+        // only consumed during MOX anyway.
+        var engine = _engineProvider();
+        bool monitorOn = engine?.IsTxMonitorOn ?? false;
         bool moxNow = _isMoxOn();
-        if (!moxNow)
+        if (!moxNow && !monitorOn)
         {
             lock (_sync)
             {
@@ -185,10 +190,22 @@ public sealed class TxAudioIngest : IDisposable
             }
             return;
         }
-        // Latch the rising edge so the next falling edge will drain the ring.
-        if (!_lastSeenMox) { lock (_sync) _lastSeenMox = true; }
+        if (!moxNow && _lastSeenMox)
+        {
+            // MOX fell while monitor is on. Drain the IQ ring so the next
+            // key-down isn't tailed by stale RF samples, but keep the
+            // accumulator + chain feed running for the audition.
+            lock (_sync)
+            {
+                _ring.Clear();
+                _lastSeenMox = false;
+            }
+        }
+        // Latch the MOX rising edge so the next falling edge will drain the
+        // ring. Monitor-only operation never sets _lastSeenMox so it's a true
+        // edge tracker for keyed TX.
+        if (moxNow && !_lastSeenMox) { lock (_sync) _lastSeenMox = true; }
 
-        var engine = _engineProvider();
         int blockSize = engine?.TxBlockSamples ?? 0;
         int iqOut = engine?.TxOutputSamples ?? 0;
         if (engine is null || blockSize <= 0 || iqOut <= 0
@@ -230,12 +247,21 @@ public sealed class TxAudioIngest : IDisposable
                 if (produced > 0)
                 {
                     var iqSpan = new ReadOnlySpan<float>(_scratchIq, 0, 2 * produced);
-                    // P1 path — EP2 packer in Protocol1Client drains the ring.
-                    _ring.Write(iqSpan);
-                    // P2 path — Protocol2Client's 1029-port DUC sender. No-op
-                    // when P2 isn't the active backend so both protocols share
-                    // this seam cleanly. Mirrors TxTuneDriver's dual-write.
-                    _forwardP2?.Invoke(new ReadOnlyMemory<float>(_scratchIq, 0, 2 * produced));
+                    // Only push the modulated IQ to the radio while MOX is
+                    // asserted. When the chain is running for monitor-only
+                    // (audition without keying) the IQ has been generated for
+                    // the engine's monitor RXA channel to demod inside
+                    // ProcessTxBlock — but it must NOT hit the wire, otherwise
+                    // a monitor toggle would put the radio on the air.
+                    if (moxNow)
+                    {
+                        // P1 path — EP2 packer in Protocol1Client drains the ring.
+                        _ring.Write(iqSpan);
+                        // P2 path — Protocol2Client's 1029-port DUC sender. No-op
+                        // when P2 isn't the active backend so both protocols share
+                        // this seam cleanly. Mirrors TxTuneDriver's dual-write.
+                        _forwardP2?.Invoke(new ReadOnlyMemory<float>(_scratchIq, 0, 2 * produced));
+                    }
                     _totalTxBlocks++;
 
                     // Accumulate peaks for the 1 Hz diagnostic log.

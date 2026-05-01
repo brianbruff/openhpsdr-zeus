@@ -183,6 +183,17 @@ public interface IPluginHost
     /// diagnostics but no acknowledgement is expected.
     /// </summary>
     event EventHandler<EditorResizedEventArgs>? SlotEditorResized;
+
+    /// <summary>
+    /// Wave 7 — raised whenever a plugin's IComponentHandler reported
+    /// performEdit (typically an editor knob drag, sometimes plugin-driven
+    /// automation). The PluginHostManager has already updated the cached
+    /// <see cref="ChainSlot.Parameters"/> snapshot before the event fires;
+    /// subscribers should NOT mirror the value back via SetSlotParameter
+    /// (that would echo). Use this to schedule LiteDB persistence saves
+    /// or push the change to the frontend over SignalR.
+    /// </summary>
+    event EventHandler<ParamChangedEventArgs>? SlotParamChanged;
 }
 
 /// <summary>

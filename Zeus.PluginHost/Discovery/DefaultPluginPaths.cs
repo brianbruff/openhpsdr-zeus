@@ -46,13 +46,23 @@ public static class DefaultPluginPaths
         var home = Environment.GetEnvironmentVariable("HOME") ?? string.Empty;
         return new[]
         {
+            // VST3 — Steinberg-canonical install paths.
             Path.Combine(home, ".vst3"),
             "/usr/lib/vst3",
             "/usr/local/lib/vst3",
+            // VST2 — `.lxvst` is the Linux convention; `.vst` is the
+            // legacy fallback. Most Linux-native VST2 plugins (LSP, ZAM,
+            // x42) install under one of these.
             Path.Combine(home, ".lxvst"),
             Path.Combine(home, ".vst"),
             "/usr/lib/vst",
             "/usr/local/lib/vst",
+            "/usr/lib/lxvst",
+            "/usr/local/lib/lxvst",
+            // CLAP — official spec install paths (clap/include/clap/entry.h).
+            Path.Combine(home, ".clap"),
+            "/usr/lib/clap",
+            "/usr/local/lib/clap",
         };
     }
 
@@ -66,6 +76,7 @@ public static class DefaultPluginPaths
         var programFiles = Environment.GetEnvironmentVariable("ProgramFiles") ?? string.Empty;
         var programFilesX86 = Environment.GetEnvironmentVariable("ProgramFiles(x86)") ?? string.Empty;
         var appData = Environment.GetEnvironmentVariable("APPDATA") ?? string.Empty;
+        var localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA") ?? string.Empty;
 
         return new[]
         {
@@ -74,6 +85,9 @@ public static class DefaultPluginPaths
             Path.Combine(programFiles, "VstPlugins"),
             Path.Combine(programFilesX86, "VstPlugins"),
             Path.Combine(appData, "VST3"),
+            // CLAP — spec install paths (Windows section, entry.h).
+            Path.Combine(commonProgramFiles, "CLAP"),
+            Path.Combine(localAppData, "Programs", "Common", "CLAP"),
         };
     }
 
@@ -86,6 +100,9 @@ public static class DefaultPluginPaths
             Path.Combine(home, "Library/Audio/Plug-Ins/VST3"),
             "/Library/Audio/Plug-Ins/VST",
             Path.Combine(home, "Library/Audio/Plug-Ins/VST"),
+            // CLAP — spec install paths (macOS section, entry.h).
+            "/Library/Audio/Plug-Ins/CLAP",
+            Path.Combine(home, "Library/Audio/Plug-Ins/CLAP"),
         };
     }
 }

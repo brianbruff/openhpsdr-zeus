@@ -476,6 +476,19 @@ public static class ZeusEndpoints
             return Results.Ok(new { reset = true });
         });
 
+        // TX Monitor — audition-path toggle (issue #106 follow-up). Engages a
+        // parallel demod of the post-CFIR TX IQ so the operator hears the
+        // chain output at the actual TX bandwidth, with or without keying.
+        // RX audio is suppressed in the broadcast while monitor is on. The
+        // engine call lives in DspPipelineService.UpdateState so it lands
+        // alongside the rest of the TX-side seam plumbing on the next tick.
+        app.MapPost("/api/tx/monitor",
+            (TxMonitorSetRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.tx.monitor enabled={Enabled}", req.Enabled);
+            return Results.Ok(r.SetTxMonitor(req));
+        });
+
         app.MapPost("/api/tx/ps/save", (PsSaveRequest req, DspPipelineService pipe) =>
         {
             if (string.IsNullOrWhiteSpace(req.Filename))
@@ -1054,13 +1067,18 @@ public static class ZeusEndpoints
                 return Results.BadRequest(new { error = "slot index out of range" });
             if (string.IsNullOrWhiteSpace(req.Path))
                 return Results.BadRequest(new { error = "path is required" });
-            // Phase 3 only loads VST3 — Vestige-based VST2 hosting is Phase 5.
-            // Reject non-VST3 paths up-front so operators get a clear message
-            // rather than the raw "is not a module directory" SDK error.
-            if (!req.Path.EndsWith(".vst3", StringComparison.OrdinalIgnoreCase))
+            // Phases 5a + 6 added Vestige (Linux VST2 .so) and CLAP (.clap)
+            // alongside VST3. The sidecar's PluginChain dispatches by file
+            // extension at LoadSlot time. Anything that's not one of those
+            // three formats falls through to a single descriptive error.
+            bool isVst3 = req.Path.EndsWith(".vst3", StringComparison.OrdinalIgnoreCase);
+            bool isVst2 = req.Path.EndsWith(".so",  StringComparison.OrdinalIgnoreCase)
+                       || req.Path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
+            bool isClap = req.Path.EndsWith(".clap", StringComparison.OrdinalIgnoreCase);
+            if (!isVst3 && !isVst2 && !isClap)
                 return Results.BadRequest(new
                 {
-                    error = "only VST3 plugins are supported in this build (VST2/CLAP coming later)",
+                    error = "unsupported plugin format (expected .vst3 / .so / .dll / .clap)",
                 });
             try
             {

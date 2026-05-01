@@ -47,6 +47,16 @@ export function VstHostSlotRow({ index, disabled, onRequestLoad }: Props) {
 
   const loaded = slot.plugin !== null;
   const editorOpen = editor?.open === true;
+  // VST3, VST2 (.so), and CLAP (.clap) editors all flow through the same
+  // sidecar IPlugView path; show EDIT for any loaded slot. The sidecar
+  // returns "no editor" status if the plugin doesn't expose one, which
+  // surfaces in the editor error field rather than as a popup.
+  const path = slot.plugin?.path ?? '';
+  const lowerPath = path.toLowerCase();
+  const hasNativeEditor =
+    lowerPath.endsWith('.vst3') ||
+    lowerPath.endsWith('.so') ||
+    lowerPath.endsWith('.clap');
 
   const rowStyle: React.CSSProperties = {
     display: 'flex',
@@ -171,25 +181,27 @@ export function VstHostSlotRow({ index, disabled, onRequestLoad }: Props) {
               />
               Bypass
             </label>
-            <button
-              type="button"
-              className="btn sm"
-              disabled={disabled}
-              onClick={() =>
-                editorOpen ? void hideEditor(index) : void showEditor(index)
-              }
-              title={
-                editorOpen
-                  ? `Editor open${
-                      editor && editor.width > 0
-                        ? ` (${editor.width}x${editor.height})`
-                        : ''
-                    } — click to close`
-                  : 'Open the plugin’s native editor window'
-              }
-            >
-              {editorOpen ? 'CLOSE' : 'EDIT'}
-            </button>
+            {hasNativeEditor ? (
+              <button
+                type="button"
+                className="btn sm"
+                disabled={disabled}
+                onClick={() =>
+                  editorOpen ? void hideEditor(index) : void showEditor(index)
+                }
+                title={
+                  editorOpen
+                    ? `Editor open${
+                        editor && editor.width > 0
+                          ? ` (${editor.width}x${editor.height})`
+                          : ''
+                      } — click to close`
+                    : 'Open the plugin’s native editor window'
+                }
+              >
+                {editorOpen ? 'CLOSE' : 'EDIT'}
+              </button>
+            ) : null}
             <button
               type="button"
               className="btn sm"

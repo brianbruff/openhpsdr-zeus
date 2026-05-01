@@ -804,3 +804,34 @@ public sealed record EditorResizedEvent(byte SlotIdx, uint Width, uint Height)
         return new EditorResizedEvent(slot, w, h);
     }
 }
+
+/// <summary>
+/// Sidecar -> host async event: a plugin's IComponentHandler reported
+/// performEdit for a parameter — typically from an editor knob drag, but
+/// can also be plugin-internal automation. Wave 7 / wire-spec tag 0x36.
+/// Payload: u8 slot + u32 paramId + f64 normalizedValue (13 bytes).
+/// </summary>
+public sealed record ParamChangedEvent(byte SlotIdx, uint ParamId, double NormalizedValue)
+{
+    public byte[] Encode()
+    {
+        var buf = new byte[1 + 4 + 8];
+        buf[0] = SlotIdx;
+        BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(1, 4), ParamId);
+        BinaryPrimitives.WriteDoubleLittleEndian(buf.AsSpan(5, 8), NormalizedValue);
+        return buf;
+    }
+
+    public static ParamChangedEvent Decode(ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length != 13)
+        {
+            throw new ArgumentException(
+                $"ParamChangedEvent payload must be 13 bytes, got {payload.Length}");
+        }
+        var slot  = payload[0];
+        var id    = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(1, 4));
+        var value = BinaryPrimitives.ReadDoubleLittleEndian(payload.Slice(5, 8));
+        return new ParamChangedEvent(slot, id, value);
+    }
+}

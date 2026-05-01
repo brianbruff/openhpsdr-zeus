@@ -186,6 +186,16 @@ public sealed record StateDto(
     // persisted server-side: this is an operator viewing preference,
     // resets to off each session same as PsEnabled.
     bool PsMonitorEnabled = false,
+    // TX Monitor — operator-facing audition toggle (issue #106 follow-up).
+    // When true, the engine demodulates the post-CFIR TX IQ back to mono
+    // baseband audio so the operator hears the chain output (mic → EQ →
+    // Leveler → VST → CFC → ALC → bandpass) at the actual TX bandwidth
+    // profile. Equivalent to Thetis MON, but also runs the chain when MOX
+    // is OFF so VST plugins receive samples and meters animate continuously.
+    // RX audio is suppressed in the broadcast while monitor is on so the
+    // operator hears only the TX audition. NOT persisted across sessions —
+    // resets to off each connect, matching MOX/TUN/PsEnabled discipline.
+    bool TxMonitorEnabled = false,
     bool PsAuto = true,             // continuous adapt by default once armed
     bool PsSingle = false,          // one-shot SetPSControl(1,1,0,0)
     bool PsPtol = false,            // false = strict 0.4; true = relax 0.8
@@ -443,6 +453,13 @@ public sealed record PsFeedbackSourceSetRequest(PsFeedbackSource Source);
 // StateDto, DspPipelineService reads it on Tick to pick which analyzer
 // to drain. Default off; operator opt-in.
 public sealed record PsMonitorSetRequest(bool Enabled);
+
+// TX Monitor toggle (issue #106 follow-up). Engages a parallel demod of the
+// post-CFIR TX IQ so the operator hears the chain output at the actual TX
+// bandwidth profile, with or without keying. Implemented in WdspDspEngine via
+// a private RXA channel; pure operator toggle, no persistence. See StateDto
+// .TxMonitorEnabled for the discipline notes.
+public sealed record TxMonitorSetRequest(bool Enabled);
 
 // Two-tone test generator (used as PS calibration excitation but works
 // standalone too). Protocol-agnostic.

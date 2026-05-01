@@ -148,6 +148,7 @@ public sealed class VstHostHostedService : IHostedService, IDisposable
         // Wire host events for SignalR push.
         _host.SlotEditorClosed  += OnSlotEditorClosed;
         _host.SlotEditorResized += OnSlotEditorResized;
+        _host.SlotParamChanged  += OnSlotParamChanged;
         if (_host is PluginHostManager mgr)
         {
             mgr.SidecarExited += OnSidecarExited;
@@ -233,6 +234,15 @@ public sealed class VstHostHostedService : IHostedService, IDisposable
                 // Leave the master flag false on the engine — bypass.
                 SetEngineSeamMasterFlag(false);
             }
+            // Always flush whatever in-memory state we ended up with after
+            // the replay loop. If a slot's load failed (plugin moved on
+            // disk, plugin hung during init, sidecar timeout, etc), the
+            // in-memory _slots[idx].Plugin is null but LiteDB still has
+            // the broken plugin path — without this flush, every subsequent
+            // startup retries the broken plugin and re-hits the same
+            // failure. Save now so a failure-to-load self-heals: next
+            // startup sees an empty slot and the operator can move on.
+            FlushSave();
         }
         else
         {
@@ -265,6 +275,7 @@ public sealed class VstHostHostedService : IHostedService, IDisposable
         _pipeline.EngineChanged -= OnEngineChanged;
         _host.SlotEditorClosed  -= OnSlotEditorClosed;
         _host.SlotEditorResized -= OnSlotEditorResized;
+        _host.SlotParamChanged  -= OnSlotParamChanged;
         if (_host is PluginHostManager mgr)
         {
             mgr.SidecarExited -= OnSidecarExited;
@@ -305,9 +316,41 @@ public sealed class VstHostHostedService : IHostedService, IDisposable
     public async Task<LoadPluginOutcome> LoadSlotAsync(
         int slotIdx, string path, CancellationToken ct)
     {
+        bool autoStarted = false;
         if (!_host.IsRunning)
         {
             await _host.StartAsync(ct).ConfigureAwait(false);
+            autoStarted = true;
+        }
+        // After an auto-start (or any path that brings up a fresh sidecar),
+        // re-push the chain-enabled state so the sidecar's master toggle
+        // matches the operator's persisted intent. Without this, a sidecar
+        // that respawned after a crash / kill would come up with its chain
+        // master OFF — slot loads would succeed but Process() would memcpy
+        // bypass and audio would never go through plugins, even though the
+        // .NET-side cache and UI would still say MasterEnabled=true (the
+        // host's _chainEnabled was reset by the sidecar exit but never
+        // re-pushed). The Load case is the trigger because LoadSlot from
+        // the UI auto-starts the sidecar without going through the master
+        // toggle path.
+        if (autoStarted && _host.IsRunning)
+        {
+            VstChainEntry? doc = null;
+            try { doc = _store.Load(); }
+            catch { /* best effort */ }
+            if (doc?.MasterEnabled == true)
+            {
+                try
+                {
+                    await _host.SetChainEnabledAsync(true, ct).ConfigureAwait(false);
+                    SetEngineSeamMasterFlag(true);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex,
+                        "vsthost.loadSlot auto-start: failed to re-push chain enable");
+                }
+            }
         }
         var outcome = await _host.LoadSlotAsync(slotIdx, path, ct).ConfigureAwait(false);
         if (outcome.Ok)
@@ -399,12 +442,23 @@ public sealed class VstHostHostedService : IHostedService, IDisposable
     // --------------------------------------------------------------
     // Engine seam wiring
     // --------------------------------------------------------------
-
-    private bool _seamMasterEnabled;
+    //
+    // The audio thread checks _host.IsChainEnabled directly rather than a
+    // local cache so the seam can never drift out of sync with the host.
+    // OnSidecarExited used to clear a separate _seamMasterEnabled field;
+    // if a slot was then auto-loaded (which auto-starts the sidecar but
+    // does NOT re-toggle master enable), the host's chain-enabled state
+    // would come back true while the engine seam stayed false — audio
+    // bypassed the chain even though the API and UI both said the chain
+    // was on. Reading _host.IsChainEnabled inside the seam handler closes
+    // that gap. The WDSP-side _vstChainEnabled flag is kept in sync as a
+    // perf hint (it short-circuits ProcessTxMicVstChain without crossing
+    // the delegate boundary), but the authoritative truth lives in the
+    // host's cached state.
 
     private bool SeamHandlerImpl(Span<float> audio, int frames, int sampleRateHz)
     {
-        if (!_seamMasterEnabled) return false;
+        if (!_host.IsChainEnabled) return false;
         // Best-effort dispatch into the host. PluginHostManager.TryProcess
         // is non-blocking on the audio thread (50 ms semaphore timeout
         // inside, but the call returns false immediately if anything is
@@ -414,7 +468,6 @@ public sealed class VstHostHostedService : IHostedService, IDisposable
 
     private void SetEngineSeamMasterFlag(bool enabled)
     {
-        _seamMasterEnabled = enabled;
         var engine = _pipeline.CurrentEngine;
         if (engine is WdspDspEngine wdsp)
         {
@@ -428,7 +481,7 @@ public sealed class VstHostHostedService : IHostedService, IDisposable
         if (engine is WdspDspEngine wdsp)
         {
             wdsp.SetVstChainHandler(_seamHandler);
-            wdsp.SetVstChainEnabled(_seamMasterEnabled);
+            wdsp.SetVstChainEnabled(_host.IsChainEnabled);
         }
     }
 
@@ -437,7 +490,7 @@ public sealed class VstHostHostedService : IHostedService, IDisposable
         if (newEngine is WdspDspEngine wdsp)
         {
             wdsp.SetVstChainHandler(_seamHandler);
-            wdsp.SetVstChainEnabled(_seamMasterEnabled);
+            wdsp.SetVstChainEnabled(_host.IsChainEnabled);
         }
     }
 
@@ -535,6 +588,18 @@ public sealed class VstHostHostedService : IHostedService, IDisposable
     {
         _hub.BroadcastVstHostEvent(
             $"slotEditorResized:{e.SlotIdx}:{e.Width}:{e.Height}");
+    }
+
+    // Wave 7 — plugin reported an editor / automation parameter change.
+    // PluginHostManager already updated ChainSlot.Parameters before this
+    // fires; we just need to flush the cache to LiteDB so the value
+    // survives a server restart. Debounced timer (250 ms) coalesces rapid
+    // knob drags into a single disk write.
+    private void OnSlotParamChanged(object? sender, ParamChangedEventArgs e)
+    {
+        ScheduleSave();
+        _hub.BroadcastVstHostEvent(
+            $"slotParamChanged:{e.SlotIdx}:{e.ParamId}:{e.NormalizedValue}");
     }
 
     private void OnSidecarExited(object? sender, SidecarExitedEventArgs e)

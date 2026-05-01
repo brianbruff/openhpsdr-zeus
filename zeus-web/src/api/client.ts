@@ -1301,6 +1301,27 @@ export async function setPsMonitor(
   );
 }
 
+// TX Monitor toggle — engages the engine's audition path. The server
+// demodulates the post-CFIR TX IQ back to mono baseband audio at the actual
+// TX bandwidth profile and substitutes it for RX audio in the AudioFrame
+// stream while monitor is on. Operator preference, not persisted across
+// sessions; defaults off on connect.
+export async function setTxMonitor(
+  enabled: boolean,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/monitor',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+      signal,
+    },
+    (raw) => raw as RadioStateDto,
+  );
+}
+
 export async function resetPs(signal?: AbortSignal): Promise<void> {
   await jsonFetch('/api/tx/ps/reset', { method: 'POST', signal }, () => null);
 }

@@ -55,6 +55,7 @@ public enum ControlTag : byte
     SlotHideEditorResult   = 0x33,
     EditorClosed           = 0x34,
     EditorResized          = 0x35,
+    ParamChanged           = 0x36,
 }
 
 /// <summary>
@@ -94,6 +95,16 @@ public sealed class ControlChannel : IDisposable
     public event EventHandler<EditorResizedEventArgs>? EditorResized;
 
     /// <summary>
+    /// Async event: the plugin's editor (or its internal automation) drove
+    /// a parameter change via IComponentHandler::performEdit. Each fire
+    /// carries (slotIdx, paramId, normalizedValue). Subscribers should
+    /// update their cached parameter snapshot and schedule a persistence
+    /// flush; do NOT mirror the value back via SlotSetParam (that would
+    /// echo). Wave 7 — wire-spec tag 0x36.
+    /// </summary>
+    public event EventHandler<ParamChangedEventArgs>? ParamChanged;
+
+    /// <summary>
     /// Returns true and dispatches via <see cref="EditorClosed"/> /
     /// <see cref="EditorResized"/> when the frame's tag is one of the
     /// async editor events; returns false for any other tag (caller is
@@ -114,6 +125,13 @@ public sealed class ControlChannel : IDisposable
                 var ev = EditorResizedEvent.Decode(frame.Payload);
                 EditorResized?.Invoke(this, new EditorResizedEventArgs(
                     ev.SlotIdx, (int)ev.Width, (int)ev.Height));
+                return true;
+            }
+            case ControlTag.ParamChanged:
+            {
+                var ev = ParamChangedEvent.Decode(frame.Payload);
+                ParamChanged?.Invoke(this, new ParamChangedEventArgs(
+                    ev.SlotIdx, ev.ParamId, ev.NormalizedValue));
                 return true;
             }
             default:
@@ -304,5 +322,21 @@ public sealed class EditorResizedEventArgs : EventArgs
         SlotIdx = slotIdx;
         Width   = width;
         Height  = height;
+    }
+}
+
+/// <summary>Async event payload: editor (or plugin internal) drove a
+/// parameter change via IComponentHandler::performEdit. Used by the host
+/// to keep ChainSlot.Parameters in sync and trigger LiteDB save.</summary>
+public sealed class ParamChangedEventArgs : EventArgs
+{
+    public int    SlotIdx         { get; }
+    public uint   ParamId         { get; }
+    public double NormalizedValue { get; }
+    public ParamChangedEventArgs(int slotIdx, uint paramId, double value)
+    {
+        SlotIdx         = slotIdx;
+        ParamId         = paramId;
+        NormalizedValue = value;
     }
 }

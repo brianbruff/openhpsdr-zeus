@@ -155,9 +155,11 @@ export function BandButtons() {
   return (
     <>
       {/* Desktop: horizontal row of buttons. The "BAND" label was dropped —
-          tile-chrome and panel-head already say "Band" above this control. */}
-      <div className="ctrl-group hide-mobile">
-        <div className="btn-row wrap" style={{ width: 'auto', maxWidth: 480 }}>
+          tile-chrome and panel-head already say "Band" above this control.
+          width:100% so the row fills its container and wraps as the tile
+          narrows. */}
+      <div className="ctrl-group hide-mobile" style={{ width: '100%' }}>
+        <div className="btn-row wrap" style={{ width: '100%' }}>
           {HF_BANDS.map((band) => (
             <button
               key={band.name}

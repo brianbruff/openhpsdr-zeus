@@ -91,11 +91,13 @@
   overflow: visible;
 }
 
-/* Splitter (resize handle) — same colour as the outer container so the
-   gap between tabsets reads as the classic blue-gray gutter (matching
-   default's `.workspace { gap: 6px }`). Accent only on hover/drag. */
+/* Splitter (resize handle) — paint it in the panel-border colour so the
+   gap between adjacent tabsets reads as a single continuous dark seam
+   rather than a wide blue-gray gutter. The 8 px width remains as the
+   draggable hit area; only the visible colour changes. Accent on
+   hover/drag still calls out grabbability. */
 .flexlayout__splitter {
-  background: var(--bg-workspace, #657486);
+  background: var(--panel-border, #0d0d10);
   transition: background 120ms;
 }
 

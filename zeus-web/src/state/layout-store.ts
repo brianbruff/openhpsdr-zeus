@@ -85,6 +85,11 @@ interface LayoutState {
   /** Replace a tile's instanceConfig blob. Called from MetersPanel's
    *  setConfig path. */
   updateTileInstanceConfig: (uid: string, instanceConfig: unknown) => void;
+  // Add-Panel modal visibility — lifted into the store so the trigger
+  // button can live in the App.tsx control row (after AF gain) while the
+  // modal itself still renders inside the workspace.
+  addPanelOpen: boolean;
+  setAddPanelOpen: (open: boolean) => void;
 }
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -92,6 +97,8 @@ let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 export const useLayoutStore = create<LayoutState>((set, get) => ({
   workspace: DEFAULT_WORKSPACE_LAYOUT,
   isLoaded: false,
+  addPanelOpen: false,
+  setAddPanelOpen: (open) => set({ addPanelOpen: open }),
 
   loadFromServer: async () => {
     // Stale schema: discard any server-side layout so DEFAULT wins.

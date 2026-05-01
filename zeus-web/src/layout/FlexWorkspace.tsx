@@ -17,8 +17,7 @@
 //   - "+ Add Panel" is a single workspace-level button at the top-right,
 //     opening the categorized AddPanelModal.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Plus } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   ResponsiveGridLayout,
   useContainerWidth,
@@ -52,8 +51,12 @@ export function FlexWorkspace() {
   const addTile = useLayoutStore((s) => s.addTile);
   const removeTile = useLayoutStore((s) => s.removeTile);
   const updateTilePlacement = useLayoutStore((s) => s.updateTilePlacement);
+  // Modal visibility lifted into the store so the trigger button lives in
+  // the App.tsx control row (after AF gain) — the workspace just renders
+  // the modal when the store says open.
+  const addPanelOpen = useLayoutStore((s) => s.addPanelOpen);
+  const setAddPanelOpen = useLayoutStore((s) => s.setAddPanelOpen);
 
-  const [addOpen, setAddOpen] = useState(false);
   const loadedRef = useRef(false);
 
   useEffect(() => {
@@ -109,22 +112,12 @@ export function FlexWorkspace() {
         onLayoutChange={onLayoutChange}
         onRemoveTile={removeTile}
       />
-      <button
-        type="button"
-        className="workspace-add-panel-btn"
-        onClick={() => setAddOpen(true)}
-        title="Add panel"
-        aria-label="Add panel"
-      >
-        <Plus size={12} />
-        Add Panel
-      </button>
       <TerminatorLines active={terminatorActive} />
-      {addOpen && (
+      {addPanelOpen && (
         <AddPanelModal
           existingPanels={existingPanels}
           onAdd={onAddPanel}
-          onClose={() => setAddOpen(false)}
+          onClose={() => setAddPanelOpen(false)}
         />
       )}
     </div>

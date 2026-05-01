@@ -101,6 +101,7 @@ import { useRotatorStore } from './state/rotator-store';
 import { useLoggerStore } from './state/logger-store';
 import { useTxStore } from './state/tx-store';
 import { useLayoutPreferenceStore } from './state/layout-preference-store';
+import { useLayoutStore } from './state/layout-store';
 import { useDisplaySettingsStore } from './state/display-settings-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
 import { SpectrumWheelActionsContext, type SpectrumWheelActions } from './util/use-pan-tune-gesture';
@@ -766,6 +767,19 @@ export default function App() {
           <div className="label-xs ctrl-lbl">AF</div>
           <AfGainSlider />
         </div>
+        {useFlexLayout && (
+          <div className="ctrl-group hide-mobile">
+            <div className="label-xs ctrl-lbl">PANEL</div>
+            <button
+              type="button"
+              className="btn sm"
+              onClick={() => useLayoutStore.getState().setAddPanelOpen(true)}
+              title="Add panel to workspace"
+            >
+              + Add
+            </button>
+          </div>
+        )}
         <div className="spacer hide-mobile" style={{ flex: 1 }} />
       </div>
 

@@ -145,4 +145,55 @@ public class TciStreamPayloadTests
 
         Assert.Equal(48000u, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(4)));
     }
+
+    [Fact]
+    public void BuildTxChrono_HeaderTypedAsTxChrono()
+    {
+        var frame = TciStreamPayload.BuildTxChrono(receiver: 0, sampleRate: 48000);
+
+        Assert.Equal(64, frame.Length); // header only — no payload
+        Assert.Equal((uint)TciStreamType.TxChrono, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(24)));
+        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(20))); // length=0
+    }
+
+    [Fact]
+    public void TryParseHeader_RoundTripsBuildHeader()
+    {
+        var built = TciStreamPayload.Build(
+            receiver: 7, sampleRate: 192_000, sampleType: TciSampleType.Float32,
+            length: 1024, streamType: TciStreamType.TxAudioStream,
+            samplePayload: ReadOnlySpan<byte>.Empty);
+
+        Assert.True(TciStreamPayload.TryParseHeader(built, out var hdr));
+        Assert.Equal(7u, hdr.Receiver);
+        Assert.Equal(192_000u, hdr.SampleRate);
+        Assert.Equal(TciSampleType.Float32, hdr.SampleType);
+        Assert.Equal(1024u, hdr.Length);
+        Assert.Equal(TciStreamType.TxAudioStream, hdr.StreamType);
+    }
+
+    [Fact]
+    public void TryParseHeader_RejectsShortFrames()
+    {
+        Assert.False(TciStreamPayload.TryParseHeader(new byte[0], out _));
+        Assert.False(TciStreamPayload.TryParseHeader(new byte[63], out _));
+    }
+
+    [Fact]
+    public void TryParseHeader_RejectsOutOfRangeStreamType()
+    {
+        var bad = new byte[64];
+        BinaryPrimitives.WriteUInt32LittleEndian(bad.AsSpan(24), 99); // type=99 (invalid)
+        Assert.False(TciStreamPayload.TryParseHeader(bad, out _));
+    }
+
+    [Fact]
+    public void TryParseHeader_AcceptsTxChronoFrameZeroLength()
+    {
+        var chrono = TciStreamPayload.BuildTxChrono(receiver: 0, sampleRate: 48000);
+
+        Assert.True(TciStreamPayload.TryParseHeader(chrono, out var hdr));
+        Assert.Equal(TciStreamType.TxChrono, hdr.StreamType);
+        Assert.Equal(0u, hdr.Length);
+    }
 }

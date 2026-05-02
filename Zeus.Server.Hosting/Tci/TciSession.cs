@@ -75,6 +75,23 @@ public sealed class TciSession : IDisposable
     private readonly SpotManager _spots;
     private readonly TciOptions _options;
     private readonly TciRateLimiter _rateLimiter;
+    private readonly TxAudioIngest? _txAudioIngest;
+    private readonly TciTxAudioReceiver? _txAudioReceiver;
+
+    // TCI 2.0 TRX 3rd arg: when "tci" we route inbound binary TX audio frames
+    // into the WDSP TX path; otherwise the radio's local mic source is used
+    // and we drop incoming TX audio. Default is "false" (no TCI source).
+    private bool _txSourceIsTci;
+    // Negotiated audio_stream channel count and sample rate. Defaults match
+    // the handshake-advertised values (stereo, 48 kHz). Per spec §5.8 the
+    // client may set audio_stream_channels=1 for mono uploads.
+    private int _audioStreamChannels = 2;
+    // Per-session digital-mode pitch offsets (DIGL_OFFSET / DIGU_OFFSET).
+    // Stored only — Zeus has no backend for these yet, but we acknowledge
+    // and echo so digital-mode clients (WSJT-X / JTDX) don't see "unknown
+    // command" log spam.
+    private int _diglOffsetHz;
+    private int _diguOffsetHz;
 
     private readonly ConcurrentQueue<TciOutboundFrame> _urgentQueue = new();
     private readonly ConcurrentQueue<TciOutboundFrame> _binaryQueue = new();
@@ -138,7 +155,8 @@ public sealed class TciSession : IDisposable
         TxService tx,
         DspPipelineService pipeline,
         SpotManager spots,
-        TciOptions options)
+        TciOptions options,
+        TxAudioIngest? txAudioIngest = null)
     {
         _id = id;
         _ws = ws;
@@ -149,7 +167,23 @@ public sealed class TciSession : IDisposable
         _spots = spots;
         _options = options;
         _rateLimiter = new TciRateLimiter(options.RateLimitMs, Send);
+        _txAudioIngest = txAudioIngest;
+        // Receiver is wired only when an ingest target is available — keeps
+        // unit tests that stand up a session without DI from needing a full
+        // WDSP pipeline.
+        _txAudioReceiver = txAudioIngest is not null
+            ? new TciTxAudioReceiver(txAudioIngest.OnMicPcmBytes, log)
+            : null;
     }
+
+    /// <summary>True if the operator has selected the TCI WebSocket as the TX
+    /// audio source via <c>TRX:0,true,tci;</c>. Used by <see cref="TciServer"/>
+    /// to gate TX_CHRONO frame emission to this session.</summary>
+    public bool TxSourceIsTci { get { lock (_streamLock) return _txSourceIsTci; } }
+
+    /// <summary>Drop any TX audio buffered in the receiver. Call on MOX
+    /// falling edge so the next keyed-up TX doesn't replay a stale tail.</summary>
+    public void ResetTxAudio() => _txAudioReceiver?.Reset();
 
     /// <summary>
     /// Main session loop: send handshake, then run parallel send/receive loops.
@@ -301,8 +335,10 @@ public sealed class TciSession : IDisposable
     private async Task ReceiveLoopAsync(CancellationToken ct)
     {
         var buf = new byte[8 * 1024];
-        byte[]? accum = null;
-        int accumLen = 0;
+        byte[]? textAccum = null;
+        int textAccumLen = 0;
+        byte[]? binAccum = null;
+        int binAccumLen = 0;
 
         try
         {
@@ -315,16 +351,53 @@ public sealed class TciSession : IDisposable
                     return;
                 }
 
+                int chunkLen = result.Count;
+
                 if (result.MessageType == WebSocketMessageType.Binary)
                 {
-                    // Future: handle binary IQ/audio subscription frames
-                    _log.LogDebug("tci binary frame ignored (not implemented) len={Len}", result.Count);
+                    // Single-fragment fast path.
+                    if (result.EndOfMessage && binAccum is null)
+                    {
+                        HandleBinaryFrame(new ReadOnlySpan<byte>(buf, 0, chunkLen));
+                        continue;
+                    }
+                    if (binAccum is null)
+                    {
+                        binAccum = ArrayPool<byte>.Shared.Rent(Math.Max(chunkLen, 16 * 1024));
+                        binAccumLen = 0;
+                    }
+                    if (binAccumLen + chunkLen > MaxInboundBinaryBytes)
+                    {
+                        _log.LogWarning("tci oversize binary frame client={Id} len={Len}", _id, binAccumLen + chunkLen);
+                        ArrayPool<byte>.Shared.Return(binAccum);
+                        binAccum = null;
+                        binAccumLen = 0;
+                        continue;
+                    }
+                    if (binAccumLen + chunkLen > binAccum.Length)
+                    {
+                        int newSize = Math.Min(MaxInboundBinaryBytes, binAccum.Length * 2);
+                        while (newSize < binAccumLen + chunkLen) newSize = Math.Min(MaxInboundBinaryBytes, newSize * 2);
+                        var grown = ArrayPool<byte>.Shared.Rent(newSize);
+                        Buffer.BlockCopy(binAccum, 0, grown, 0, binAccumLen);
+                        ArrayPool<byte>.Shared.Return(binAccum);
+                        binAccum = grown;
+                    }
+                    Buffer.BlockCopy(buf, 0, binAccum, binAccumLen, chunkLen);
+                    binAccumLen += chunkLen;
+
+                    if (result.EndOfMessage)
+                    {
+                        HandleBinaryFrame(new ReadOnlySpan<byte>(binAccum, 0, binAccumLen));
+                        ArrayPool<byte>.Shared.Return(binAccum);
+                        binAccum = null;
+                        binAccumLen = 0;
+                    }
                     continue;
                 }
 
                 // Text frame: accumulate and parse
-                int chunkLen = result.Count;
-                if (result.EndOfMessage && accum is null)
+                if (result.EndOfMessage && textAccum is null)
                 {
                     // Fast path: single-fragment text message
                     string line = Encoding.ASCII.GetString(buf, 0, chunkLen);
@@ -333,38 +406,38 @@ public sealed class TciSession : IDisposable
                 }
 
                 // Multi-fragment message: accumulate
-                if (accum is null)
+                if (textAccum is null)
                 {
-                    accum = ArrayPool<byte>.Shared.Rent(Math.Max(chunkLen, 4096));
-                    accumLen = 0;
+                    textAccum = ArrayPool<byte>.Shared.Rent(Math.Max(chunkLen, 4096));
+                    textAccumLen = 0;
                 }
-                if (accumLen + chunkLen > MaxInboundTextBytes)
+                if (textAccumLen + chunkLen > MaxInboundTextBytes)
                 {
-                    _log.LogWarning("tci oversize text frame client={Id} len={Len}", _id, accumLen + chunkLen);
-                    ArrayPool<byte>.Shared.Return(accum);
-                    accum = null;
-                    accumLen = 0;
+                    _log.LogWarning("tci oversize text frame client={Id} len={Len}", _id, textAccumLen + chunkLen);
+                    ArrayPool<byte>.Shared.Return(textAccum);
+                    textAccum = null;
+                    textAccumLen = 0;
                     continue;
                 }
-                if (accumLen + chunkLen > accum.Length)
+                if (textAccumLen + chunkLen > textAccum.Length)
                 {
-                    int newSize = Math.Min(MaxInboundTextBytes, accum.Length * 2);
-                    while (newSize < accumLen + chunkLen) newSize = Math.Min(MaxInboundTextBytes, newSize * 2);
+                    int newSize = Math.Min(MaxInboundTextBytes, textAccum.Length * 2);
+                    while (newSize < textAccumLen + chunkLen) newSize = Math.Min(MaxInboundTextBytes, newSize * 2);
                     var grown = ArrayPool<byte>.Shared.Rent(newSize);
-                    Buffer.BlockCopy(accum, 0, grown, 0, accumLen);
-                    ArrayPool<byte>.Shared.Return(accum);
-                    accum = grown;
+                    Buffer.BlockCopy(textAccum, 0, grown, 0, textAccumLen);
+                    ArrayPool<byte>.Shared.Return(textAccum);
+                    textAccum = grown;
                 }
-                Buffer.BlockCopy(buf, 0, accum, accumLen, chunkLen);
-                accumLen += chunkLen;
+                Buffer.BlockCopy(buf, 0, textAccum, textAccumLen, chunkLen);
+                textAccumLen += chunkLen;
 
                 if (result.EndOfMessage)
                 {
-                    string line = Encoding.ASCII.GetString(accum, 0, accumLen);
+                    string line = Encoding.ASCII.GetString(textAccum, 0, textAccumLen);
                     HandleCommand(line);
-                    ArrayPool<byte>.Shared.Return(accum);
-                    accum = null;
-                    accumLen = 0;
+                    ArrayPool<byte>.Shared.Return(textAccum);
+                    textAccum = null;
+                    textAccumLen = 0;
                 }
             }
         }
@@ -375,8 +448,68 @@ public sealed class TciSession : IDisposable
         }
         finally
         {
-            if (accum is not null) ArrayPool<byte>.Shared.Return(accum);
+            if (textAccum is not null) ArrayPool<byte>.Shared.Return(textAccum);
+            if (binAccum is not null) ArrayPool<byte>.Shared.Return(binAccum);
         }
+    }
+
+    /// <summary>
+    /// Dispatch a fully-reassembled inbound binary frame. Currently we only
+    /// route TX audio (StreamType=2) — TCI 2.0 also defines IQ/RX-audio/
+    /// LineOut as outbound-only, and TX_CHRONO (=3) is sent by the server
+    /// rather than received. Spec §3.4.
+    /// </summary>
+    private void HandleBinaryFrame(ReadOnlySpan<byte> frame)
+    {
+        if (!TciStreamPayload.TryParseHeader(frame, out var header))
+        {
+            _log.LogDebug("tci binary frame too short or malformed len={Len}", frame.Length);
+            return;
+        }
+
+        if (header.StreamType != TciStreamType.TxAudioStream)
+        {
+            // Spec §7.2: client→server stream types are TX audio only. Anything
+            // else (IQ, RX audio, LineOut, TX_CHRONO) on the inbound path is
+            // protocol-incorrect. Drop quietly.
+            _log.LogDebug("tci inbound binary type={Type} ignored (TX audio only)", header.StreamType);
+            return;
+        }
+
+        if (_txAudioReceiver is null)
+        {
+            // No DI'd ingest target — usually a unit-test session.
+            return;
+        }
+
+        // Source / MOX gating. The downstream TxAudioIngest also gates on
+        // MOX, but dropping early avoids wasting cycles decoding a frame
+        // that would never reach the wire.
+        bool sourceIsTci;
+        int channels;
+        lock (_streamLock)
+        {
+            sourceIsTci = _txSourceIsTci;
+            channels = _audioStreamChannels;
+        }
+        if (!sourceIsTci)
+        {
+            _log.LogDebug("tci.tx.audio dropped (TRX source != tci)");
+            return;
+        }
+        if (!_tx.IsMoxOn)
+        {
+            _log.LogDebug("tci.tx.audio dropped (MOX off)");
+            return;
+        }
+
+        var samplePayload = frame.Slice(TciStreamPayload.HeaderSize);
+        _txAudioReceiver.AcceptTxAudio(
+            samplePayload,
+            header.SampleType,
+            header.Length,
+            channels,
+            (int)header.SampleRate);
     }
 
     /// <summary>
@@ -512,16 +645,27 @@ public sealed class TciSession : IDisposable
                     break;
 
                 // --- Noise reduction / blanking ---
+                // Spec-conformant `rx_*` names (TCI 2.0 §4.2) route to the same
+                // backends as the legacy non-prefixed forms (`nr_enable`,
+                // `nb_enable`, …) accepted by older Zeus clients. The two
+                // forms are interchangeable on the wire.
                 case "nr_enable":
+                case "rx_nr_enable":
                     HandleNrEnable(args);
                     break;
                 case "nb_enable":
+                case "rx_nb_enable":
                     HandleNbEnable(args);
                     break;
+                case "rx_nb2_enable":
+                    HandleNb2Enable(args);
+                    break;
                 case "anf_enable":
+                case "rx_anf_enable":
                     HandleAnfEnable(args);
                     break;
                 case "anc_enable":
+                case "rx_anc_enable":
                     HandleAncEnable(args);
                     break;
 
@@ -567,17 +711,16 @@ public sealed class TciSession : IDisposable
                     break;
 
                 // --- Post-handshake state-sync GETs (spec §3.3) ---
+                // Stubs only — these have no backend and exist so the v2.5.1
+                // client's state-sync burst doesn't see "unknown command" log
+                // spam. Real implementations live above (rx_nb_enable,
+                // rx_anf_enable, rx_anc_enable, rx_nr_enable).
                 case "sql_enable":
                     HandleStubBoolPerRx(command, args, false);
                     break;
                 case "sql_level":
                     HandleStubIntPerRx(command, args, 0);
                     break;
-                case "rx_anf_enable":
-                    HandleStubBoolPerRx(command, args, false);
-                    break;
-                case "rx_nb_enable":
-                case "rx_nb2_enable":
                 case "rx_bin_enable":
                     HandleStubBoolPerRx(command, args, false);
                     break;
@@ -604,12 +747,27 @@ public sealed class TciSession : IDisposable
                 case "rx_enable":
                     HandleRxEnable(args);
                     break;
+                case "rx_channel_enable":
+                    HandleRxChannelEnable(args);
+                    break;
                 case "tx_filter_band_ex":
                     HandleTxFilterBandEx(args);
                     break;
 
+                // --- Digital-mode pitch offsets (TCI 1.9 §4.2) ---
+                // No backend wiring — Zeus uses the rx_filter_band passband
+                // directly. Stored per-session and echoed so JTDX / WSJT-X
+                // don't see "unknown command" log spam.
+                case "digl_offset":
+                    HandleDigOffset(args, isUpper: false);
+                    break;
+                case "digu_offset":
+                    HandleDigOffset(args, isUpper: true);
+                    break;
+
                 // --- NR with level (spec §5.4 rx_nr_enable_ex:rx,bool,level) ---
-                case "rx_nr_enable":
+                // The plain 2-arg form (rx_nr_enable) routes to HandleNrEnable
+                // above; only the _ex variant (with optional level) lands here.
                 case "rx_nr_enable_ex":
                     HandleRxNrEnableEx(args);
                     break;
@@ -746,18 +904,46 @@ public sealed class TciSession : IDisposable
 
     private void HandleTrx(string[] args)
     {
-        // trx:<rx>,<bool>[,tci] or trx:<rx> (query)
+        // trx:<rx>,<bool>[,signal_source] or trx:<rx> (query). Spec 2.0 §4.2:
+        // signal_source ∈ {tci, mic1, mic2, micPC, ecoder2}. When = "tci",
+        // the server takes mic samples from inbound TCI binary frames; any
+        // other value (or absent) keeps the radio's locally-selected mic.
         if (args.Length < 1) return;
         if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
 
         if (args.Length == 1)
         {
             Send(TciProtocol.Command("trx", rx, _tx.IsMoxOn));
+            return;
         }
-        else if (args.Length >= 2 && TciProtocol.TryParseBool(args[1], out bool on))
+
+        if (!TciProtocol.TryParseBool(args[1], out bool on)) return;
+
+        // Latch the source flag BEFORE flipping MOX so the first inbound TX
+        // audio frame after key-up is decoded against the correct gate.
+        if (args.Length >= 3)
         {
-            _tx.TrySetMox(on, out _);
+            string src = args[2].Trim();
+            bool wantsTci = string.Equals(src, "tci", StringComparison.OrdinalIgnoreCase);
+            lock (_streamLock) _txSourceIsTci = wantsTci;
+            if (!wantsTci)
+                _log.LogDebug("tci.trx source={Src} (TX audio routed to local mic)", src);
         }
+        else
+        {
+            // Per spec, no 3rd arg = use the radio's local mic. Clear any
+            // previously-set TCI routing so a key-up via plain `trx:0,true;`
+            // doesn't accidentally inherit a stale tci-source flag.
+            lock (_streamLock) _txSourceIsTci = false;
+        }
+
+        // On MOX falling edge, drop any TX audio buffered from this session
+        // so the next keyed-up TX starts from silence. (TxAudioIngest also
+        // clears the IQ ring on its own MOX falling edge — this just keeps
+        // the receiver-side accumulator in step.)
+        if (!on) ResetTxAudio();
+
+        _tx.TrySetMox(on, out _);
     }
 
     private void HandleTune(string[] args)
@@ -1101,21 +1287,31 @@ public sealed class TciSession : IDisposable
     {
         // audio_stream_sample_type, audio_stream_channels, audio_stream_samples,
         // tx_stream_audio_buffering — server echoes whatever the client sets
-        // (TCI spec §5.8 subscription burst). Zeus doesn't honour deviations
-        // from the handshake-advertised values; the echo is just spec compliance.
+        // (TCI spec §5.8 subscription burst). Zeus honours audio_stream_channels
+        // for inbound TX audio decode; the others are echo-only so the client
+        // sees its requested config reflected.
         if (args.Length == 0)
         {
             // Query — re-emit the handshake-advertised value
             string value = command switch
             {
                 "audio_stream_sample_type" => "float32",
-                "audio_stream_channels" => "2",
+                "audio_stream_channels" => _audioStreamChannels.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 "audio_stream_samples" => "2048",
                 "tx_stream_audio_buffering" => "50",
                 _ => "0",
             };
             Send($"{command}:{value};");
             return;
+        }
+        // SET form. For audio_stream_channels we latch the value so the TX
+        // audio receiver knows how to interpret inbound binary frames
+        // (mono vs stereo mixdown).
+        if (string.Equals(command, "audio_stream_channels", StringComparison.OrdinalIgnoreCase)
+            && TciProtocol.TryParseInt(args[0], out int ch)
+            && (ch == 1 || ch == 2))
+        {
+            lock (_streamLock) _audioStreamChannels = ch;
         }
         Send($"{command}:{args[0]};");
     }
@@ -1266,6 +1462,45 @@ public sealed class TciSession : IDisposable
             Send(TciProtocol.Command("rx_enable", trx, enabled));
     }
 
+    private void HandleRxChannelEnable(string[] args)
+    {
+        // rx_channel_enable:<rx>,<chan>,<bool>  — TCI 2.0 §4.2 spec form for
+        // toggling channel B (VFO B) on a receiver. 2-arg form is a GET.
+        // Zeus has no second VFO yet; echo so the client UI stays consistent.
+        if (args.Length < 2) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+        if (!TciProtocol.TryParseInt(args[1], out int chan)) return;
+        if (args.Length == 2)
+        {
+            // Channel A is always on; channel B is always off (single-VFO).
+            Send(TciProtocol.Command("rx_channel_enable", rx, chan, chan == 0));
+            return;
+        }
+        if (TciProtocol.TryParseBool(args[2], out bool enabled))
+            Send(TciProtocol.Command("rx_channel_enable", rx, chan, enabled));
+    }
+
+    private void HandleDigOffset(string[] args, bool isUpper)
+    {
+        // digl_offset / digu_offset:<hz>  (SET)
+        // digl_offset / digu_offset       (GET)
+        // Range 0..4000 Hz per spec §4.2. Stored per session — backend
+        // application would treat this as the digital-mode passband centre
+        // shift, which Zeus today bakes into rx_filter_band directly.
+        string name = isUpper ? "digu_offset" : "digl_offset";
+        if (args.Length == 0)
+        {
+            int current = isUpper ? _diguOffsetHz : _diglOffsetHz;
+            Send(TciProtocol.Command(name, current));
+            return;
+        }
+        if (!TciProtocol.TryParseInt(args[0], out int hz)) return;
+        hz = Math.Clamp(hz, 0, 4000);
+        if (isUpper) _diguOffsetHz = hz;
+        else _diglOffsetHz = hz;
+        Send(TciProtocol.Command(name, hz));
+    }
+
     private void HandleTxFilterBandEx(string[] args)
     {
         // tx_filter_band_ex:<lo_hz>,<hi_hz>  — TX bandpass filter (spec §5.3).
@@ -1338,31 +1573,62 @@ public sealed class TciSession : IDisposable
     public bool WantsTxSensors { get { lock (_streamLock) return _wantsTxSensors; } }
     public bool WantsRxSensors { get { lock (_streamLock) return _wantsRxSensors; } }
 
+    /// <summary>Per-session desired sensor-push interval in ms (clamped 30..1000
+    /// per spec §4.4). 0 = use server default cadence. Currently informational —
+    /// Zeus pushes at the rx_smeter / TxMeters event rate regardless.</summary>
+    public int RxSensorsIntervalMs { get { lock (_streamLock) return _rxSensorsIntervalMs; } }
+    public int TxSensorsIntervalMs { get { lock (_streamLock) return _txSensorsIntervalMs; } }
+    private int _rxSensorsIntervalMs;
+    private int _txSensorsIntervalMs;
+
     private void HandleTxSensorsEnable(string[] args)
     {
+        // Spec §4.4: tx_sensors_enable:<bool>[,<interval_ms>]
+        // No rx index. Interval is optional (range 30..1000 ms).
         if (args.Length == 0)
         {
             Send(TciProtocol.Command("tx_sensors_enable", WantsTxSensors));
             return;
         }
-        if (TciProtocol.TryParseBool(args[0], out bool enable))
+        if (!TciProtocol.TryParseBool(args[0], out bool enable)) return;
+        int interval = 0;
+        if (args.Length >= 2 && TciProtocol.TryParseInt(args[1], out int parsedInterval))
+            interval = Math.Clamp(parsedInterval, 30, 1000);
+        lock (_streamLock)
         {
-            lock (_streamLock) _wantsTxSensors = enable;
-            Send(TciProtocol.Command("tx_sensors_enable", enable));
+            _wantsTxSensors = enable;
+            _txSensorsIntervalMs = interval;
         }
+        // Echo back in the same shape the client sent (with interval if it
+        // was supplied) so the client sees its request reflected.
+        Send(args.Length >= 2
+            ? TciProtocol.Command("tx_sensors_enable", enable, interval)
+            : TciProtocol.Command("tx_sensors_enable", enable));
     }
 
     private void HandleRxSensorsEnable(string[] args)
     {
-        // rx_sensors_enable:<rx>,<bool>  — per-RX subscription. Zeus has one
-        // RX, so the rx index is informational; we track a single flag.
-        if (args.Length < 2) return;
-        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
-        if (TciProtocol.TryParseBool(args[1], out bool enable))
+        // Spec §4.4: rx_sensors_enable:<bool>[,<interval_ms>]
+        // No rx index — TCI 2.0 corrected an earlier shape that took rx,bool;
+        // the client of record (ExpertSDR3 1.0.7+, JTDX, Log4OM) sends the
+        // bool-only form. Range matches tx_sensors_enable.
+        if (args.Length == 0)
         {
-            lock (_streamLock) _wantsRxSensors = enable;
-            Send(TciProtocol.Command("rx_sensors_enable", rx, enable));
+            Send(TciProtocol.Command("rx_sensors_enable", WantsRxSensors));
+            return;
         }
+        if (!TciProtocol.TryParseBool(args[0], out bool enable)) return;
+        int interval = 0;
+        if (args.Length >= 2 && TciProtocol.TryParseInt(args[1], out int parsedInterval))
+            interval = Math.Clamp(parsedInterval, 30, 1000);
+        lock (_streamLock)
+        {
+            _wantsRxSensors = enable;
+            _rxSensorsIntervalMs = interval;
+        }
+        Send(args.Length >= 2
+            ? TciProtocol.Command("rx_sensors_enable", enable, interval)
+            : TciProtocol.Command("rx_sensors_enable", enable));
     }
 
     private void HandleNrEnable(string[] args)
@@ -1381,15 +1647,47 @@ public sealed class TciSession : IDisposable
 
     private void HandleNbEnable(string[] args)
     {
-        // nb_enable:<rx>,<bool>  — enable/disable noise blanker (NB1)
-        // Maps bool true → NbMode.Nb1, false → NbMode.Off.
-        if (args.Length < 2) return;
+        // nb_enable / rx_nb_enable:<rx>,<bool>  — enable/disable noise blanker (NB1).
+        // Maps bool true → NbMode.Nb1, false → NbMode.Off. GET form is 1 arg
+        // and replies with the live state. The two command names are aliases
+        // (TCI 2.0 spec uses the rx_-prefixed form; older Zeus accepted the
+        // bare form).
+        if (args.Length < 1) return;
         if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+        if (args.Length == 1)
+        {
+            var snap = _radio.Snapshot().Nr ?? new NrConfig();
+            Send(TciProtocol.Command("rx_nb_enable", rx, snap.NbMode == NbMode.Nb1));
+            return;
+        }
         if (!TciProtocol.TryParseBool(args[1], out bool enable)) return;
 
         var current = _radio.Snapshot().Nr ?? new NrConfig();
-        var updated = current with { NbMode = enable ? NbMode.Nb1 : NbMode.Off };
-        _radio.SetNr(updated);
+        // Setting NB1 off should leave NB2 alone if it was active. We only
+        // touch the NB slot when the requested change concerns NB1.
+        NbMode next = enable ? NbMode.Nb1
+                             : (current.NbMode == NbMode.Nb1 ? NbMode.Off : current.NbMode);
+        _radio.SetNr(current with { NbMode = next });
+    }
+
+    private void HandleNb2Enable(string[] args)
+    {
+        // rx_nb2_enable:<rx>,<bool>  — enable/disable NB2. Mutually exclusive
+        // with NB1 in WDSP, so flipping NB2 on switches the slot from NB1.
+        if (args.Length < 1) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+        if (args.Length == 1)
+        {
+            var snap = _radio.Snapshot().Nr ?? new NrConfig();
+            Send(TciProtocol.Command("rx_nb2_enable", rx, snap.NbMode == NbMode.Nb2));
+            return;
+        }
+        if (!TciProtocol.TryParseBool(args[1], out bool enable)) return;
+
+        var current = _radio.Snapshot().Nr ?? new NrConfig();
+        NbMode next = enable ? NbMode.Nb2
+                             : (current.NbMode == NbMode.Nb2 ? NbMode.Off : current.NbMode);
+        _radio.SetNr(current with { NbMode = next });
     }
 
     private void HandleAnfEnable(string[] args)

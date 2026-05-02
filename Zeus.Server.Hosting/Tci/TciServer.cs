@@ -69,10 +69,19 @@ public sealed class TciServer : IHostedService, IDisposable
     private readonly DspPipelineService _pipeline;
     private readonly TxMetersService _txMeters;
     private readonly SpotManager _spots;
+    private readonly TxAudioIngest _txAudioIngest;
     private readonly ILoggerFactory _loggerFactory;
 
     private readonly ConcurrentDictionary<Guid, TciSession> _clients = new();
     private bool _subscribed;
+
+    // TX_CHRONO sync emitter — fires while MOX is on so any session with
+    // TRX source = TCI gets a "send another TX audio block now" signal at
+    // the audio block rate (spec §3.4). 50 ms cadence ≈ 2400 mono samples
+    // at 48 kHz, which lines up with the default 2048-frame TCI block.
+    private const int TxChronoIntervalMs = 50;
+    private Timer? _txChronoTimer;
+    private byte[]? _txChronoFrame;
 
     public TciServer(
         IOptions<TciOptions> options,
@@ -81,6 +90,7 @@ public sealed class TciServer : IHostedService, IDisposable
         DspPipelineService pipeline,
         TxMetersService txMeters,
         SpotManager spots,
+        TxAudioIngest txAudioIngest,
         ILoggerFactory loggerFactory)
     {
         _log = loggerFactory.CreateLogger<TciServer>();
@@ -90,6 +100,7 @@ public sealed class TciServer : IHostedService, IDisposable
         _pipeline = pipeline;
         _txMeters = txMeters;
         _spots = spots;
+        _txAudioIngest = txAudioIngest;
         _loggerFactory = loggerFactory;
     }
 
@@ -107,6 +118,7 @@ public sealed class TciServer : IHostedService, IDisposable
         _radio.Connected += OnRadioConnected;
         _radio.Disconnected += OnRadioDisconnected;
         _radio.PreampChanged += OnPreampChanged;
+        _radio.MoxChanged += OnMoxChanged;
         _pipeline.RxMeterUpdated += OnRxMeterUpdated;
         _pipeline.RxIqAvailable += OnRxIqAvailable;
         _pipeline.RxAudioAvailable += OnRxAudioAvailable;
@@ -125,12 +137,15 @@ public sealed class TciServer : IHostedService, IDisposable
             _radio.Connected -= OnRadioConnected;
             _radio.Disconnected -= OnRadioDisconnected;
             _radio.PreampChanged -= OnPreampChanged;
+            _radio.MoxChanged -= OnMoxChanged;
             _pipeline.RxMeterUpdated -= OnRxMeterUpdated;
             _pipeline.RxIqAvailable -= OnRxIqAvailable;
             _pipeline.RxAudioAvailable -= OnRxAudioAvailable;
             _txMeters.TxMetersUpdated -= OnTxMetersUpdated;
             _subscribed = false;
         }
+
+        StopTxChronoTimer();
 
         _log.LogInformation("tci.stopping active={Count}", _clients.Count);
 
@@ -170,7 +185,7 @@ public sealed class TciServer : IHostedService, IDisposable
 
         var id = Guid.NewGuid();
         var sessionLog = _loggerFactory.CreateLogger<TciSession>();
-        var session = new TciSession(id, ws, sessionLog, _radio, _tx, _pipeline, _spots, _options);
+        var session = new TciSession(id, ws, sessionLog, _radio, _tx, _pipeline, _spots, _options, _txAudioIngest);
 
         _clients[id] = session;
         _log.LogInformation("tci.client.connected id={Id} total={Count}", id, _clients.Count);
@@ -350,8 +365,53 @@ public sealed class TciServer : IHostedService, IDisposable
         }
     }
 
+    // --- TX_CHRONO emitter ---
+    //
+    // Per spec §3.4, the server sends TX_CHRONO sync frames during TX so
+    // the client knows to upload another TX audio block. Without this, a
+    // well-behaved client (e.g. ExpertSDR3, hams using JTDX-via-TCI) waits
+    // for chrono before sending the next mic buffer.
+    //
+    // The timer fires only while MOX is on AND there's at least one session
+    // with TX source = TCI; otherwise the timer is parked. Frame body is
+    // empty (length=0); the receiver field carries 0 since Zeus is single-
+    // transceiver.
+
+    private void OnMoxChanged(bool moxOn)
+    {
+        if (moxOn) StartTxChronoTimer();
+        else StopTxChronoTimer();
+    }
+
+    private void StartTxChronoTimer()
+    {
+        if (_txChronoTimer is not null) return;
+        _txChronoFrame ??= TciStreamPayload.BuildTxChrono(receiver: 0, sampleRate: 48000);
+        _txChronoTimer = new Timer(_ => SendTxChronoTick(), null, TxChronoIntervalMs, TxChronoIntervalMs);
+        _log.LogDebug("tci.tx.chrono started interval={Ms}ms", TxChronoIntervalMs);
+    }
+
+    private void StopTxChronoTimer()
+    {
+        var t = Interlocked.Exchange(ref _txChronoTimer, null);
+        if (t is null) return;
+        t.Dispose();
+        _log.LogDebug("tci.tx.chrono stopped");
+    }
+
+    private void SendTxChronoTick()
+    {
+        var frame = _txChronoFrame;
+        if (frame is null || _clients.IsEmpty) return;
+        foreach (var session in _clients.Values)
+        {
+            if (session.TxSourceIsTci) session.SendBinary(frame);
+        }
+    }
+
     public void Dispose()
     {
+        StopTxChronoTimer();
         foreach (var session in _clients.Values)
         {
             session.Dispose();

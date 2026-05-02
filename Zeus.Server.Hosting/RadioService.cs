@@ -349,7 +349,15 @@ public sealed class RadioService : IDisposable
         {
             await client.ConnectAsync(ipEndpoint, ct).ConfigureAwait(false);
             await client.StartAsync(new StreamConfig(hpsdrRate, _preampOn, _atten), ct).ConfigureAwait(false);
-            client.SetVfoAHz(Snapshot().VfoHz);
+            client.SetVfoAHz(CwOffset.EffectiveLoHz(Snapshot()));
+
+            // Default-on the N2ADR 7-relay filter board for HL2 — mirrors
+            // Thetis's HERCULES preset (setup.cs:14642). Most HL2 deployments
+            // ship with N2ADR; without this the OC pins stay 0 and the LPF
+            // relays never click. Operators on bare HL2 (no filter board) can
+            // override via PA Settings once that knob is exposed.
+            if (client.BoardKind == HpsdrBoardKind.HermesLite2)
+                client.SetHasN2adr(true);
 
             Mutate(s => s with { Status = ConnectionStatus.Connected });
             _log.LogInformation("radio.connected endpoint={Ep} rate={Rate}", ipEndpoint, hpsdrRate);
@@ -407,9 +415,14 @@ public sealed class RadioService : IDisposable
     {
         long clamped = Math.Clamp(hz, 0L, 60_000_000L);
         long previous;
-        lock (_sync) previous = _state.VfoHz;
+        RxMode currentMode;
+        lock (_sync) { previous = _state.VfoHz; currentMode = _state.Mode; }
         Mutate(s => s with { VfoHz = clamped });
-        ActiveClient?.SetVfoAHz(clamped);
+        // CW retunes the LO cw_pitch below/above the dial so the listening
+        // freq lands on the +cw_pitch / -cw_pitch audio passband. In SSB /
+        // AM / FM / DIG modes EffectiveLoHz returns the dial value
+        // unchanged, preserving prior behaviour.
+        ActiveClient?.SetVfoAHz(CwOffset.EffectiveLoHz(currentMode, clamped));
         // Band edge crossed? Per-band PA gain / OC bits may have swapped — push
         // the new snapshot before the next TX frame ships. Cheap when no
         // crossing occurred (same bytes re-pushed).
@@ -452,6 +465,7 @@ public sealed class RadioService : IDisposable
     {
         RxMode departingMode = default;
         string? departingPreset = null;
+        long newVfoHz = 0;
         Mutate(s =>
         {
             departingMode = s.Mode;
@@ -478,9 +492,21 @@ public sealed class RadioService : IDisposable
 
             // 4) Restore the last-known preset name for the incoming mode.
             _lastPresetPerMode.TryGetValue(mode, out var restoredPreset);
+
+            // 5) Thetis-style dial bump on SSB↔CW transitions so the
+            //    effective LO doesn't jump under the operator's feet — the
+            //    dial absorbs the ±cw_pitch step and the radio stays on the
+            //    same physical signal. Within CWU↔CWL the dial stays put
+            //    (Thetis console.cs:34037-34052, 34203-34298 mirrored here).
+            //    Non-CW↔non-CW transitions return 0, so SSB/AM/FM/DIG
+            //    behaviour is unchanged.
+            long bump = CwOffset.DialBumpForModeTransition(s.Mode, mode);
+            newVfoHz = Math.Clamp(s.VfoHz + bump, 0L, 60_000_000L);
+
             return s with
             {
                 Mode = mode,
+                VfoHz = newVfoHz,
                 FilterLowHz = lo, FilterHighHz = hi,
                 TxFilterLowHz = txLo, TxFilterHighHz = txHi,
                 FilterPresetName = restoredPreset,
@@ -490,6 +516,12 @@ public sealed class RadioService : IDisposable
         // Persist the departing mode's last preset outside the lock.
         if (departingPreset != null)
             _filterPresetStore?.UpsertLastSelectedPreset(departingMode, departingPreset);
+
+        // Push the new effective LO. Even with no dial bump, switching
+        // into/out of CW changes EffectiveLoHz by ±cw_pitch and the radio
+        // needs the new tuning before the next IQ block arrives. P2 is
+        // pushed via DspPipelineService.OnRadioStateChanged.
+        ActiveClient?.SetVfoAHz(CwOffset.EffectiveLoHz(mode, newVfoHz));
 
         return Snapshot();
     }

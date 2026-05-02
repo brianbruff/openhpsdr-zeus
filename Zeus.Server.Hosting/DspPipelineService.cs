@@ -359,7 +359,7 @@ public class DspPipelineService : BackgroundService
         // about tune changes without this forward. Sample rate / mode follow
         // here too when P2-side support is added.
         var p2 = _p2Client;
-        p2?.SetVfoAHz(s.VfoHz);
+        p2?.SetVfoAHz(CwOffset.EffectiveLoHz(s));
 
         IDspEngine? engine;
         int channel;
@@ -1104,7 +1104,11 @@ public class DspPipelineService : BackgroundService
             RxId: 0,
             BodyFlags: flags,
             Width: Width,
-            CenterHz: state.VfoHz,
+            // Panadapter centres on the radio's actual LO, which equals
+            // VfoHz outside CW and VfoHz ∓ cw_pitch in CWU/CWL. The CW filter
+            // (audio passband centred on cw_pitch) then renders on top of
+            // the dial line via PassbandOverlay's `centerHz + filterLow..high`.
+            CenterHz: CwOffset.EffectiveLoHz(state),
             HzPerPixel: hzPerPixel,
             PanDb: panBuf,
             WfDb: wfBuf);

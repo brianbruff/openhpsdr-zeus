@@ -20,9 +20,15 @@
 // Both are GPL-2.0-or-later.
 
 import { useCallback } from 'react';
-import { setPs } from '../api/client';
+import { setPs, setPsMonitor } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { useRadioStore } from '../state/radio-store';
 import { useTxStore } from '../state/tx-store';
+
+// Connected board kinds that don't have a real PS feedback receiver. PS
+// Monitor (post-PA loopback display source) is only meaningful where the
+// board has a feedback path, so we don't auto-enable it for these.
+const PS_MONITOR_UNSUPPORTED = new Set(['HermesLite2']);
 
 /**
  * PureSignal master arm. Optimistic update with rollback on server refusal —
@@ -37,7 +43,10 @@ export function PsToggleButton() {
   const psEnabled = useTxStore((s) => s.psEnabled);
   const psAuto = useTxStore((s) => s.psAuto);
   const psSingle = useTxStore((s) => s.psSingle);
+  const psMonitorEnabled = useTxStore((s) => s.psMonitorEnabled);
   const setPsEnabled = useTxStore((s) => s.setPsEnabled);
+  const setPsMonitorLocal = useTxStore((s) => s.setPsMonitorEnabled);
+  const connectedBoard = useRadioStore((s) => s.selection.connected);
 
   // P1 gate — backend forwards SetPsEnabled to the engine on either protocol
   // but the wire-side feedback path is P2-only in v1.
@@ -56,7 +65,30 @@ export function PsToggleButton() {
     setPs({ enabled: next, auto: psAuto, single: psSingle }).catch(() => {
       setPsEnabled(!next);
     });
-  }, [disabled, psEnabled, psAuto, psSingle, setPsEnabled]);
+    // When arming PS, also turn on PS Monitor by default — operators almost
+    // always want to see the post-PA loopback while PS is correcting, and
+    // having it default off forced an extra trip to Settings every session.
+    // Only auto-toggles up; disarming PS doesn't force the monitor off so
+    // the operator can keep watching the trace if they had it on
+    // pre-arming. Skip on boards without a real feedback receiver (HL2).
+    if (
+      next
+      && !psMonitorEnabled
+      && !PS_MONITOR_UNSUPPORTED.has(connectedBoard)
+    ) {
+      setPsMonitorLocal(true);
+      setPsMonitor(true).catch(() => setPsMonitorLocal(false));
+    }
+  }, [
+    disabled,
+    psEnabled,
+    psAuto,
+    psSingle,
+    psMonitorEnabled,
+    connectedBoard,
+    setPsEnabled,
+    setPsMonitorLocal,
+  ]);
 
   return (
     <button

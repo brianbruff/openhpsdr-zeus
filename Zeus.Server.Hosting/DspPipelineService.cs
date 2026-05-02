@@ -860,7 +860,10 @@ public class DspPipelineService : BackgroundService
         // monitor=off, so if the operator had it on the latch's change-detect
         // would skip the push. Reset the latch so the next UpdateState fires.
         _appliedTxMonitorEnabled = false;
-        _radio.MarkProtocol2Connected(radioEndpoint.ToString(), rateHz);
+        // Pass the live client so RadioService can fire P2Connected with a
+        // reference to the freshly-opened Protocol2Client. TxMetersService
+        // subscribes through that event to hook hi-priority status (#174).
+        _radio.MarkProtocol2Connected(radioEndpoint.ToString(), rateHz, client);
         // P2 G2/MkII default HW peak = 0.6121; ANAN-7000/8000 = 0.2899. The
         // RadioService switch covers both so we don't bake a value in here.
         // ConnectedBoardKind returns OrionMkII when _p2Active is true; future

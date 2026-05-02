@@ -128,6 +128,13 @@ public sealed class RadioService : IDisposable
     public event Action<StateDto>? StateChanged;
     public event Action<IProtocol1Client>? Connected;
     public event Action? Disconnected;
+    // Protocol-2 lifecycle. Parallel to the P1-typed Connected/Disconnected
+    // pair so subscribers (TxMetersService for hi-priority status, future
+    // P2 consumers) can hook a freshly-opened Protocol2Client without
+    // probing DspPipelineService. Issue #174 — needed so the meter service
+    // can wire its OnTelemetry handler to client.TelemetryReceived.
+    public event Action<Zeus.Protocol2.Protocol2Client>? P2Connected;
+    public event Action? P2Disconnected;
     // Fires whenever the effective PA snapshot changes (store edit, VFO band
     // crossing, drive slider). DspPipelineService consumes this to forward the
     // same snapshot into any live Protocol2Client (byte 345 / byte 1401 /
@@ -1183,7 +1190,12 @@ public sealed class RadioService : IDisposable
     // disconnects. RadioService's _activeClient is P1-only; this is how
     // the shared state (Status, Endpoint, SampleRate) stays coherent for
     // the UI without growing a P2 client slot here.
-    public void MarkProtocol2Connected(string endpoint, int sampleRateHz)
+    //
+    // The optional <paramref name="client"/> wires the freshly-opened
+    // Protocol2Client to subscribers of <see cref="P2Connected"/>; passing
+    // null keeps the signature backward-compatible for tests that don't
+    // need the telemetry surface (issue #174).
+    public void MarkProtocol2Connected(string endpoint, int sampleRateHz, Zeus.Protocol2.Protocol2Client? client = null)
     {
         lock (_sync) _p2Active = true;
         Mutate(s => s with
@@ -1195,6 +1207,9 @@ public sealed class RadioService : IDisposable
         // P2 is alive — PA defaults should reflect G2 / Orion class so the
         // operator sees realistic numbers when they open the PA panel.
         RecomputePaAndPush();
+        // Fire AFTER the state mutation + PA recompute so subscribers see a
+        // fully-coherent RadioService when they read board kind / snapshot.
+        if (client is not null) P2Connected?.Invoke(client);
     }
 
     public void MarkProtocol2Disconnected()
@@ -1205,6 +1220,7 @@ public sealed class RadioService : IDisposable
             Status = ConnectionStatus.Disconnected,
             Endpoint = null,
         });
+        P2Disconnected?.Invoke();
     }
 
     // Resolves the board class for ALL board-specific behavior: PA settings,

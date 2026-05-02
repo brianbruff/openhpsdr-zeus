@@ -124,11 +124,25 @@ public sealed class TxMetersService : BackgroundService
     private readonly TxService _tx;
     private readonly DspPipelineService _pipe;
     private readonly ILogger<TxMetersService> _log;
-    private readonly RadioCalibration _cal = RadioCalibration.HermesLite2;
+    // Per-board calibration is resolved at sample time via
+    // RadioCalibrations.For(_radio.ConnectedBoardKind). Mirrors the
+    // PaDefaults.GetPaGainDb dispatch seam (per CLAUDE.md, do not
+    // special-case inside ComputeMeters). See RadioCalibrations for the
+    // dispatch table and the OrionMkII / ANAN-8000D caveat.
 
     private readonly object _sync = new();
     private double _fwdAdc;
     private double _refAdc;
+    // Peak-hold ADC tracking between publish ticks. The radio sends
+    // hi-priority status at hundreds of Hz on P2 (G2 MkII observed at ~820
+    // pkts/s) but we publish to the UI at only 10 Hz; voice peaks lasting
+    // 100-200 ms fall between publish ticks and the bar reads the
+    // inter-syllable average (~3× low vs an analog peak-reading wattmeter
+    // like an LP-100A). Tracking max ADC seen since last publish gives the
+    // UI a meter that catches transients the way a hardware peak-reading
+    // wattmeter does. Reset to 0 every publish tick.
+    private ushort _fwdAdcPeak;
+    private ushort _refAdcPeak;
     // PA temperature smoothed ADC and first-sample flag — separate from
     // _seenSample because temperature arrives on a different slot and may
     // show up before / after the FWD-REF pair on any given packet.
@@ -154,11 +168,22 @@ public sealed class TxMetersService : BackgroundService
         // (Protocol1 → Server) and carries only AIN readings.
         radio.Connected += OnConnected;
         radio.Disconnected += OnDisconnected;
+        // Mirror the same subscribe/detach dance for Protocol-2 so
+        // hi-priority status (UDP 1025) feeds the same FWD/REF smoothing
+        // path as P1 alex telemetry. Issue #174 — without this hook, a
+        // G2 / ANAN-class radio's TX power meter sits at zero.
+        radio.P2Connected += OnP2Connected;
+        radio.P2Disconnected += OnP2Disconnected;
     }
 
     // Holds the last subscribed client so OnDisconnected can detach the
     // TelemetryReceived handler once the Protocol1 surface lands.
     private Zeus.Protocol1.IProtocol1Client? _subscribedClient;
+    // Same idea, P2 side. Tracked separately so a P1 disconnect doesn't
+    // accidentally detach a P2 handler (the two protocols can't be live at
+    // the same time, but the events are independent and this keeps the
+    // coupling clean).
+    private Zeus.Protocol2.Protocol2Client? _subscribedP2Client;
 
     // HL2 C&C-echo addresses that carry the alex FWD/REF ADCs and the PA
     // temperature (see TelemetryReading docs in Zeus.Protocol1).
@@ -184,6 +209,7 @@ public sealed class TxMetersService : BackgroundService
         {
             case C0AddrAlexFwd:
                 ApplySmoothed(ref _fwdAdc, reading.Ain1);
+                TrackPeak(ref _fwdAdcPeak, reading.Ain1);
                 // Ain0 on this slot is the HL2 Q6 temperature ADC. Smooth
                 // with the same α as FWD/REF so the UI sees a stable reading
                 // instead of ADC jitter.
@@ -191,6 +217,7 @@ public sealed class TxMetersService : BackgroundService
                 break;
             case C0AddrAlexRef:
                 ApplySmoothed(ref _refAdc, reading.Ain0);
+                TrackPeak(ref _refAdcPeak, reading.Ain0);
                 break;
             default:
                 // Other echo slots (ADC bias, exciter/temp) aren't part of the
@@ -206,6 +233,17 @@ public sealed class TxMetersService : BackgroundService
     {
         ApplySmoothed(ref _fwdAdc, fwdAdc);
         ApplySmoothed(ref _refAdc, refAdc);
+        TrackPeak(ref _fwdAdcPeak, fwdAdc);
+        TrackPeak(ref _refAdcPeak, refAdc);
+    }
+
+    // Hold the highest raw ADC seen since the last publish-tick reset. Called
+    // on every incoming telemetry sample. Lock-free against the publish reader
+    // because the writer side runs only on the radio RX thread; cross-thread
+    // visibility is taken care of by the _sync lock used at publish time.
+    private void TrackPeak(ref ushort state, ushort raw)
+    {
+        if (raw > state) state = raw;
     }
 
     private void ApplySmoothed(ref double state, ushort raw)
@@ -287,8 +325,23 @@ public sealed class TxMetersService : BackgroundService
                 if (mox)
                 {
                     double fwdAdc, refAdc;
-                    lock (_sync) { fwdAdc = _fwdAdc; refAdc = _refAdc; }
-                    var (fwdW, refW, swrVal) = ComputeMeters(fwdAdc, refAdc, _cal);
+                    lock (_sync)
+                    {
+                        // Use the peak ADC seen since the previous publish
+                        // tick rather than the smoothed value — voice peaks
+                        // are 100-200 ms but our publish cadence is 100 ms,
+                        // and a hardware peak-reading wattmeter (LP-100A) is
+                        // what the operator compares against. Fall back to
+                        // the smoothed value if no new sample arrived in
+                        // this tick (radio quiescence) so the bar doesn't
+                        // collapse to zero between hi-pri packets.
+                        fwdAdc = _fwdAdcPeak > 0 ? _fwdAdcPeak : _fwdAdc;
+                        refAdc = _refAdcPeak > 0 ? _refAdcPeak : _refAdc;
+                        _fwdAdcPeak = 0;
+                        _refAdcPeak = 0;
+                    }
+                    var cal = RadioCalibrations.For(_radio.ConnectedBoardKind);
+                    var (fwdW, refW, swrVal) = ComputeMeters(fwdAdc, refAdc, cal);
                     swr = swrVal;
                     // Stage meters are published by WdspDspEngine.ProcessTxBlock;
                     // may lag the first TX block by a few ticks at MOX-on, which
@@ -503,6 +556,8 @@ public sealed class TxMetersService : BackgroundService
         {
             _fwdAdc = 0;
             _refAdc = 0;
+            _fwdAdcPeak = 0;
+            _refAdcPeak = 0;
             _paTempAdc = 0;
             _seenPaTempSample = false;
             _seenSample = false;
@@ -512,5 +567,42 @@ public sealed class TxMetersService : BackgroundService
         // sample fires a PaTempFrame immediately instead of waiting out
         // the previous session's 500 ms window.
         _lastPaTempBroadcastAtUtc = DateTime.MinValue;
+    }
+
+    /// <summary>
+    /// Hi-priority status (UDP 1025) handler for Protocol 2. The packet
+    /// already carries FWD/REF as 16-bit ADC values matched to the same
+    /// per-board RadioCalibration tables the P1 path uses, so we route both
+    /// axes through OnTelemetryRaw. PA temperature on G2 lives on a
+    /// different ADC slot and isn't decoded yet — separate task.
+    ///
+    /// Runs on the Protocol2Client RX thread; OnTelemetryRaw takes _sync.
+    /// </summary>
+    public void OnP2Telemetry(Zeus.Protocol2.P2TelemetryReading reading)
+    {
+        OnTelemetryRaw(reading.FwdAdc, reading.RevAdc);
+    }
+
+    private void OnP2Connected(Zeus.Protocol2.Protocol2Client client)
+    {
+        _subscribedP2Client = client;
+        client.TelemetryReceived += OnP2Telemetry;
+        _log.LogInformation("tx.meters subscribed to p2 hi-priority telemetry");
+    }
+
+    private void OnP2Disconnected()
+    {
+        var client = _subscribedP2Client;
+        _subscribedP2Client = null;
+        if (client is not null) client.TelemetryReceived -= OnP2Telemetry;
+        lock (_sync)
+        {
+            _fwdAdc = 0;
+            _refAdc = 0;
+            _fwdAdcPeak = 0;
+            _refAdcPeak = 0;
+            _seenSample = false;
+            _swrAboveThresholdSince = null;
+        }
     }
 }

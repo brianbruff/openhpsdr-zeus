@@ -201,7 +201,7 @@ public sealed class RadioService : IDisposable
             Endpoint: null,
             VfoHz: 14_200_000,
             Mode: RxMode.USB,
-            FilterLowHz: 150,
+            FilterLowHz: 100,
             FilterHighHz: 2850,
             SampleRate: 192_000,
             AgcTopDb: 80.0,
@@ -211,7 +211,7 @@ public sealed class RadioService : IDisposable
             AutoAttEnabled: true,
             AttOffsetDb: 0,
             AdcOverloadWarning: false,
-            // Zeus default filter (150/2850) maps to the seeded USB VAR1 slot.
+            // Zeus default filter (100/2850) maps to the seeded USB VAR1 slot.
             FilterPresetName: "VAR1",
             FilterAdvancedPaneOpen: filterPresetStore?.GetAdvancedPaneOpen() ?? false,
             // PS persisted fields (or DTO defaults when not persisted yet).
@@ -425,7 +425,10 @@ public sealed class RadioService : IDisposable
     private FamilyFilter _ssbFilter = new(150, 2850);
     private FamilyFilter _amFilter = new(0, 4000);
     private FamilyFilter _fmFilter = new(0, 5500);
-    private FamilyFilter _cwFilter = new(0, 125);
+    // CW abs values include the cw_pitch offset (Thetis F6 250 Hz preset:
+    // pitch=600, half=125 → 475..725). SignedFilterForMode keeps them as
+    // (+475,+725) for CWU and mirrors to (-725,-475) for CWL.
+    private FamilyFilter _cwFilter = new(475, 725);
 
     // TX-side per-family filter memory. Thetis stores a single TX filter Lo/Hi
     // (setup.cs:5029-5066); pihpsdr uses hardcoded per-mode shapes
@@ -433,11 +436,11 @@ public sealed class RadioService : IDisposable
     // operator's USB TX width survives an AM round-trip, and LSB/USB share
     // absolute values with sign flipped at apply time. Defaults track Thetis
     // stock: SSB 150-2850, AM/DSB 0-4000, FM 0-3000 (Thetis narrowest FM TX
-    // is 3 kHz half-width), CW 0-150 (150 Hz around cw_pitch is plenty).
+    // is 3 kHz half-width), CW 475-725 (250 Hz around cw_pitch=600).
     private FamilyFilter _ssbTxFilter = new(150, 2850);
     private FamilyFilter _amTxFilter = new(0, 4000);
     private FamilyFilter _fmTxFilter = new(0, 3000);
-    private FamilyFilter _cwTxFilter = new(0, 150);
+    private FamilyFilter _cwTxFilter = new(475, 725);
 
     public StateDto SetMode(RxMode mode)
     {
@@ -489,14 +492,22 @@ public sealed class RadioService : IDisposable
     {
         if (highHz < lowHz) (lowHz, highHz) = (highHz, lowHz);
         RxMode modeAtSet = RxMode.USB;
+        string? resolvedName = presetName;
         Mutate(s =>
         {
             modeAtSet = s.Mode;
-            if (presetName != null) _lastPresetPerMode[s.Mode] = presetName;
-            return s with { FilterLowHz = lowHz, FilterHighHz = highHz, FilterPresetName = presetName };
+            // Normalize the slot name: if (low,high) exactly matches a non-VAR
+            // preset for this mode, use that slot's name regardless of what the
+            // caller passed. Prevents dual selection where a stored VAR happens
+            // to equal a standard preset width and edges.
+            var match = FilterPresets.DefaultsForMode(s.Mode)
+                .FirstOrDefault(e => !e.IsVar && e.LowHz == lowHz && e.HighHz == highHz);
+            if (match is not null) resolvedName = match.SlotName;
+            if (resolvedName != null) _lastPresetPerMode[s.Mode] = resolvedName;
+            return s with { FilterLowHz = lowHz, FilterHighHz = highHz, FilterPresetName = resolvedName };
         });
-        if (presetName != null)
-            _filterPresetStore?.UpsertLastSelectedPreset(modeAtSet, presetName);
+        if (resolvedName != null)
+            _filterPresetStore?.UpsertLastSelectedPreset(modeAtSet, resolvedName);
         return Snapshot();
     }
 
@@ -607,7 +618,15 @@ public sealed class RadioService : IDisposable
             RxMode.DIGL => (-hiAbs, 0),
             RxMode.AM or RxMode.SAM or RxMode.DSB => (-hiAbs, +hiAbs),
             RxMode.FM => (-hiAbs, +hiAbs),
-            RxMode.CWL or RxMode.CWU => (-hiAbs, +hiAbs),
+            // CW is sideband-keyed: CWU sits in the positive baseband around
+            // +cw_pitch, CWL in the negative around -cw_pitch. WDSP groups
+            // CWU with USB and CWL with LSB inside ApplyBandpassForMode, so
+            // the absolute family-filter values already include the cw_pitch
+            // offset (see FilterPresets.Cwu/Cwl: low/high = ±(pitch ± half)).
+            // A symmetric (-hi,+hi) signing here would collapse the passband
+            // to (hi,hi) after WDSP's abs-and-sort, killing CW audio.
+            RxMode.CWU => (+loAbs, +hiAbs),
+            RxMode.CWL => (-hiAbs, -loAbs),
             _ => (+loAbs, +hiAbs),
         };
     }

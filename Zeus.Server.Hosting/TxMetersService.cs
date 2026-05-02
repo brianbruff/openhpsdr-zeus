@@ -133,6 +133,16 @@ public sealed class TxMetersService : BackgroundService
     private readonly object _sync = new();
     private double _fwdAdc;
     private double _refAdc;
+    // Peak-hold ADC tracking between publish ticks. The radio sends
+    // hi-priority status at hundreds of Hz on P2 (G2 MkII observed at ~820
+    // pkts/s) but we publish to the UI at only 10 Hz; voice peaks lasting
+    // 100-200 ms fall between publish ticks and the bar reads the
+    // inter-syllable average (~3× low vs an analog peak-reading wattmeter
+    // like an LP-100A). Tracking max ADC seen since last publish gives the
+    // UI a meter that catches transients the way a hardware peak-reading
+    // wattmeter does. Reset to 0 every publish tick.
+    private ushort _fwdAdcPeak;
+    private ushort _refAdcPeak;
     // PA temperature smoothed ADC and first-sample flag — separate from
     // _seenSample because temperature arrives on a different slot and may
     // show up before / after the FWD-REF pair on any given packet.
@@ -199,6 +209,7 @@ public sealed class TxMetersService : BackgroundService
         {
             case C0AddrAlexFwd:
                 ApplySmoothed(ref _fwdAdc, reading.Ain1);
+                TrackPeak(ref _fwdAdcPeak, reading.Ain1);
                 // Ain0 on this slot is the HL2 Q6 temperature ADC. Smooth
                 // with the same α as FWD/REF so the UI sees a stable reading
                 // instead of ADC jitter.
@@ -206,6 +217,7 @@ public sealed class TxMetersService : BackgroundService
                 break;
             case C0AddrAlexRef:
                 ApplySmoothed(ref _refAdc, reading.Ain0);
+                TrackPeak(ref _refAdcPeak, reading.Ain0);
                 break;
             default:
                 // Other echo slots (ADC bias, exciter/temp) aren't part of the
@@ -221,6 +233,17 @@ public sealed class TxMetersService : BackgroundService
     {
         ApplySmoothed(ref _fwdAdc, fwdAdc);
         ApplySmoothed(ref _refAdc, refAdc);
+        TrackPeak(ref _fwdAdcPeak, fwdAdc);
+        TrackPeak(ref _refAdcPeak, refAdc);
+    }
+
+    // Hold the highest raw ADC seen since the last publish-tick reset. Called
+    // on every incoming telemetry sample. Lock-free against the publish reader
+    // because the writer side runs only on the radio RX thread; cross-thread
+    // visibility is taken care of by the _sync lock used at publish time.
+    private void TrackPeak(ref ushort state, ushort raw)
+    {
+        if (raw > state) state = raw;
     }
 
     private void ApplySmoothed(ref double state, ushort raw)
@@ -302,7 +325,21 @@ public sealed class TxMetersService : BackgroundService
                 if (mox)
                 {
                     double fwdAdc, refAdc;
-                    lock (_sync) { fwdAdc = _fwdAdc; refAdc = _refAdc; }
+                    lock (_sync)
+                    {
+                        // Use the peak ADC seen since the previous publish
+                        // tick rather than the smoothed value — voice peaks
+                        // are 100-200 ms but our publish cadence is 100 ms,
+                        // and a hardware peak-reading wattmeter (LP-100A) is
+                        // what the operator compares against. Fall back to
+                        // the smoothed value if no new sample arrived in
+                        // this tick (radio quiescence) so the bar doesn't
+                        // collapse to zero between hi-pri packets.
+                        fwdAdc = _fwdAdcPeak > 0 ? _fwdAdcPeak : _fwdAdc;
+                        refAdc = _refAdcPeak > 0 ? _refAdcPeak : _refAdc;
+                        _fwdAdcPeak = 0;
+                        _refAdcPeak = 0;
+                    }
                     var cal = RadioCalibrations.For(_radio.ConnectedBoardKind);
                     var (fwdW, refW, swrVal) = ComputeMeters(fwdAdc, refAdc, cal);
                     swr = swrVal;
@@ -519,6 +556,8 @@ public sealed class TxMetersService : BackgroundService
         {
             _fwdAdc = 0;
             _refAdc = 0;
+            _fwdAdcPeak = 0;
+            _refAdcPeak = 0;
             _paTempAdc = 0;
             _seenPaTempSample = false;
             _seenSample = false;
@@ -560,6 +599,8 @@ public sealed class TxMetersService : BackgroundService
         {
             _fwdAdc = 0;
             _refAdc = 0;
+            _fwdAdcPeak = 0;
+            _refAdcPeak = 0;
             _seenSample = false;
             _swrAboveThresholdSince = null;
         }

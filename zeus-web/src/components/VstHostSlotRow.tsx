@@ -25,11 +25,16 @@ type Props = {
   // Disabled when the master toggle is off — controls become read-only
   // hints. Load and parameter edits would just fail at the seam anyway.
   disabled: boolean;
+  // True when the operator's browser is reaching Zeus from a different
+  // machine. Plugin GUIs open on the server's display, so loading,
+  // editing, and parameter sliders are all hidden in that case; Bypass
+  // stays available because it's a useful remote kill-switch.
+  remote?: boolean;
   // Opens the plugin browser scoped to "load into this slot N".
   onRequestLoad: (index: number) => void;
 };
 
-export function VstHostSlotRow({ index, disabled, onRequestLoad }: Props) {
+export function VstHostSlotRow({ index, disabled, remote = false, onRequestLoad }: Props) {
   const slot = useVstHostStore((s) => s.master.slots[index]);
   const editor = useVstHostStore((s) => s.editors.get(index));
   const error = useVstHostStore((s) => s.slotErrors.get(index) ?? null);
@@ -92,7 +97,7 @@ export function VstHostSlotRow({ index, disabled, onRequestLoad }: Props) {
           {index + 1}
         </span>
 
-        {loaded && slot.plugin ? (
+        {loaded && slot.plugin && !remote ? (
           <button
             type="button"
             aria-label={expanded ? 'Collapse parameters' : 'Expand parameters'}
@@ -181,7 +186,7 @@ export function VstHostSlotRow({ index, disabled, onRequestLoad }: Props) {
               />
               Bypass
             </label>
-            {hasNativeEditor ? (
+            {!remote && hasNativeEditor ? (
               <button
                 type="button"
                 className="btn sm"
@@ -202,16 +207,18 @@ export function VstHostSlotRow({ index, disabled, onRequestLoad }: Props) {
                 {editorOpen ? 'CLOSE' : 'EDIT'}
               </button>
             ) : null}
-            <button
-              type="button"
-              className="btn sm"
-              disabled={disabled}
-              onClick={() => void unloadSlot(index)}
-            >
-              UNLOAD
-            </button>
+            {!remote ? (
+              <button
+                type="button"
+                className="btn sm"
+                disabled={disabled}
+                onClick={() => void unloadSlot(index)}
+              >
+                UNLOAD
+              </button>
+            ) : null}
           </>
-        ) : (
+        ) : !remote ? (
           <button
             type="button"
             className="btn sm"
@@ -220,7 +227,7 @@ export function VstHostSlotRow({ index, disabled, onRequestLoad }: Props) {
           >
             LOAD
           </button>
-        )}
+        ) : null}
       </div>
 
       {editorOpen && editor && editor.width > 0 ? (

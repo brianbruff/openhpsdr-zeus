@@ -15,6 +15,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
 import { VstHostSubmenu } from './VstHostSubmenu';
+import { useCapabilitiesStore } from '../state/capabilities-store';
 import { useVstHostStore } from '../state/vst-host-store';
 import { VST_HOST_SLOT_COUNT } from '../api/vst-host';
 
@@ -66,12 +67,31 @@ function resetStore() {
   });
 }
 
+function seedCapabilities(localToServer: boolean) {
+  useCapabilitiesStore.setState({
+    loaded: true,
+    inflight: false,
+    loadError: null,
+    capabilities: {
+      host: localToServer ? 'desktop' : 'server',
+      platform: 'linux',
+      architecture: 'x64',
+      version: 'test',
+      features: {
+        vstHost: { available: true, reason: null, sidecarPath: '/x' },
+      },
+    },
+    localToServer,
+  });
+}
+
 describe('VstHostSubmenu', () => {
   let container: HTMLDivElement;
   let root: Root;
 
   beforeEach(() => {
     resetStore();
+    seedCapabilities(true);
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -96,6 +116,33 @@ describe('VstHostSubmenu', () => {
     // 8 slot rows render even with master OFF (visible-but-disabled).
     const slotLabels = container.querySelectorAll('[aria-label^="VST slot "]');
     expect(slotLabels.length).toBe(VST_HOST_SLOT_COUNT);
+  });
+
+  it('shows BROWSE PLUGINS when local to the server (desktop host)', () => {
+    act(() => {
+      root.render(<VstHostSubmenu />);
+    });
+    expect(container.textContent).toContain('BROWSE PLUGINS');
+    // The remote-mode notice must not be visible.
+    expect(container.textContent).not.toContain(
+      'editable only from the server console',
+    );
+  });
+
+  it('hides BROWSE PLUGINS and shows the remote-mode notice when not local', () => {
+    seedCapabilities(false);
+    act(() => {
+      root.render(<VstHostSubmenu />);
+    });
+    expect(container.textContent).not.toContain('BROWSE PLUGINS');
+    expect(container.textContent).toContain(
+      'editable only from the server console',
+    );
+    // The master toggle stays available even when remote.
+    const checkbox = container.querySelector(
+      'input[type="checkbox"][aria-label="Toggle VST chain"]',
+    );
+    expect(checkbox).toBeTruthy();
   });
 
   it('toggling the master checkbox calls /api/plughost/master', async () => {

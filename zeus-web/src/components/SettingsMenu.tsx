@@ -19,7 +19,7 @@
 // (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
 // Both are GPL-2.0-or-later.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { PaSettingsPanel } from './PaSettingsPanel';
 import { AboutPanel } from './AboutPanel';
 import { DisplayPanel } from './DisplayPanel';
@@ -29,6 +29,7 @@ import { ServerUrlPanel } from './ServerUrlPanel';
 import { TciSettingsPanel } from './TciSettingsPanel';
 import { RadioSelector } from './RadioSelector';
 import { usePaStore } from '../state/pa-store';
+import { useCapabilitiesStore } from '../state/capabilities-store';
 import { PsSettingsPanel } from './PsSettingsPanel';
 import { TxAudioToolsPanel } from './TxAudioToolsPanel';
 
@@ -43,7 +44,7 @@ type TabId =
   | 'server'
   | 'about';
 
-const TABS: ReadonlyArray<{ id: TabId; label: string }> = [
+const ALL_TABS: ReadonlyArray<{ id: TabId; label: string }> = [
   { id: 'pa', label: 'PA SETTINGS' },
   { id: 'ps', label: 'PURESIGNAL' },
   { id: 'tx-audio', label: 'TX AUDIO TOOLS' },
@@ -70,6 +71,27 @@ export function SettingsMenu({ open, onClose, initialTab }: Props) {
   const savePa = usePaStore((s) => s.save);
   const loadPa = usePaStore((s) => s.load);
   const paInflight = usePaStore((s) => s.inflight);
+  // Feature gates. The TX Audio Tools tab is hidden when the VST host is
+  // not available — today that means non-Linux builds and Linux builds
+  // missing the zeus-plughost sidecar binary. Hiding (rather than
+  // disabling) is deliberate: the operator can't act on a disabled tab
+  // until the platform ships its own sidecar.
+  const vstHostAvailable = useCapabilitiesStore(
+    (s) => s.capabilities?.features.vstHost.available ?? false,
+  );
+  const TABS = useMemo(
+    () => ALL_TABS.filter((t) => t.id !== 'tx-audio' || vstHostAvailable),
+    [vstHostAvailable],
+  );
+
+  // If the active tab gets filtered out (e.g. the operator was on
+  // tx-audio when the capabilities response came back saying it's
+  // unavailable), fall back to the first tab.
+  useEffect(() => {
+    if (!TABS.some((t) => t.id === active)) {
+      setActive(TABS[0]?.id ?? 'pa');
+    }
+  }, [TABS, active]);
 
   const handleApply = async () => {
     await savePa();

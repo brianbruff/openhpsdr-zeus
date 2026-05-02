@@ -36,6 +36,31 @@ public static class SidecarLocator
             : "zeus-plughost";
 
     /// <summary>
+    /// Result of a non-spawning probe for the sidecar binary.
+    /// </summary>
+    /// <param name="Path">Resolved binary path, or null if not found.</param>
+    /// <param name="MissingReason">
+    /// Operator-facing explanation when <paramref name="Path"/> is null
+    /// (e.g. "sidecar binary 'zeus-plughost' was not found"). Null on success.
+    /// </param>
+    public readonly record struct ProbeResult(string? Path, string? MissingReason);
+
+    /// <summary>
+    /// Like <see cref="Locate"/>, but never logs a warning on a miss and
+    /// returns a structured reason for the capabilities endpoint to expose.
+    /// Safe to call at startup before the sidecar has ever been launched.
+    /// </summary>
+    public static ProbeResult Probe()
+    {
+        var path = Locate(NullPluginHostLog.Instance);
+        if (path != null) return new ProbeResult(path, null);
+        return new ProbeResult(
+            null,
+            $"Sidecar binary '{BinaryName}' was not found via {EnvVarName}, " +
+            "sibling checkout, or PATH.");
+    }
+
+    /// <summary>
     /// Resolve the sidecar path, or return <c>null</c> if no candidate is
     /// found. Callers (PluginHostManager) decide how to surface the
     /// missing-binary case to the operator.

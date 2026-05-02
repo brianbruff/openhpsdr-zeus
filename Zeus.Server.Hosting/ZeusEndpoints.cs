@@ -34,6 +34,12 @@ public static class ZeusEndpoints
             return Results.Ok(new { version });
         });
 
+        // Capabilities snapshot — host-mode + platform + feature gates.
+        // Frontend fetches once on app mount and hides UI for unavailable
+        // features (e.g. TX Audio Tools when vstHost.available=false).
+        app.MapGet("/api/capabilities",
+            (CapabilitiesService caps) => Results.Ok(caps.Snapshot()));
+
         app.MapGet("/api/state", (RadioService r) => r.Snapshot());
 
         // TX diagnostic — exposes the producer/consumer counts for the mic-to-IQ ring

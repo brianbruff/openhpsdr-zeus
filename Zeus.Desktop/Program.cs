@@ -26,6 +26,7 @@ using Zeus.Server;
 // no TOCTOU race with a concurrent listener.
 var hostOptions = new ZeusHostOptions
 {
+    HostMode = ZeusHostMode.Desktop,
     HttpPort = 0,
     BindAllInterfaces = false,
     UseHttpsLanCert = false,

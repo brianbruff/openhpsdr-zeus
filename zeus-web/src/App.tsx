@@ -103,6 +103,7 @@ import { useTxStore } from './state/tx-store';
 import { useLayoutPreferenceStore } from './state/layout-preference-store';
 import { useLayoutStore } from './state/layout-store';
 import { useDisplaySettingsStore } from './state/display-settings-store';
+import { useCapabilitiesStore } from './state/capabilities-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
 import { SpectrumWheelActionsContext, type SpectrumWheelActions } from './util/use-pan-tune-gesture';
 import { registerServiceWorker } from './service-worker/registerSW';
@@ -156,6 +157,14 @@ export default function App() {
     return () => {
       stop();
     };
+  }, []);
+
+  // Fetch host capabilities once on mount. The backend snapshot is built
+  // at startup and doesn't change at runtime, so a single fetch is enough;
+  // failures fall back to "no features available" which hides feature-gated
+  // UI rather than rendering broken controls.
+  useEffect(() => {
+    void useCapabilitiesStore.getState().refresh();
   }, []);
 
   useEffect(() => {

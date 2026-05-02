@@ -125,6 +125,54 @@ describe('VstHostSlotRow', () => {
     expect(container.textContent).toContain('Bypass');
   });
 
+  it('remote mode hides LOAD on empty slots', () => {
+    act(() => {
+      root.render(
+        <VstHostSlotRow
+          index={0}
+          disabled={false}
+          remote={true}
+          onRequestLoad={() => {}}
+        />,
+      );
+    });
+    const labels = Array.from(container.querySelectorAll('button')).map(
+      (b) => b.textContent?.trim() ?? '',
+    );
+    expect(labels).not.toContain('LOAD');
+  });
+
+  it('remote mode keeps Bypass but hides EDIT/UNLOAD on loaded slots', () => {
+    withSlotPatched(1, {
+      plugin: {
+        name: 'TestEQ',
+        vendor: 'Acme',
+        version: '1.0',
+        path: '/p/eq.vst3',
+      },
+      parameterCount: 3,
+    });
+
+    act(() => {
+      root.render(
+        <VstHostSlotRow
+          index={1}
+          disabled={false}
+          remote={true}
+          onRequestLoad={() => {}}
+        />,
+      );
+    });
+
+    expect(container.textContent).toContain('TestEQ');
+    expect(container.textContent).toContain('Bypass');
+    const labels = Array.from(container.querySelectorAll('button')).map(
+      (b) => b.textContent?.trim() ?? '',
+    );
+    expect(labels).not.toContain('EDIT');
+    expect(labels).not.toContain('UNLOAD');
+  });
+
   it('clicking UNLOAD POSTs /api/plughost/slots/N/unload', async () => {
     withSlotPatched(0, {
       plugin: { name: 'EQ', vendor: 'V', version: '1', path: '/p' },

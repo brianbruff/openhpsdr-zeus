@@ -204,6 +204,14 @@ public static class ZeusHost
         builder.Services.AddSingleton<VstHostHostedService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<VstHostHostedService>());
 
+        // Capabilities snapshot for /api/capabilities. Captures host-mode,
+        // platform, and feature gates (currently just vstHost) once at
+        // construction. The frontend uses this to hide unsupported UI
+        // (e.g. TX Audio Tools tab on macOS/Windows where the C++ sidecar
+        // binary isn't shipped yet).
+        builder.Services.AddSingleton(options);
+        builder.Services.AddSingleton<CapabilitiesService>();
+
         // TCI (Transceiver Control Interface) — ExpertSDR3-compatible WebSocket server
         // for remote control by loggers (Log4OM, N1MM+), digital-mode apps (JTDX, WSJT-X),
         // and SDR display tools. Disabled by default; enable via appsettings.json Tci:Enabled=true.

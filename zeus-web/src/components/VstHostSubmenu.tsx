@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { setTxMonitor } from '../api/client';
+import { useCapabilitiesStore } from '../state/capabilities-store';
 import { useTxStore } from '../state/tx-store';
 import { useVstHostStore } from '../state/vst-host-store';
 import { VST_HOST_SLOT_COUNT } from '../api/vst-host';
@@ -41,6 +42,14 @@ export function VstHostSubmenu() {
   // While a master-toggle POST is in flight, lock the toggle so a second
   // click doesn't race the first.
   const [masterPending, setMasterPending] = useState(false);
+
+  // Plugin GUIs open as native OS windows on the host running Zeus. When
+  // the operator's browser is on a different machine we hide the chain
+  // editor (load / unload / edit / parameter sliders) and the catalog
+  // browser, but keep the master toggle and per-slot Bypass — those are
+  // operationally important kill-switches that don't depend on the
+  // plugin's editor being on screen.
+  const localToServer = useCapabilitiesStore((s) => s.localToServer);
 
   // TX Monitor — audition path so the operator can hear the chain output
   // (post-bandpass / post-CFIR demod) at the actual TX bandwidth without
@@ -139,13 +148,15 @@ export function VstHostSubmenu() {
           <span className={`led ${txMonitorOn ? 'tx' : ''}`} style={{ marginRight: 8 }} />
           MONITOR
         </button>
-        <button
-          type="button"
-          className="btn sm"
-          onClick={() => setBrowserSlot(-1)}
-        >
-          BROWSE PLUGINS
-        </button>
+        {localToServer ? (
+          <button
+            type="button"
+            className="btn sm"
+            onClick={() => setBrowserSlot(-1)}
+          >
+            BROWSE PLUGINS
+          </button>
+        ) : null}
       </header>
 
       <p style={{ margin: 0, fontSize: 11, color: 'var(--fg-2)' }}>
@@ -153,6 +164,23 @@ export function VstHostSubmenu() {
         bypassed when the master toggle is off. Plugin editors open as
         native OS windows on this device — not inside the browser.
       </p>
+
+      {!localToServer ? (
+        <div
+          style={{
+            fontSize: 11,
+            color: 'var(--fg-2)',
+            background: 'var(--bg-2)',
+            border: '1px solid var(--panel-border)',
+            borderRadius: 4,
+            padding: '6px 8px',
+          }}
+        >
+          Plugin chain is editable only from the server console. You can
+          enable, disable, or bypass slots from here; loading plugins and
+          editing parameters requires being at the host running Zeus.
+        </div>
+      ) : null}
 
       {loadError ? (
         <div style={{ fontSize: 11, color: 'var(--tx)' }}>
@@ -206,6 +234,7 @@ export function VstHostSubmenu() {
             key={i}
             index={i}
             disabled={slotsDisabled}
+            remote={!localToServer}
             onRequestLoad={(idx) => setBrowserSlot(idx)}
           />
         ))}

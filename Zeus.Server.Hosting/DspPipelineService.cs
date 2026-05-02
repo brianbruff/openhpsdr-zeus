@@ -325,6 +325,21 @@ public class DspPipelineService : BackgroundService
         RaiseEngineChanged(wdsp);
 
         StartIqPump(client);
+        StartPsFeedbackPumpP1(client);
+        // Force the next OnRadioStateChanged to re-push every PS field into
+        // the freshly-opened WdspDspEngine instance — same rationale as the
+        // P2 reconnect path. Without this, a P1 reconnect leaves the engine
+        // sitting at field defaults (hwPeak=0.4072) and calcc never sees
+        // the operator's HL2 0.233 / hardware-correct numbers.
+        _psResyncRequired = true;
+        _appliedTxMonitorEnabled = false;
+        // Apply the per-board PS HW peak default so the engine sees the
+        // right curve scale before the operator arms PS. Mirrors P2's
+        // ApplyPsHwPeakForConnection call. ConnectedBoardKind returns the
+        // currently-active board (HL2, Hermes, ANAN-class…) — the value
+        // is per-board (HL2 → 0.233, others → 0.4072) and only fires a
+        // StateChanged when the value actually changes.
+        _radio.ApplyPsHwPeakForConnection(isProtocol2: false, _radio.ConnectedBoardKind);
     }
 
     private void OnRadioDisconnected()
@@ -483,13 +498,20 @@ public class DspPipelineService : BackgroundService
             //
             // Task.Delay(100).Wait() is acceptable here — OnRadioStateChanged
             // runs on a state-change handler thread, not the request path.
-            // TODO(ps-p1): when P1 PS lands, dispatch to _radio.ActiveClient
-            // here too (the P1 client gains a SetPuresignal(bool) sibling
-            // — see hermes.md item 4b). Today the P1 ActiveClient receives
-            // no PS bit and the frontend gates the PS toggle off on P1.
+            //
+            // P1 sibling (issue #172): the active P1 client gets the same
+            // arm/disarm sequencing — flip the wire bit (which also
+            // bumps NumReceiversMinusOne in the next Config frame so the
+            // gateware switches to the 2-DDC paired layout), wait the
+            // same 100 ms settle window, then arm the engine. On a
+            // non-HL2 P1 board this is harmless: SetPsEnabled stores the
+            // flag locally and the C0=0x14 wire byte is unaffected
+            // (board-gated in WriteAttenuatorPayload).
+            var p1Active = _radio.ActiveClient;
             if (s.PsEnabled)
             {
                 _p2Client?.SetPsFeedbackEnabled(true);
+                p1Active?.SetPsEnabled(true);
                 try { Task.Delay(100).Wait(); } catch { /* ignore */ }
                 engine.SetPsEnabled(true);
             }
@@ -497,6 +519,7 @@ public class DspPipelineService : BackgroundService
             {
                 engine.SetPsEnabled(false);
                 _p2Client?.SetPsFeedbackEnabled(false);
+                p1Active?.SetPsEnabled(false);
                 DrainPsFeedback();
             }
             _appliedPsEnabled = s.PsEnabled;
@@ -716,6 +739,41 @@ public class DspPipelineService : BackgroundService
         }, cts.Token);
     }
 
+    /// <summary>
+    /// HL2 / Protocol-1 sibling of <see cref="StartPsFeedbackPumpP2"/>.
+    /// Reads 1024-sample paired blocks emitted by the
+    /// <see cref="IProtocol1Client.PsFeedbackFrames"/> channel and pushes
+    /// them into WDSP's <c>psccF</c> via the engine's
+    /// <c>FeedPsFeedbackBlock</c>. Same lifecycle as the P2 pump:
+    /// started on connect, stopped on disconnect — NOT gated on PsEnabled,
+    /// because the radio sends paired frames whenever the wire bit is
+    /// set and the engine drops blocks internally when SetPsRunCal is 0
+    /// (see lessons_puresignal_convergence_g2_mkii.md). Issue #172.
+    /// </summary>
+    private void StartPsFeedbackPumpP1(IProtocol1Client client)
+    {
+        var cts = new CancellationTokenSource();
+        _psFeedbackPumpCts = cts;
+        _psFeedbackPumpTask = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var frame in client.PsFeedbackFrames.ReadAllAsync(cts.Token).ConfigureAwait(false))
+                {
+                    IDspEngine? engine;
+                    lock (_engineLock) { engine = _engine; }
+                    engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (ChannelClosedException) { }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "dsp.pipeline p1 ps-feedback-pump exited with error");
+            }
+        }, cts.Token);
+    }
+
     private async Task StopPsFeedbackPumpAsync()
     {
         var cts = _psFeedbackPumpCts;
@@ -735,13 +793,23 @@ public class DspPipelineService : BackgroundService
     // Best-effort drain of in-flight paired frames after PS disarm. Called
     // synchronously from OnRadioStateChanged so by the time the next state
     // change tries to re-arm, the channel is empty. The pump task itself is
-    // not stopped — only the buffered backlog is drained.
+    // not stopped — only the buffered backlog is drained. Drains either
+    // active client (P1 or P2 — only one is non-null at a time).
     private void DrainPsFeedback()
     {
-        var client = _p2Client;
-        if (client is null) return;
-        var reader = client.PsFeedbackFrames;
-        while (reader.TryRead(out _)) { }
+        var p2 = _p2Client;
+        if (p2 is not null)
+        {
+            var reader = p2.PsFeedbackFrames;
+            while (reader.TryRead(out _)) { }
+            return;
+        }
+        var p1 = _radio.ActiveClient;
+        if (p1 is not null)
+        {
+            var reader = p1.PsFeedbackFrames;
+            while (reader.TryRead(out _)) { }
+        }
     }
 
     /// <summary>

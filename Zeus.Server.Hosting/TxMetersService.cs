@@ -154,11 +154,22 @@ public sealed class TxMetersService : BackgroundService
         // (Protocol1 → Server) and carries only AIN readings.
         radio.Connected += OnConnected;
         radio.Disconnected += OnDisconnected;
+        // Mirror the same subscribe/detach dance for Protocol-2 so
+        // hi-priority status (UDP 1025) feeds the same FWD/REF smoothing
+        // path as P1 alex telemetry. Issue #174 — without this hook, a
+        // G2 / ANAN-class radio's TX power meter sits at zero.
+        radio.P2Connected += OnP2Connected;
+        radio.P2Disconnected += OnP2Disconnected;
     }
 
     // Holds the last subscribed client so OnDisconnected can detach the
     // TelemetryReceived handler once the Protocol1 surface lands.
     private Zeus.Protocol1.IProtocol1Client? _subscribedClient;
+    // Same idea, P2 side. Tracked separately so a P1 disconnect doesn't
+    // accidentally detach a P2 handler (the two protocols can't be live at
+    // the same time, but the events are independent and this keeps the
+    // coupling clean).
+    private Zeus.Protocol2.Protocol2Client? _subscribedP2Client;
 
     // HL2 C&C-echo addresses that carry the alex FWD/REF ADCs and the PA
     // temperature (see TelemetryReading docs in Zeus.Protocol1).
@@ -512,5 +523,40 @@ public sealed class TxMetersService : BackgroundService
         // sample fires a PaTempFrame immediately instead of waiting out
         // the previous session's 500 ms window.
         _lastPaTempBroadcastAtUtc = DateTime.MinValue;
+    }
+
+    /// <summary>
+    /// Hi-priority status (UDP 1025) handler for Protocol 2. The packet
+    /// already carries FWD/REF as 16-bit ADC values matched to the same
+    /// per-board RadioCalibration tables the P1 path uses, so we route both
+    /// axes through OnTelemetryRaw. PA temperature on G2 lives on a
+    /// different ADC slot and isn't decoded yet — separate task.
+    ///
+    /// Runs on the Protocol2Client RX thread; OnTelemetryRaw takes _sync.
+    /// </summary>
+    public void OnP2Telemetry(Zeus.Protocol2.P2TelemetryReading reading)
+    {
+        OnTelemetryRaw(reading.FwdAdc, reading.RevAdc);
+    }
+
+    private void OnP2Connected(Zeus.Protocol2.Protocol2Client client)
+    {
+        _subscribedP2Client = client;
+        client.TelemetryReceived += OnP2Telemetry;
+        _log.LogInformation("tx.meters subscribed to p2 hi-priority telemetry");
+    }
+
+    private void OnP2Disconnected()
+    {
+        var client = _subscribedP2Client;
+        _subscribedP2Client = null;
+        if (client is not null) client.TelemetryReceived -= OnP2Telemetry;
+        lock (_sync)
+        {
+            _fwdAdc = 0;
+            _refAdc = 0;
+            _seenSample = false;
+            _swrAboveThresholdSince = null;
+        }
     }
 }

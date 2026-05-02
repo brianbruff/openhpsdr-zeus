@@ -67,7 +67,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // some firmwares pad to a longer length. Gate on "at least byte 19 valid"
     // — that's the highest offset the FWD/REV/exciter decode touches — so we
     // do not silently drop a short packet that still carries the meter ADCs.
-    private const int HiPriStatusMinBytes = 20;
+    // 4-byte BE u32 P2 sequence header that prefixes every UDP packet, plus
+    // the 20-byte hi-pri field range we actually decode (PTT/PLL @ +0,
+    // exciter @ +2, FWD @ +10, REV @ +18). Real radios send 60-byte packets;
+    // the guard is the minimum we need to safely read every field.
+    private const int HiPriSeqHeaderBytes = 4;
+    private const int HiPriStatusMinBytes = HiPriSeqHeaderBytes + 20;
 
     // On ANAN G2 MkII (Orion-II / Saturn) the first two DDC slots are wired
     // to the PureSignal / diversity feedback path. User-visible receivers
@@ -1071,7 +1076,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// </summary>
     private void HandleHiPriStatusPacket(byte[] buf)
     {
-        var reading = DecodeHiPriStatus(buf);
+        // Skip the 4-byte BE u32 sequence number that prefixes every P2 UDP
+        // packet (Thetis network.c:531 — `memcpy(bufp, readbuf + 4, 56)`).
+        // Without this slice the decoder reads the sequence bytes for
+        // exciter/fwd/rev — that's the bug behind issue #174's "exciter
+        // climbs by 1, FWD/REV stuck at zero" log signature.
+        var reading = DecodeHiPriStatus(buf.AsSpan(HiPriSeqHeaderBytes));
 
         Interlocked.Increment(ref _hiPriPackets);
 

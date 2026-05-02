@@ -32,14 +32,12 @@ const PS_MONITOR_UNSUPPORTED = new Set(['HermesLite2']);
 
 /**
  * PureSignal master arm. Optimistic update with rollback on server refusal —
- * same pattern as MoxButton. Disabled until a P2 radio is connected:
- * Protocol1 PureSignal is deferred to a follow-up because we can only
- * rack-test against a G2 / OrionMkII today. TODO(ps-p1): drop the gate
- * once Protocol1Client gains the SetPuresignal hooks.
+ * same pattern as MoxButton. Available on both Protocol 1 (HL2) and
+ * Protocol 2 (G2 / Orion / Saturn) once issue #172 lands the P1 wire-side
+ * encoders + feedback extractor.
  */
 export function PsToggleButton() {
   const connected = useConnectionStore((s) => s.status === 'Connected');
-  const protocol = useConnectionStore((s) => s.connectedProtocol);
   const psEnabled = useTxStore((s) => s.psEnabled);
   const psAuto = useTxStore((s) => s.psAuto);
   const psSingle = useTxStore((s) => s.psSingle);
@@ -48,15 +46,10 @@ export function PsToggleButton() {
   const setPsMonitorLocal = useTxStore((s) => s.setPsMonitorEnabled);
   const connectedBoard = useRadioStore((s) => s.selection.connected);
 
-  // P1 gate — backend forwards SetPsEnabled to the engine on either protocol
-  // but the wire-side feedback path is P2-only in v1.
-  const p1Disabled = protocol === 'P1';
-  const disabled = !connected || p1Disabled;
-  const tooltip = p1Disabled
-    ? 'PureSignal for Hermes coming in a follow-up'
-    : psEnabled
-      ? 'PureSignal armed — predistortion active'
-      : 'Arm PureSignal predistortion';
+  const disabled = !connected;
+  const tooltip = psEnabled
+    ? 'PureSignal armed — predistortion active'
+    : 'Arm PureSignal predistortion';
 
   const click = useCallback(() => {
     if (disabled) return;

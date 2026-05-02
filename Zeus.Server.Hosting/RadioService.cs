@@ -354,6 +354,12 @@ public sealed class RadioService : IDisposable
             Mutate(s => s with { Status = ConnectionStatus.Connected });
             _log.LogInformation("radio.connected endpoint={Ep} rate={Rate}", ipEndpoint, hpsdrRate);
             Connected?.Invoke(client);
+            // N2ADR 7-relay low-pass filter board is standard equipment on HL2.
+            // Enable it unconditionally on connect so band changes immediately
+            // drive the relay coils. Future work: make this a user toggle IFF a
+            // compelling reason to ship bare HL2 without N2ADR emerges.
+            if (ConnectedBoardKind == HpsdrBoardKind.HermesLite2)
+                client.SetHasN2adr(true);
             // Replay PA settings into the fresh client — drive byte, OC masks,
             // and (for P2 downstream) PA-enable. Without this the client sits
             // at the protocol defaults (drive=0, OC=0) until something else

@@ -1167,7 +1167,15 @@ public sealed class RadioService : IDisposable
     public void ApplyPsHwPeakForConnection(bool isProtocol2, HpsdrBoardKind board)
     {
         double peak = ResolvePsHwPeak(isProtocol2, board);
-        Mutate(s => s.PsHwPeak == peak ? s : s with { PsHwPeak = peak });
+        // Snap PsHwPeakDefault to the resolved per-board value alongside
+        // PsHwPeak so the UI can compare them for a "differs from default"
+        // hint. mi0bot ref: PSForm.cs:830 reads HardwareSpecific.PSDefaultPeak
+        // (clsHardwareSpecific.cs:303-328) at the same boundary — radio
+        // change → re-resolve default.
+        Mutate(s =>
+            s.PsHwPeak == peak && s.PsHwPeakDefault == peak
+                ? s
+                : s with { PsHwPeak = peak, PsHwPeakDefault = peak });
         _log.LogInformation(
             "radio.applyPsHwPeak proto={Proto} board={Board} peak={Peak:F4}",
             isProtocol2 ? "P2" : "P1", board, peak);

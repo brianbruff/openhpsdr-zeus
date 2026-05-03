@@ -197,6 +197,11 @@ export type TxState = {
   setPsAmpDelayNs: (ns: number) => void;
   psHwPeak: number;
   setPsHwPeak: (p: number) => void;
+  // Per-board factory default resolved by the server at connect time. UI
+  // compares psHwPeak against this to show a "differs from default" hint.
+  // mi0bot ref: PSForm.cs:830 pbWarningSetPk.Visible = _PShwpeak !=
+  // HardwareSpecific.PSDefaultPeak.
+  psHwPeakDefault: number;
   psIntsSpiPreset: string;
   setPsIntsSpiPreset: (p: string) => void;
   // Feedback antenna source — Internal coupler (default) or External
@@ -351,6 +356,10 @@ export const useTxStore = create<TxState>()(
       setPsAmpDelayNs: (ns) => set({ psAmpDelayNs: ns }),
       psHwPeak: 0.4072,
       setPsHwPeak: (p) => set({ psHwPeak: p }),
+      // Pre-connect default mirrors PsHwPeak; ApplyPsHwPeakForConnection on
+      // the server will push the per-board value into the StateDto, and
+      // hydrateFromState below picks it up. mi0bot PSForm.cs:830 ref.
+      psHwPeakDefault: 0.4072,
       psIntsSpiPreset: '16/256',
       setPsIntsSpiPreset: (p) => set({ psIntsSpiPreset: p }),
       psFeedbackSource: 'internal',
@@ -398,6 +407,11 @@ export const useTxStore = create<TxState>()(
           psAmpDelayNs: s.psAmpDelayNs,
           psIntsSpiPreset: s.psIntsSpiPreset,
           psFeedbackSource: s.psFeedbackSource,
+          // mi0bot ref: PSForm.cs:830 — per-board factory default frozen by
+          // the server in ApplyPsHwPeakForConnection. Hydrated alongside the
+          // operator-tuned psHwPeak so the UI sees a coherent pair.
+          psHwPeak: s.psHwPeak,
+          psHwPeakDefault: s.psHwPeakDefault,
           twoToneFreq1: s.twoToneFreq1,
           twoToneFreq2: s.twoToneFreq2,
           twoToneMag: s.twoToneMag,

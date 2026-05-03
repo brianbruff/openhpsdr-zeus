@@ -1828,7 +1828,14 @@ public sealed class WdspDspEngine : IDspEngine
                 _psAmpDelayNs = ampDelayNs;
                 if (id >= 0) _ = NativeMethods.SetPSTXDelay(id, ampDelayNs * 1e-9);
             }
-            if (hwPeak > 0.0 && hwPeak <= 2.0 && hwPeak != _psHwPeak)
+            // mi0bot: PSForm.cs PSpeak_TextChanged calls
+            // puresignal.SetPSHWPeak(_txachannel, _PShwpeak) unconditionally on
+            // every TextChanged, with no equality guard against the prior
+            // value. Mirror that here so the operator can re-push the same
+            // value to clear an info[6]=0x0044 fault state without typing a
+            // different value first. Range check stays (mi0bot stops the
+            // operator at the WinForms NUD min/max).
+            if (hwPeak > 0.0 && hwPeak <= 2.0)
             {
                 _psHwPeak = hwPeak;
                 if (id >= 0) NativeMethods.SetPSHWPeak(id, hwPeak);

@@ -85,6 +85,7 @@ export function PsSettingsPanel() {
   const psLoopDelaySec = useTxStore((s) => s.psLoopDelaySec);
   const psAmpDelayNs = useTxStore((s) => s.psAmpDelayNs);
   const psHwPeak = useTxStore((s) => s.psHwPeak);
+  const psHwPeakDefault = useTxStore((s) => s.psHwPeakDefault);
   const psIntsSpiPreset = useTxStore((s) => s.psIntsSpiPreset);
   const psFeedbackSourceState = useTxStore((s) => s.psFeedbackSource);
   const psFeedbackLevel = useTxStore((s) => s.psFeedbackLevel);
@@ -368,6 +369,28 @@ export function PsSettingsPanel() {
               pushAdvanced({ hwPeak: v });
             }}
           />
+          {/* mi0bot ref: PSForm.cs:830
+              `pbWarningSetPk.Visible = _PShwpeak != HardwareSpecific.PSDefaultPeak;`
+              + clsHardwareSpecific.cs:303-328 PSDefaultPeak per-board switch.
+              Show a small accent glyph after the input when the operator has
+              dialed PsHwPeak away from the per-board factory default. Title
+              attribute exposes the resolved default for the operator so they
+              know what value would clear the indicator. */}
+          {psHwPeak !== psHwPeakDefault ? (
+            <span
+              aria-label="HW peak differs from per-board default"
+              title={`Differs from default ${psHwPeakDefault.toFixed(4)}`}
+              style={{
+                color: 'var(--accent)',
+                fontSize: 12,
+                fontWeight: 700,
+                marginLeft: 4,
+                userSelect: 'none',
+              }}
+            >
+              *
+            </span>
+          ) : null}
         </Row>
         {/* mi0bot ref: PSForm.cs:624 GetPSMaxTX → PSForm.designer.cs
             txtGetPSpeak readout. Read-only; the operator dials HW peak

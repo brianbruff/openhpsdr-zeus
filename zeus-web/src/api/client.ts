@@ -191,6 +191,13 @@ export type RadioStateDto = {
   psMoxDelaySec: number;
   psLoopDelaySec: number;
   psAmpDelayNs: number;
+  // psHwPeak is the live operator-tunable HW-peak; psHwPeakDefault is the
+  // per-board factory default frozen by RadioService at connect time. UI
+  // shows a "differs from default" hint when they don't match.
+  // mi0bot ref: PSForm.cs:830 `pbWarningSetPk.Visible = _PShwpeak !=
+  // HardwareSpecific.PSDefaultPeak;`.
+  psHwPeak: number;
+  psHwPeakDefault: number;
   psIntsSpiPreset: string;
   psFeedbackSource: 'internal' | 'external';
   twoToneFreq1: number;
@@ -427,6 +434,12 @@ export function normalizeState(raw: unknown): RadioStateDto {
     psMoxDelaySec: typeof r.psMoxDelaySec === 'number' ? r.psMoxDelaySec : 0.2,
     psLoopDelaySec: typeof r.psLoopDelaySec === 'number' ? r.psLoopDelaySec : 0,
     psAmpDelayNs: typeof r.psAmpDelayNs === 'number' ? r.psAmpDelayNs : 150,
+    // mi0bot ref: PSForm.cs:830 / clsHardwareSpecific.cs:303-328 — server
+    // freezes psHwPeakDefault at connect via ResolvePsHwPeak; psHwPeak is the
+    // operator-tunable live value. UI compares them for the warning hint.
+    psHwPeak: typeof r.psHwPeak === 'number' ? r.psHwPeak : 0.4072,
+    psHwPeakDefault:
+      typeof r.psHwPeakDefault === 'number' ? r.psHwPeakDefault : 0.4072,
     psIntsSpiPreset: typeof r.psIntsSpiPreset === 'string' ? r.psIntsSpiPreset : '16/256',
     psFeedbackSource:
       r.psFeedbackSource === 'External' || r.psFeedbackSource === 'external' ? 'external' : 'internal',

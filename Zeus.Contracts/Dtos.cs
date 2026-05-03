@@ -209,6 +209,14 @@ public sealed record StateDto(
     // RadioService HW-peak switch overrides on the first ConnectAsync /
     // ConnectP2Async. See PLAN section 7 / hermes.md §7.1.
     double PsHwPeak = 0.4072,
+    // PS hardware-peak per-board default — frozen at connect time from
+    // ResolvePsHwPeak(isProtocol2, board) and surfaced for the UI to compare
+    // against the live PsHwPeak so the operator gets a "differs from default"
+    // hint when they've dialed away from the factory curve.
+    // mi0bot ref: PSForm.cs:830 `pbWarningSetPk.Visible = _PShwpeak !=
+    // HardwareSpecific.PSDefaultPeak;` + clsHardwareSpecific.cs:303-328
+    // PSDefaultPeak per-board switch.
+    double PsHwPeakDefault = 0.4072,
     PsFeedbackSource PsFeedbackSource = PsFeedbackSource.Internal,
     string PsIntsSpiPreset = "16/256",
     double PsFeedbackLevel = 0.0,   // info[4] read-back, 0..256

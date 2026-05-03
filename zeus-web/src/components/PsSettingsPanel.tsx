@@ -19,7 +19,7 @@
 // (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
 // Both are GPL-2.0-or-later.
 
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   setPs,
   setPsAdvanced,
@@ -28,15 +28,13 @@ import {
   resetPs,
   setTwoTone,
 } from '../api/client';
-import { useConnectionStore } from '../state/connection-store';
 import { useRadioStore } from '../state/radio-store';
 import { useTxStore } from '../state/tx-store';
 
-// HermesLite2 has no PS feedback receiver — the entire PS-Monitor view
-// hinges on a paired DDC0/DDC1 loopback that doesn't exist on HL2. Hide
-// the toggle on HL2 so the operator doesn't get a switch that does
-// nothing. ANAN-class boards (and anything else that shows up here)
-// retain the toggle. See issue #121.
+// HermesLite2 has no PS-Monitor display source path (no internal feedback
+// loopback) but DOES have an internal coupler — so the Internal/External
+// feedback-source selector is shown on every board, while PS-Monitor is
+// hidden on HL2. See issues #121 and #172.
 const HL2_BOARD_ID = 'HermesLite2';
 
 const CAL_STATE_NAMES = [
@@ -52,21 +50,22 @@ const CAL_STATE_NAMES = [
   'TURNON',
 ];
 
+// Dial geometry (must match the SVG circle below).
+const DIAL_R = 78;
+const DIAL_C = 2 * Math.PI * DIAL_R;
+
+const SPARK_LEN = 60;
+
 /**
- * PureSignal + Two-tone control surface. Lives inside the Settings modal
+ * PureSignal calibration dashboard. Lives inside the Settings modal
  * (SettingsMenu) and as a standalone dockable panel (PsFlexPanel).
  *
- * Uses the same neutral fg/accent tokens as the other settings tabs;
- * amber is reserved for the panadapter trace per CLAUDE.md.
+ * Layout: hero strip with a convergence dial, a TX → PA → coupler →
+ * feedback signal-flow diagram, and live peak meters. Mode + actions
+ * row below, then a two-column timing / hardware grid, then the
+ * standard PS-Monitor and two-tone test sections.
  */
 export function PsSettingsPanel() {
-  const protocol = useConnectionStore((s) => s.connectedProtocol);
-  const p1Disabled = protocol === 'P1';
-  // The PS-Monitor source switch only makes sense when there's a real PS
-  // feedback receiver. On HL2 we hide the toggle entirely. We key on the
-  // CONNECTED board (not preferred) so a user who explicitly selects G2
-  // while no radio is attached still sees the control as a preview, but
-  // a live HL2 connection cleanly drops it.
   const connectedBoard = useRadioStore((s) => s.selection.connected);
   const psMonitorSupported = connectedBoard !== HL2_BOARD_ID;
 
@@ -81,12 +80,14 @@ export function PsSettingsPanel() {
   const psLoopDelaySec = useTxStore((s) => s.psLoopDelaySec);
   const psAmpDelayNs = useTxStore((s) => s.psAmpDelayNs);
   const psHwPeak = useTxStore((s) => s.psHwPeak);
+  const psHwPeakDefault = useTxStore((s) => s.psHwPeakDefault);
   const psIntsSpiPreset = useTxStore((s) => s.psIntsSpiPreset);
   const psFeedbackSourceState = useTxStore((s) => s.psFeedbackSource);
   const psFeedbackLevel = useTxStore((s) => s.psFeedbackLevel);
   const psCalState = useTxStore((s) => s.psCalState);
   const psCorrecting = useTxStore((s) => s.psCorrecting);
   const psCorrectionDb = useTxStore((s) => s.psCorrectionDb);
+  const psMaxTxEnvelope = useTxStore((s) => s.psMaxTxEnvelope);
   const setPsAuto = useTxStore((s) => s.setPsAuto);
   const setPsSingle = useTxStore((s) => s.setPsSingle);
   const setPsPtol = useTxStore((s) => s.setPsPtol);
@@ -107,7 +108,6 @@ export function PsSettingsPanel() {
   const setTwoToneFreq2 = useTxStore((s) => s.setTwoToneFreq2);
   const setTwoToneMag = useTxStore((s) => s.setTwoToneMag);
 
-  // Cal-mode radio buttons send the new combination on every change.
   const setMode = useCallback(
     (auto: boolean, single: boolean) => {
       setPsAuto(auto);
@@ -136,9 +136,13 @@ export function PsSettingsPanel() {
     resetPs().catch(() => {});
   }, []);
 
-  // Feedback antenna source — Internal coupler vs External (Bypass).
-  // Optimistic local set + POST. Rolls back on POST failure so the radio's
-  // alex bit and the UI stay in sync.
+  // "Run now" — re-arm a single calibration pass. Maps to the existing
+  // single-shot path; safe to invoke regardless of current Auto/Single
+  // selection (mi0bot PSForm.cs treats Single as a one-shot trigger).
+  const onRunNow = useCallback(() => {
+    setMode(false, true);
+  }, [setMode]);
+
   const onFeedbackSourceChange = useCallback(
     (next: 'internal' | 'external') => {
       const prev = psFeedbackSourceState;
@@ -148,9 +152,6 @@ export function PsSettingsPanel() {
     [psFeedbackSourceState, setPsFeedbackSourceLocal],
   );
 
-  // PS-Monitor — operator-facing display source switch (issue #121).
-  // Optimistic local set + POST, rolls back on failure so the analyzer
-  // routing the backend uses and the UI checkbox stay in sync.
   const onPsMonitorToggle = useCallback(
     (next: boolean) => {
       const prev = psMonitorEnabled;
@@ -171,12 +172,6 @@ export function PsSettingsPanel() {
     }).catch(() => setTwoToneOn(!next));
   }, [twoToneOn, twoToneFreq1, twoToneFreq2, twoToneMag, setTwoToneOn]);
 
-  // Two-tone freq/mag POSTs always go to the server, even when twoToneOn is
-  // false. The server persists freq1/freq2/mag via PsSettingsStore so an
-  // operator who dials in tones first ("set up the test, then arm") sees the
-  // values stick across restarts. Server SetTwoTone accepts partial fields
-  // and only flips the master arm if `enabled` changes — passing the current
-  // twoToneOn state keeps the radio's TwoTone arm state untouched.
   const onTwoToneFreq1Change = useCallback(
     (hz: number) => {
       const v = Math.max(50, Math.min(5000, Math.round(hz)));
@@ -205,270 +200,548 @@ export function PsSettingsPanel() {
   );
 
   const calStateLabel = CAL_STATE_NAMES[psCalState] ?? `state ${psCalState}`;
-  // Feedback level is 0..256 raw; UI shows 0..1.
-  const feedbackBar = Math.max(0, Math.min(1, psFeedbackLevel / 256));
+  // Feedback level is 0..256 raw; UI shows 0..1 normalized for the dial.
+  const feedbackPct = Math.max(0, Math.min(1, psFeedbackLevel / 256));
+  const feedbackLen = feedbackPct * DIAL_C;
+  const feedbackRound = Math.round(psFeedbackLevel);
+
+  // Dial state visualization. Converged → green ring + "ok" pill;
+  // active calibration → animated pulse; otherwise idle.
+  const isConverged = psCorrecting;
+  const isRunning = psEnabled && !isConverged && psCalState > 0;
+  const dialClass = isConverged ? 'is-converged' : '';
+  const pillClass = isConverged ? 'ok' : isRunning ? 'run' : '';
+  const pillText = isConverged
+    ? 'CAL · correcting'
+    : isRunning
+      ? 'CAL · running'
+      : 'CAL · idle';
+
+  const feedbackSubText = isConverged
+    ? `${Math.round(feedbackPct * 100)} % · locked`
+    : `${Math.round(feedbackPct * 100)} % · ${calStateLabel.toLowerCase()}`;
+
+  // Elapsed timer. Mounts when the panel mounts; resets when the operator
+  // clicks Run-now or Reset. Display is purely informational.
+  const t0Ref = useRef<number>(Date.now());
+  const [, setElapsedTick] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setElapsedTick((n) => n + 1), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  const elapsedMs = Date.now() - t0Ref.current;
+  const elapsedLabel = formatElapsed(elapsedMs);
+
+  // Correction sparkline — keep a short rolling history so the operator
+  // can see whether the inverse-model dB number is jittering or stable.
+  const sparkRef = useRef<number[]>([]);
+  useEffect(() => {
+    if (!psCorrecting) return;
+    sparkRef.current.push(psCorrectionDb);
+    if (sparkRef.current.length > SPARK_LEN) sparkRef.current.shift();
+  }, [psCorrectionDb, psCorrecting]);
+
+  const sparkPoints = buildSparkline(sparkRef.current);
+
+  // Peak meters share the same x-scale: 0..max(HW peak * 1.4, observed).
+  // Observed peak warns when within 5% of HW peak, faults at HW peak.
+  const meterScale = Math.max(psHwPeak * 1.4, psMaxTxEnvelope * 1.05, 0.001);
+  const obsPct = Math.min(100, (psMaxTxEnvelope / meterScale) * 100);
+  const hwRefPct = Math.min(100, (psHwPeak / meterScale) * 100);
+  const hwSelfPct = Math.min(100, (psHwPeak / meterScale) * 100);
+  const obsClass =
+    psMaxTxEnvelope >= psHwPeak
+      ? 'bad'
+      : psMaxTxEnvelope > psHwPeak * 0.95
+        ? 'warn'
+        : '';
+
+  // Signal-flow node states: TX is always "on" when psEnabled; remaining
+  // nodes light up when calibration is actually running so the operator
+  // sees the path go live during MOX.
+  const flowActive = psEnabled && (isRunning || isConverged);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      {p1Disabled ? (
-        <div
-          style={{
-            padding: 10,
-            border: '1px solid var(--panel-border)',
-            borderRadius: 6,
-            background: 'var(--bg-1)',
-            color: 'var(--fg-2)',
-            fontSize: 11,
-          }}
-        >
-          PureSignal predistortion for Hermes / Protocol 1 is coming in a
-          follow-up. Two-tone test generator below works on both protocols.
+    <div className="ps-shell">
+
+      {/* ── Calibration hero ─────────────────────────────── */}
+      <section>
+        <div className="ps-section-head">
+          <h3>Calibration</h3>
+          <p>
+            Live linearization adapts the predistorter to your PA. Key down
+            (MOX/TUN) to begin sampling.
+          </p>
+          <span className="ps-elapsed">{elapsedLabel}</span>
+        </div>
+
+        <div className="ps-hero">
+
+          {/* Dial */}
+          <div className="ps-dial-col">
+            <div className={`ps-dial ${dialClass}`}>
+              <svg viewBox="0 0 200 200">
+                <circle
+                  className="ps-dial-track"
+                  cx="100"
+                  cy="100"
+                  r={DIAL_R}
+                />
+                <circle
+                  className="ps-dial-fill"
+                  cx="100"
+                  cy="100"
+                  r={DIAL_R}
+                  style={{
+                    strokeDasharray: `${feedbackLen} ${DIAL_C - feedbackLen}`,
+                  }}
+                />
+              </svg>
+              <div className="ps-dial-center">
+                <div className="ps-dial-state">{calStateLabel}</div>
+                <div className="ps-dial-num">
+                  {feedbackRound}
+                  <small>/256</small>
+                </div>
+                <div className="ps-dial-sub">{feedbackSubText}</div>
+              </div>
+            </div>
+            <span className={`ps-pill ${pillClass}`}>
+              <span className="ps-pdot" />
+              <span>{pillText}</span>
+            </span>
+          </div>
+
+          {/* Signal flow */}
+          <div className="ps-flow-col">
+            <div className="ps-flow-title">Signal Flow</div>
+            <div className="ps-flow">
+              <FlowNode
+                label="TX"
+                sub={
+                  psMaxTxEnvelope > 0
+                    ? `${(20 * Math.log10(psMaxTxEnvelope / Math.max(psHwPeak, 0.0001))).toFixed(1)} dBFS`
+                    : 'idle'
+                }
+                active={psEnabled}
+              >
+                <svg className="ps-ic" viewBox="0 0 16 16">
+                  <path d="M3 12l3-3M6 9l3-3M9 6l3-3" />
+                  <circle cx="3" cy="13" r="1.4" />
+                  <circle cx="13" cy="3" r="1.4" />
+                </svg>
+              </FlowNode>
+              <div className={`ps-arr ${flowActive ? 'live' : ''}`} />
+              <FlowNode label="PA" sub="amplifier" active={flowActive}>
+                <svg className="ps-ic" viewBox="0 0 16 16">
+                  <rect x="2.5" y="5" width="11" height="6" rx="1.2" />
+                  <path d="M5 5V3M11 5V3M5 13v-2M11 13v-2" />
+                </svg>
+              </FlowNode>
+              <div className={`ps-arr ${flowActive ? 'live' : ''}`} />
+              <FlowNode
+                label={
+                  psFeedbackSourceState === 'external' ? 'EXT COUPLER' : 'COUPLER'
+                }
+                sub={psFeedbackSourceState === 'external' ? 'bypass' : 'internal'}
+                active={flowActive}
+              >
+                <svg className="ps-ic" viewBox="0 0 16 16">
+                  <path d="M2 10l4-6 2 4 2-2 4 4" />
+                  <path d="M2 13h12" />
+                </svg>
+              </FlowNode>
+              <div className={`ps-arr ${flowActive ? 'live' : ''}`} />
+              <FlowNode label="FEEDBACK" sub="RX path" active={flowActive}>
+                <svg className="ps-ic" viewBox="0 0 16 16">
+                  <path d="M2 8h3l1.5-3 3 6 1.5-3H14" />
+                </svg>
+              </FlowNode>
+            </div>
+            <div className="ps-source-tabs">
+              <button
+                type="button"
+                className={`ps-source-tab ${psFeedbackSourceState === 'internal' ? 'is-active' : ''}`}
+                onClick={() => onFeedbackSourceChange('internal')}
+              >
+                <span className="ps-rd" />
+                <span className="ps-rd-label">
+                  <strong>Internal coupler</strong>
+                  <em>Use the radio's built-in directional coupler</em>
+                </span>
+              </button>
+              <button
+                type="button"
+                className={`ps-source-tab ${psFeedbackSourceState === 'external' ? 'is-active' : ''}`}
+                onClick={() => onFeedbackSourceChange('external')}
+              >
+                <span className="ps-rd" />
+                <span className="ps-rd-label">
+                  <strong>External (bypass)</strong>
+                  <em>External coupler on RX2 antenna jack</em>
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {/* Peaks */}
+          <div className="ps-peaks-col">
+            <div className={`ps-peak ${obsClass}`}>
+              <div className="ps-peak-row">
+                <span className="ps-peak-nm">Observed peak</span>
+                <span className="ps-peak-val">{psMaxTxEnvelope.toFixed(4)}</span>
+              </div>
+              <div className="ps-meter">
+                <div className="ps-mfill" style={{ width: `${obsPct}%` }} />
+                <div className="ps-ref" style={{ left: `${hwRefPct}%` }} />
+              </div>
+              <div className="ps-help">
+                Live feedback amplitude · target near HW peak.
+              </div>
+            </div>
+
+            <div className="ps-peak">
+              <div className="ps-peak-row">
+                <span className="ps-peak-nm">HW peak</span>
+                <span className="ps-peak-val">{psHwPeak.toFixed(4)}</span>
+              </div>
+              <div className="ps-meter">
+                <div className="ps-mfill" style={{ width: `${hwSelfPct}%` }} />
+              </div>
+              <div className="ps-help">
+                ADC clip threshold for the feedback path.
+              </div>
+            </div>
+
+            <div className="ps-peak">
+              <div className="ps-peak-row">
+                <span className="ps-peak-nm">Correction</span>
+                <span className="ps-peak-val">
+                  {psCorrecting ? `+${psCorrectionDb.toFixed(2)}` : '—'}
+                  {psCorrecting ? <small>dB</small> : null}
+                </span>
+              </div>
+              <div className="ps-spark">
+                <svg viewBox="0 0 200 14" preserveAspectRatio="none">
+                  <polyline
+                    fill="none"
+                    stroke="var(--accent)"
+                    strokeWidth="1.4"
+                    points={sparkPoints}
+                  />
+                </svg>
+              </div>
+              <div className="ps-help">
+                Last samples · stability of the inverse model.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Mode + actions */}
+        <div className="ps-mode-row">
+          <button
+            type="button"
+            className={`ps-mode-card ${psAuto && !psSingle ? 'is-active' : ''}`}
+            onClick={() => setMode(true, false)}
+          >
+            <span className="ps-rd" />
+            <div className="ps-mode-info">
+              <h4>Auto</h4>
+              <p>Continuously refine while transmitting. Recommended.</p>
+            </div>
+          </button>
+          <button
+            type="button"
+            className={`ps-mode-card ${psSingle ? 'is-active' : ''}`}
+            onClick={() => setMode(false, true)}
+          >
+            <span className="ps-rd" />
+            <div className="ps-mode-info">
+              <h4>Single</h4>
+              <p>Run one calibration pass and lock the result.</p>
+            </div>
+          </button>
+          <div className="ps-action-stack">
+            <button
+              type="button"
+              className="ps-btn primary"
+              onClick={onRunNow}
+              title="Trigger a single calibration pass"
+            >
+              <svg className="ps-ic-sm" viewBox="0 0 12 12">
+                <path d="M3 2l7 4-7 4z" fill="currentColor" stroke="none" />
+              </svg>
+              Run now
+            </button>
+            <button
+              type="button"
+              className="ps-btn danger"
+              onClick={() => {
+                t0Ref.current = Date.now();
+                sparkRef.current = [];
+                onReset();
+              }}
+              title="Reset PS state"
+            >
+              <svg className="ps-ic-sm" viewBox="0 0 12 12">
+                <path d="M3 2v3h3M3 5a4 4 0 1 1-1 3" />
+              </svg>
+              Reset
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Lower grid: Timing + Hardware ─────────────────── */}
+      <div className="ps-grid2">
+
+        <div className="ps-card">
+          <h4>
+            <svg className="ps-ic-sm" viewBox="0 0 12 12">
+              <circle cx="6" cy="6" r="4.5" />
+              <path d="M6 3.5V6l1.5 1" />
+            </svg>
+            Timing
+            <span className="ps-card-hint">defaults assume your radio</span>
+          </h4>
+
+          <FieldRow
+            label="MOX delay"
+            help="Hold-off after key-down before sampling"
+          >
+            <NumberInput
+              value={psMoxDelaySec}
+              min={0.0}
+              max={10.0}
+              step={0.1}
+              unit="s"
+              onChange={(v) => {
+                setPsMoxDelaySec(v);
+                pushAdvanced({ moxDelaySec: v });
+              }}
+            />
+          </FieldRow>
+
+          <FieldRow
+            label="Cal delay"
+            help="Time between calibration iterations"
+          >
+            <NumberInput
+              value={psLoopDelaySec}
+              min={0.0}
+              max={100.0}
+              step={0.5}
+              unit="s"
+              onChange={(v) => {
+                setPsLoopDelaySec(v);
+                pushAdvanced({ loopDelaySec: v });
+              }}
+            />
+          </FieldRow>
+
+          <FieldRow
+            label="Amp delay"
+            help="RF propagation through the PA chain"
+          >
+            <NumberInput
+              value={psAmpDelayNs}
+              min={0}
+              max={25_000_000}
+              step={50}
+              unit="ns"
+              onChange={(v) => {
+                setPsAmpDelayNs(v);
+                pushAdvanced({ ampDelayNs: v });
+              }}
+            />
+          </FieldRow>
+        </div>
+
+        <div className="ps-card">
+          <h4>
+            <svg className="ps-ic-sm" viewBox="0 0 12 12">
+              <rect x="2" y="4" width="8" height="4" rx="1" />
+              <path d="M4 4V2M8 4V2M4 10V8M8 10V8" />
+            </svg>
+            Hardware
+            <span className="ps-card-hint">advanced — most users won't change</span>
+          </h4>
+
+          <FieldRow
+            label="HW peak"
+            help="Override coupler ADC ceiling"
+          >
+            <span className="ps-hwpeak-cell">
+              <NumberInput
+                value={psHwPeak}
+                min={0.01}
+                max={2.0}
+                step={0.001}
+                onChange={(v) => {
+                  setPsHwPeak(v);
+                  pushAdvanced({ hwPeak: v });
+                }}
+                onCommit={(v) => {
+                  setPsHwPeak(v);
+                  pushAdvanced({ hwPeak: v });
+                }}
+              />
+              {psHwPeak !== psHwPeakDefault ? (
+                <span
+                  className="ps-diff-mark"
+                  aria-label="HW peak differs from per-board default"
+                  title={`Differs from default ${psHwPeakDefault.toFixed(4)}`}
+                >
+                  *
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className="ps-default-btn"
+                disabled={psHwPeak === psHwPeakDefault}
+                title={`Reset HW peak to per-board default ${psHwPeakDefault.toFixed(4)}`}
+                onClick={() => {
+                  setPsHwPeak(psHwPeakDefault);
+                  pushAdvanced({ hwPeak: psHwPeakDefault });
+                }}
+              >
+                Default
+              </button>
+            </span>
+          </FieldRow>
+
+          <FieldRow
+            label="Ints / Spi"
+            help="Iterations per spectral pass"
+          >
+            <select
+              className="ps-select-mini"
+              value={psIntsSpiPreset}
+              onChange={(e) => {
+                const v = e.target.value;
+                setPsIntsSpiPreset(v);
+                pushAdvanced({ intsSpiPreset: v });
+              }}
+            >
+              <option value="16/256">16 / 256</option>
+              <option value="8/512">8 / 512</option>
+              <option value="4/1024">4 / 1024</option>
+            </select>
+          </FieldRow>
+
+          <FieldRow
+            label="Auto-attenuate"
+            help="Drop drive when feedback clips"
+          >
+            <Checkbox
+              checked={psAutoAttenuate}
+              onChange={(v) => {
+                setPsAutoAttenuate(v);
+                pushAdvanced({ autoAttenuate: v });
+              }}
+              label={psAutoAttenuate ? 'Enabled' : 'Disabled'}
+            />
+          </FieldRow>
+
+          <FieldRow
+            label="Relax phase tolerance"
+            help="Allow looser convergence on weak PAs"
+          >
+            <Checkbox
+              checked={psPtol}
+              onChange={(v) => {
+                setPsPtol(v);
+                pushAdvanced({ ptol: v });
+              }}
+              label={psPtol ? 'Enabled' : 'Disabled'}
+            />
+          </FieldRow>
+        </div>
+      </div>
+
+      {/* ── Status (last cal) ─────────────────────────────── */}
+      <div className="ps-status-row">
+        <div className="ps-status-left">
+          <span>Calibration</span>
+          {psCorrecting ? (
+            <span className="saved">
+              {`converged · ${psCorrectionDb.toFixed(2)} dB`}
+            </span>
+          ) : (
+            <span>{calStateLabel}</span>
+          )}
+        </div>
+      </div>
+
+      {/* ── Display: PS Monitor (hidden on HL2) ──────────── */}
+      {psMonitorSupported ? (
+        <div className="ps-card">
+          <h4>
+            <svg className="ps-ic-sm" viewBox="0 0 12 12">
+              <rect x="1.5" y="2.5" width="9" height="6" rx="0.8" />
+              <path d="M4 10h4M6 8.5v1.5" />
+            </svg>
+            Display
+          </h4>
+          <FieldRow
+            label="Monitor PA output"
+            help="Show post-correction signal in TX panadapter"
+          >
+            <Checkbox
+              checked={psMonitorEnabled}
+              onChange={onPsMonitorToggle}
+              label={psMonitorEnabled ? 'Enabled' : 'Disabled'}
+            />
+          </FieldRow>
         </div>
       ) : null}
 
-      {/* Calibration */}
-      <Section title="Calibration">
-        <Row label="Mode">
-          <label style={{ marginRight: 12 }}>
-            <input
-              type="radio"
-              name="ps-mode"
-              checked={psAuto && !psSingle}
-              onChange={() => setMode(true, false)}
-              disabled={p1Disabled}
-            />{' '}
-            Auto
-          </label>
-          <label>
-            <input
-              type="radio"
-              name="ps-mode"
-              checked={psSingle}
-              onChange={() => setMode(false, true)}
-              disabled={p1Disabled}
-            />{' '}
-            Single
-          </label>
-        </Row>
-        <Row label="">
+      {/* ── Two-tone test signal ─────────────────────────── */}
+      <div className="ps-card">
+        <h4>
+          <svg className="ps-ic-sm" viewBox="0 0 12 12">
+            <path d="M1.5 6c1-3 3-3 3 0s2 3 3 0 2-3 3 0" />
+          </svg>
+          Two-tone test signal
+        </h4>
+
+        <FieldRow
+          label="Generator"
+          help="Standard PureSignal calibration excitation"
+        >
           <button
             type="button"
-            onClick={onReset}
-            disabled={p1Disabled}
-            className="btn sm"
-          >
-            Reset
-          </button>
-        </Row>
-        <Row label="Auto-Attenuate">
-          <input
-            type="checkbox"
-            checked={psAutoAttenuate}
-            onChange={(e) => {
-              const v = e.target.checked;
-              setPsAutoAttenuate(v);
-              pushAdvanced({ autoAttenuate: v });
-            }}
-            disabled={p1Disabled}
-          />
-        </Row>
-      </Section>
-
-      {/* Timing */}
-      <Section title="Timing">
-        <Row label="MOX delay (s)">
-          <NumberInput
-            value={psMoxDelaySec}
-            min={0.0}
-            max={10.0}
-            step={0.1}
-            onChange={(v) => {
-              setPsMoxDelaySec(v);
-              pushAdvanced({ moxDelaySec: v });
-            }}
-            disabled={p1Disabled}
-          />
-        </Row>
-        <Row label="Cal delay (s)">
-          <NumberInput
-            value={psLoopDelaySec}
-            min={0.0}
-            max={100.0}
-            step={0.5}
-            onChange={(v) => {
-              setPsLoopDelaySec(v);
-              pushAdvanced({ loopDelaySec: v });
-            }}
-            disabled={p1Disabled}
-          />
-        </Row>
-        <Row label="Amp delay (ns)">
-          <NumberInput
-            value={psAmpDelayNs}
-            min={0}
-            max={25_000_000}
-            step={50}
-            onChange={(v) => {
-              setPsAmpDelayNs(v);
-              pushAdvanced({ ampDelayNs: v });
-            }}
-            disabled={p1Disabled}
-          />
-        </Row>
-      </Section>
-
-      {/* Hardware */}
-      <Section title="Hardware">
-        <Row label="Feedback source">
-          {/* Two-way selector: Internal coupler (default) or External
-              (Bypass). On G2/MkII this flips ALEX_RX_ANTENNA_BYPASS in
-              alex0 during xmit + PS armed. WDSP cal/iqc are unaffected;
-              the HW-peak slider below stays shared across sources to
-              match pihpsdr/Thetis. Disabled on P1 because P1 PS isn't
-              wired through yet. */}
-          <label
-            style={{ display: 'inline-flex', alignItems: 'center', marginRight: 12 }}
-          >
-            <input
-              type="radio"
-              name="psFeedbackSource"
-              value="internal"
-              checked={psFeedbackSourceState === 'internal'}
-              onChange={() => onFeedbackSourceChange('internal')}
-              disabled={p1Disabled}
-              style={{ marginRight: 4 }}
-            />
-            <span style={{ fontSize: 11, color: 'var(--fg-1)' }}>Internal coupler</span>
-          </label>
-          <label style={{ display: 'inline-flex', alignItems: 'center' }}>
-            <input
-              type="radio"
-              name="psFeedbackSource"
-              value="external"
-              checked={psFeedbackSourceState === 'external'}
-              onChange={() => onFeedbackSourceChange('external')}
-              disabled={p1Disabled}
-              style={{ marginRight: 4 }}
-            />
-            <span style={{ fontSize: 11, color: 'var(--fg-1)' }}>External (Bypass)</span>
-          </label>
-        </Row>
-        <Row label="HW peak">
-          <NumberInput
-            value={psHwPeak}
-            min={0.01}
-            max={2.0}
-            step={0.001}
-            onChange={(v) => {
-              setPsHwPeak(v);
-              pushAdvanced({ hwPeak: v });
-            }}
-            disabled={p1Disabled}
-          />
-        </Row>
-        <Row label="Ints / Spi">
-          <select
-            value={psIntsSpiPreset}
-            onChange={(e) => {
-              const v = e.target.value;
-              setPsIntsSpiPreset(v);
-              pushAdvanced({ intsSpiPreset: v });
-            }}
-            disabled={p1Disabled}
-          >
-            <option value="16/256">16 / 256</option>
-            <option value="8/512">8 / 512</option>
-            <option value="4/1024">4 / 1024</option>
-          </select>
-        </Row>
-        <Row label="Relax phase tol">
-          <input
-            type="checkbox"
-            checked={psPtol}
-            onChange={(e) => {
-              const v = e.target.checked;
-              setPsPtol(v);
-              pushAdvanced({ ptol: v });
-            }}
-            disabled={p1Disabled}
-          />
-        </Row>
-      </Section>
-
-      {/* Display — issue #121. Hidden on HL2 (no PS feedback Rx). The
-          control is operator opt-in; default off preserves the Thetis-
-          style predistorted-IQ panadapter view. The backend gates the
-          actual analyzer swap on PsEnabled && PsCorrecting in addition
-          to this flag, so flipping it on while PS is off is harmless. */}
-      {psMonitorSupported ? (
-        <Section title="Display">
-          <Row label="Monitor PA output">
-            <input
-              type="checkbox"
-              checked={psMonitorEnabled}
-              onChange={(e) => onPsMonitorToggle(e.target.checked)}
-              disabled={p1Disabled}
-              title="Show post-correction signal in TX panadapter"
-            />
-            <span style={{ fontSize: 11, color: 'var(--fg-2)', marginLeft: 8 }}>
-              Show post-correction signal in TX panadapter
-            </span>
-          </Row>
-        </Section>
-      ) : null}
-
-      {/* Read-out */}
-      <Section title="Read-out">
-        <Row label="Feedback">
-          <Bar value={feedbackBar} />
-          <span style={{ fontSize: 11, color: 'var(--fg-2)', marginLeft: 8 }}>
-            {psFeedbackLevel.toFixed(0)} / 256
-          </span>
-        </Row>
-        <Row label="Cal state">
-          <span style={{ fontSize: 11, color: 'var(--fg-1)' }}>
-            {calStateLabel}
-            {psCorrecting ? ' · correcting' : ''}
-          </span>
-        </Row>
-        <Row label="Correction">
-          <span style={{ fontSize: 11, color: 'var(--fg-1)' }}>
-            {psCorrecting ? `${psCorrectionDb.toFixed(1)} dB` : '—'}
-          </span>
-        </Row>
-      </Section>
-
-      {/* Two-tone */}
-      <Section title="Two-tone test signal">
-        <Row label="">
-          <button
-            type="button"
+            className={`ps-btn ${twoToneOn ? 'primary' : ''}`}
             onClick={onTwoToneToggle}
-            className={`btn sm ${twoToneOn ? 'active' : ''}`}
-            title="Standard PureSignal calibration excitation"
           >
             {twoToneOn ? '2-Tone ON' : '2-Tone OFF'}
           </button>
-        </Row>
-        <Row label="Freq 1 (Hz)">
+        </FieldRow>
+
+        <FieldRow label="Freq 1" help="Lower test tone">
           <NumberInput
             value={twoToneFreq1}
             min={50}
             max={5000}
             step={10}
+            unit="Hz"
             onChange={onTwoToneFreq1Change}
           />
-        </Row>
-        <Row label="Freq 2 (Hz)">
+        </FieldRow>
+
+        <FieldRow label="Freq 2" help="Upper test tone">
           <NumberInput
             value={twoToneFreq2}
             min={50}
             max={5000}
             step={10}
+            unit="Hz"
             onChange={onTwoToneFreq2Change}
           />
-        </Row>
-        <Row label="Magnitude">
+        </FieldRow>
+
+        <FieldRow label="Magnitude" help="Per-tone amplitude (0..1)">
           <NumberInput
             value={twoToneMag}
             min={0}
@@ -476,62 +749,48 @@ export function PsSettingsPanel() {
             step={0.01}
             onChange={onTwoToneMagChange}
           />
-        </Row>
-      </Section>
+        </FieldRow>
+      </div>
     </div>
   );
 }
 
-function Section({
-  title,
+function FlowNode({
+  label,
+  sub,
+  active,
   children,
 }: {
-  title: string;
+  label: string;
+  sub: string;
+  active: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <section
-      style={{
-        border: '1px solid var(--panel-border)',
-        borderRadius: 6,
-        padding: '10px 12px',
-        background: 'var(--bg-1)',
-      }}
-    >
-      <h3
-        style={{
-          margin: 0,
-          marginBottom: 8,
-          fontSize: 11,
-          fontWeight: 700,
-          letterSpacing: '0.12em',
-          textTransform: 'uppercase',
-          color: 'var(--fg-1)',
-        }}
-      >
-        {title}
-      </h3>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {children}
-      </div>
-    </section>
+    <div className={`ps-node ${active ? 'active' : 'dim'}`}>
+      <div className="ps-ico">{children}</div>
+      <div className="ps-nm">{label}</div>
+      <div className="ps-sub">{sub}</div>
+    </div>
   );
 }
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+function FieldRow({
+  label,
+  help,
+  children,
+}: {
+  label: string;
+  help?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        fontSize: 12,
-      }}
-    >
-      <span style={{ minWidth: 110, color: 'var(--fg-2)' }}>{label}</span>
-      <span style={{ display: 'flex', alignItems: 'center', flex: 1, gap: 6 }}>
-        {children}
-      </span>
+    <div className="ps-field">
+      <div className="ps-name">
+        {label}
+        {help ? <em>{help}</em> : null}
+      </div>
+      <div>{children}</div>
     </div>
   );
 }
@@ -541,61 +800,98 @@ function NumberInput({
   min,
   max,
   step,
+  unit,
   onChange,
+  onCommit,
   disabled,
 }: {
   value: number;
   min: number;
   max: number;
   step: number;
+  unit?: string;
   onChange: (v: number) => void;
+  // mi0bot ref: PSForm.cs PSpeak_TextChanged — onCommit fires on blur and
+  // Enter unconditionally so re-entering the same value still re-pushes,
+  // mirroring WinForms TextChanged-on-every-keystroke semantics that React's
+  // controlled-input dedup otherwise hides on focus/blur with no edit.
+  onCommit?: (v: number) => void;
   disabled?: boolean;
 }) {
   return (
-    <input
-      type="number"
-      value={value}
-      min={min}
-      max={max}
-      step={step}
-      disabled={disabled}
-      onChange={(e) => {
-        const v = Number(e.target.value);
-        if (Number.isFinite(v)) onChange(v);
-      }}
-      style={{
-        width: 100,
-        padding: '3px 6px',
-        background: 'var(--bg-0)',
-        color: 'var(--fg-1)',
-        border: '1px solid var(--panel-border)',
-        borderRadius: 3,
-        fontSize: 12,
-      }}
-    />
+    <span className="ps-ninput">
+      <input
+        type="number"
+        className={unit ? '' : 'no-unit'}
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        disabled={disabled}
+        onChange={(e) => {
+          const v = Number(e.target.value);
+          if (Number.isFinite(v)) onChange(v);
+        }}
+        onBlur={(e) => {
+          if (!onCommit) return;
+          const v = Number(e.target.value);
+          if (!Number.isFinite(v)) return;
+          const normalized = String(v);
+          if (normalized !== e.target.value) e.target.value = normalized;
+          onCommit(v);
+        }}
+        onKeyDown={(e) => {
+          if (!onCommit || e.key !== 'Enter') return;
+          const v = Number((e.target as HTMLInputElement).value);
+          if (Number.isFinite(v)) onCommit(v);
+        }}
+      />
+      {unit ? <span className="ps-unit">{unit}</span> : null}
+    </span>
   );
 }
 
-function Bar({ value }: { value: number }) {
-  const pct = Math.max(0, Math.min(1, value)) * 100;
+function Checkbox({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label: string;
+}) {
   return (
-    <div
-      style={{
-        width: 140,
-        height: 8,
-        background: 'var(--accent-soft)',
-        borderRadius: 2,
-        overflow: 'hidden',
-      }}
-    >
-      <div
-        style={{
-          width: `${pct}%`,
-          height: '100%',
-          background: 'var(--accent)',
-          transition: 'width 80ms linear',
-        }}
+    <label className="ps-check">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
       />
-    </div>
+      <span className="ps-check-box" />
+      <span>{label}</span>
+    </label>
   );
+}
+
+function formatElapsed(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `Elapsed ${m}:${String(r).padStart(2, '0')}`;
+}
+
+function buildSparkline(history: number[]): string {
+  if (history.length === 0) return '';
+  const n = SPARK_LEN;
+  // Auto-scale so the trace stays visible regardless of dB magnitude.
+  const min = Math.min(...history, 0);
+  const max = Math.max(...history, min + 0.5);
+  const range = Math.max(0.1, max - min);
+  return history
+    .map((v, i) => {
+      const x = (i / (n - 1)) * 200;
+      const y = 13 - ((v - min) / range) * 11 - 1;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(' ');
 }

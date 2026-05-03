@@ -57,7 +57,7 @@ Please refer to the [original openHPSDR protocol](https://github.com/TAPR/OpenHP
 | 0x09 | [17] | For tune request: 1=send the bypass command; 0=send the normal tune request |
 | 0x09 | [15:8] | Alex Rx filter (see Filter Selection below); or VNA count MSB |
 | 0x09 | [7:0]  | Alex Tx filter (see Filter Selection below); or VNA count LSB |
-| 0x0a | [22] | PureSignal (0=disable, 1=enable) |
+| 0x0a | [22] | PureSignal (0=disable, 1=enable) — see "PureSignal feedback path" section below |
 | 0x0a | [6] | See LNA gain section below |
 | 0x0a | [5:0] | LNA[5:0] gain |
 | 0x0e | [15] | Enable hardware managed LNA gain for TX |
@@ -350,6 +350,150 @@ The Hermes-Lite2 Reply packet is as follows:
 | 0x26-0x3B | | Reserved |
 
 
+## PureSignal feedback path
 
+This section documents the HL2-specific behaviour of the PureSignal feedback path
+when the host sets register `0x0a[22] = 1`. It was derived from the
+[mi0bot/openhpsdr-thetis](https://github.com/mi0bot/openhpsdr-thetis) HL2
+fork (the authority for HL2 wire behaviour per CLAUDE.md) and cross-checked
+against [DL1YCF/pihpsdr](https://github.com/dl1ycf/pihpsdr).
+
+mi0bot fork SHA at time of derivation: `e3375d0` ("Updated for release", master).
+pihpsdr cross-reference: `src/old_protocol.c` lines 895-980, 1043-1094.
+
+### Wire-side enable bit
+
+Register `0x0a` bit 22 = "PureSignal run". On the wire this is **C2 bit 6 of
+the C0=0x14 frame** (since C2 carries DATA[23:16] and bit 22 = 22−16 = 6).
+
+mi0bot reference: `Project Files/Source/ChannelMaster/networkproto1.c:1102`
+inside `WriteMainLoop_HL2`:
+
+```c
+case 11: //Preamp control 0x0a
+    C0 |= 0x14; //C0 0001 010x
+    C1 = (prn->rx[0].preamp & 1) | ((prn->rx[1].preamp & 1) << 1) |
+         ((prn->rx[2].preamp & 1) << 2) | ((prn->rx[0].preamp & 1) << 3) |
+         ((prn->mic.mic_trs & 1) << 4) | ((prn->mic.mic_bias & 1) << 5) |
+         ((prn->mic.mic_ptt & 1) << 6);
+    C2 = (prn->mic.line_in_gain & 0b00011111) | ((prn->puresignal_run & 1) << 6);
+    C3 = prn->user_dig_out & 0b00001111;
+    if (XmitBit) C4 = (prn->adc[0].tx_step_attn & 0b00111111) | 0b01000000;
+    else         C4 = (prn->adc[0].rx_step_attn & 0b00111111) | 0b01000000;
+    break;
+```
+
+Note: this is **C2 bit 6, NOT C3 bit 6** — the PR #119 review caught the
+exact mistake. Do not regress this in `Zeus.Protocol1/ControlFrame.cs`.
+
+A second copy of the same bit lives at `0x12 C2 bit 6` (see
+`networkproto1.c:1162`, the BPF2 register), again `(puresignal_run & 1) << 6`.
+mi0bot writes both — the gateware accepts either. Zeus only writes 0x0a.
+
+### Predistortion config register (0x2b)
+
+`0x2b[31:24]` = predistortion **subindex** (C1).
+`0x2b[19:16]` = predistortion **value** (C2 bits [3:0]).
+
+mi0bot writes the same byte layout via the open address space (`netInterface.c`
+extended-write path). PR #119 review identified the encoding mistake here too:
+the value is C2 bits [3:0], **NOT [7:4]** — do not shift it left.
+
+### Feedback IQ — gateware mechanism (the answered question)
+
+When `0x0a[22] = 1` and the radio is keyed, the HL2 gateware re-points its
+**dedicated feedback ADC (ADC1)** through one of the existing DDCs. The
+samples come back **inside the existing EP6 RX IQ stream** — there is **no
+new packet type or endpoint**.
+
+Of the four candidates the parent issue listed:
+
+- ❌ NOT time-multiplexed on RX1 (RX1 keeps publishing the operator's RX
+  frequency throughout TX).
+- ❌ NOT a new packet type / endpoint (still EP6, port 1024 reply path,
+  still 1032-byte Metis frames).
+- ❌ NOT a frequency-offset injection on RX1.
+- ✅ **It is a "second receiver re-pointed at the feedback ADC"** —
+  specifically, when PS is on, the HL2 firmware's gateware honours the
+  ADC-control bit (`SetADC_cntrl1`, see below) that maps a DDC to ADC1
+  instead of ADC0, and that DDC then carries the post-coupler feedback
+  samples. Which DDC index this lands on is set by the `nddc` count and the
+  `cntrl1` ADC-mapping byte the host writes in C0=0x1c.
+
+Two HL2 PS layouts exist in the wild:
+
+1. **Hermes-class 2-DDC layout** (mi0bot `networkproto1.c:990, 1005`) — when
+   `nddc == 2` and `puresignal_run == 1` and `XmitBit == 1`, both DDC0 and
+   DDC1 are programmed to TX frequency, ADC mapping is set so DDC1 reads
+   ADC1 (feedback), and the EP6 packet carries paired DDC0/DDC1 samples
+   (12 bytes per pair: 3I+3Q for DDC0 then 3I+3Q for DDC1, repeating).
+   This is the simplest layout and matches bare Hermes / ANAN-10 / ANAN-100
+   gateware.
+
+2. **HL2 4-DDC layout** (mi0bot `console.cs:8421-8503`, current default for
+   `HPSDRModel.HERMESLITE`) — `nddc = 4`, with DDC0=RX1, DDC1=RX2 (or
+   feedback, depending on `cntrl1`), DDC2 and DDC3 programmed to TX
+   frequency. When PS+TX is active, mi0bot sets `cntrl1 = 4` (=
+   `prn->rx[1].rx_adc = 1`, mapping DDC1 to ADC1 / feedback). The
+   `CMLoadRouterAll` table (mi0bot `cmaster.cs:699-718`) wires DDC2+DDC3
+   paired into the WDSP `psccF` block as the PS feedback stream when
+   control-bit 5 (TX|PS|noDIV) is asserted, and DDC1 alone goes into RX2's
+   audio path.
+
+   pihpsdr `old_protocol.c:895-980` confirms this for HL2 with explicit
+   constants: `rx_feedback_channel(DEVICE_HERMES_LITE2) = 2`,
+   `tx_feedback_channel(DEVICE_HERMES_LITE2) = 3`,
+   `how_many_receivers(DEVICE_HERMES_LITE2 with PS) = 4`.
+
+   The interleave format inside the EP6 packet for `nddc=4` is
+   `int k = 8 + isample * (6 * nddc + 2) + iddc * 6` per DDC index 0..3,
+   yielding 26 bytes per sample-time-slot (six bytes per DDC × 4 DDCs +
+   two mic bytes), giving 504 / 26 = 19 sample slots per USB-frame
+   (mi0bot `networkproto1.c:537, 569`). The two USB frames per packet
+   give 38 sample slots per packet, per DDC.
+
+The choice between layout (1) and (2) is host-side; both produce valid PS
+feedback. Zeus (this commit) implements the simpler **2-DDC paired layout
+(layout 1)** scoped to HL2 + PS-armed, leaving the existing 1-DDC RX
+layout untouched when PS is off. The 4-DDC layout matches what mi0bot
+ships, but Zeus has only ever decoded a 1-DDC layout, and refactoring
+PacketParser to handle 4 DDCs in production is not a goal of this PR.
+
+### Hardware peak (calcc HW scale)
+
+HL2 PureSignal feedback peak = **0.233** for both Protocol 1 and Protocol 2.
+mi0bot reference: `clsHardwareSpecific.cs:322-323` and `:332-333` —
+`case HPSDRHW.HermesLite: return 0.233;` for both `RadioProtocol.USB` (P1)
+and `RadioProtocol.ETH` (P2). Zeus's `RadioService.ResolvePsHwPeak` already
+returns `0.233` for `(false, HpsdrBoardKind.HermesLite2)`.
+
+### External coupler is the only working configuration
+
+HL2 has no internal feedback coupler. The Bias / forward-power AIN3 path
+is for monitoring, not for PureSignal sampling. PureSignal on HL2 requires
+an external bidirectional coupler wired to ADC1's input pads, and the
+host should always select "External (Bypass)" feedback source — Zeus hides
+the Internal-vs-External selector on HL2 in `PsSettingsPanel.tsx`.
+
+### Number of receivers (C0=0x00, C4 bits [5:3])
+
+Bare HL2 RX uses 1 receiver (Zeus default). HL2 PureSignal in the 2-DDC
+layout requires 2 receivers (set N-1 = 1 in C4 bits [5:3]). In the 4-DDC
+layout, 4 receivers (N-1 = 3). Mismatch = the radio's gateware silently
+drops feedback samples or half-fills the EP6 IQ slot.
+
+mi0bot `networkproto1.c:973` (HL2 write loop case 0): `C4 |= (nddc - 1) << 3;`.
+
+### Gateware version
+
+mi0bot fork's `clsHardwareSpecific.cs` has no minimum gateware-version gate
+for `0x0a[22]`; it sends the bit unconditionally and depends on any HL2
+gateware revision interpreting it. Operator gateware reports show the bit
+honoured from gateware 7.2 onwards (the version that introduced the
+extended LNA-gain control for HL2). This is **untested by Zeus** — the
+parent issue lists "note any gateware version requirements" as a
+deliverable; the answer is "no host-side gating found in the reference
+forks; rely on the radio's own response". Brian's HL2 should be fw ≥ 7.2;
+KB2UKA does not have an HL2 to bench-test.
 
 

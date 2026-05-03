@@ -227,4 +227,153 @@ public class PacketParserTests
         Assert.Equal(0x0042, telemetry.Ain0);
         Assert.Equal(0x0043, telemetry.Ain1);
     }
+
+    // ---- HL2 PS-armed 4-DDC layout ----------------------------------------
+    //
+    // Regression coverage for the bug where TryParseHl2Ps4DdcPacket extracted
+    // the four IQ streams but silently dropped the C&C echo bytes that carry
+    // FWD/REF/PA-temp telemetry and ADC-overload status. With PS armed and
+    // MOX/TUN active on HL2, every EP6 packet routes through this parser; if
+    // it doesn't surface telemetry, the meter pipeline freezes at 0 W for
+    // the entire transmission window. The C&C bytes live at usb[3..8] in
+    // both the standard and 4-DDC layouts — only the payload below the
+    // 8-byte USB header differs — so the extraction logic mirrors the
+    // standard parser exactly.
+
+    private static byte[] BuildValid4DdcPacket(uint seq)
+    {
+        var packet = new byte[PacketParser.PacketLength];
+        packet[0] = 0xEF;
+        packet[1] = 0xFE;
+        packet[2] = 0x01;
+        packet[3] = 0x06;
+        BinaryPrimitives.WriteUInt32BigEndian(packet.AsSpan(4, 4), seq);
+        for (int f = 0; f < 2; f++)
+        {
+            int frameStart = 8 + f * 512;
+            packet[frameStart + 0] = 0x7F;
+            packet[frameStart + 1] = 0x7F;
+            packet[frameStart + 2] = 0x7F;
+            // C&C bytes 3..7 left zero; tests inject as needed.
+            // Payload bytes left zero: parser reads 19 × 26 = 494 bytes per
+            // USB frame and zero-byte slots decode to zero IQ samples, which
+            // is fine — these tests assert telemetry/overload extraction,
+            // not IQ values (those are covered by ddc-stream tests below).
+        }
+        return packet;
+    }
+
+    private static (double[] d0, double[] d1, double[] d2, double[] d3) Allocate4DdcBuffers()
+    {
+        int n = 2 * PacketParser.Hl2Ps4DdcSamplesPerPacket;
+        return (new double[n], new double[n], new double[n], new double[n]);
+    }
+
+    [Fact]
+    public void TryParseHl2Ps4DdcPacket_NoEcho_TelemetryDefault()
+    {
+        byte[] packet = BuildValid4DdcPacket(1);
+        var (d0, d1, d2, d3) = Allocate4DdcBuffers();
+
+        bool ok = PacketParser.TryParseHl2Ps4DdcPacket(
+            packet, d0, d1, d2, d3,
+            out _, out _, out var t0, out var t1, out byte bits);
+
+        Assert.True(ok);
+        Assert.Equal(default, t0);
+        Assert.Equal(default, t1);
+        Assert.Equal(0, bits);
+    }
+
+    [Theory]
+    [InlineData((byte)0x08, (ushort)0x0F4A, (ushort)0x00DC)] // FWD slot, plausible HL2 ADCs
+    [InlineData((byte)0x10, (ushort)0x00D6, (ushort)0x03A4)] // REF slot
+    [InlineData((byte)0x18, (ushort)0x8000, (ushort)0x0001)] // ADC1 bias slot
+    public void TryParseHl2Ps4DdcPacket_AinEcho_PopulatesTelemetry(byte c0, ushort ain0, ushort ain1)
+    {
+        byte[] packet = BuildValid4DdcPacket(42);
+        int usbStart = 8 + 512;
+        packet[usbStart + 3] = c0;
+        BinaryPrimitives.WriteUInt16BigEndian(packet.AsSpan(usbStart + 4, 2), ain0);
+        BinaryPrimitives.WriteUInt16BigEndian(packet.AsSpan(usbStart + 6, 2), ain1);
+
+        var (d0, d1, d2, d3) = Allocate4DdcBuffers();
+        bool ok = PacketParser.TryParseHl2Ps4DdcPacket(
+            packet, d0, d1, d2, d3,
+            out _, out _, out _, out var t1, out _);
+
+        Assert.True(ok);
+        Assert.Equal(c0, t1.C0Address);
+        Assert.Equal(ain0, t1.Ain0);
+        Assert.Equal(ain1, t1.Ain1);
+    }
+
+    [Fact]
+    public void TryParseHl2Ps4DdcPacket_BothFramesAinEchoes_BothEmitted()
+    {
+        // Unlike the legacy 1-DDC overload (which collapses to "last wins"),
+        // this parser must surface BOTH frames so the caller's per-frame
+        // fan-out gets the FWD AND REF reading from a single packet — that
+        // pairing is what makes SWR meaningful at the meter pipeline.
+        byte[] packet = BuildValid4DdcPacket(7);
+        int f0 = 8;
+        packet[f0 + 3] = 0x08; // addr 1 — FWD slot
+        BinaryPrimitives.WriteUInt16BigEndian(packet.AsSpan(f0 + 4, 2), 0x0F4A);
+        BinaryPrimitives.WriteUInt16BigEndian(packet.AsSpan(f0 + 6, 2), 0x00DC);
+
+        int f1 = 8 + 512;
+        packet[f1 + 3] = 0x10; // addr 2 — REF slot
+        BinaryPrimitives.WriteUInt16BigEndian(packet.AsSpan(f1 + 4, 2), 0x00D6);
+        BinaryPrimitives.WriteUInt16BigEndian(packet.AsSpan(f1 + 6, 2), 0x03A4);
+
+        var (d0, d1, d2, d3) = Allocate4DdcBuffers();
+        Assert.True(PacketParser.TryParseHl2Ps4DdcPacket(
+            packet, d0, d1, d2, d3,
+            out _, out _, out var t0, out var t1, out _));
+
+        Assert.Equal(0x08, t0.C0Address);
+        Assert.Equal(0x0F4A, t0.Ain0);
+        Assert.Equal(0x00DC, t0.Ain1);
+        Assert.Equal(0x10, t1.C0Address);
+        Assert.Equal(0x00D6, t1.Ain0);
+        Assert.Equal(0x03A4, t1.Ain1);
+    }
+
+    [Fact]
+    public void TryParseHl2Ps4DdcPacket_AddressMask_IgnoresStatusBits()
+    {
+        // Same C0[0]=PTT echo handling as the standard parser: addr-1 with
+        // PTT set arrives as 0x09 during MOX/TUN — must still be recognised
+        // as the FWD/temp slot.
+        byte[] packet = BuildValid4DdcPacket(11);
+        int usbStart = 8 + 512;
+        packet[usbStart + 3] = 0x08 | 0x01;
+        BinaryPrimitives.WriteUInt16BigEndian(packet.AsSpan(usbStart + 4, 2), 0x0F00);
+        BinaryPrimitives.WriteUInt16BigEndian(packet.AsSpan(usbStart + 6, 2), 0x0042);
+
+        var (d0, d1, d2, d3) = Allocate4DdcBuffers();
+        Assert.True(PacketParser.TryParseHl2Ps4DdcPacket(
+            packet, d0, d1, d2, d3,
+            out _, out _, out _, out var t1, out _));
+
+        Assert.Equal(0x09, t1.C0Address);
+        Assert.Equal(0x0F00, t1.Ain0);
+        Assert.Equal(0x0042, t1.Ain1);
+    }
+
+    [Fact]
+    public void TryParseHl2Ps4DdcPacket_OverloadBitsOrAcrossFrames()
+    {
+        byte[] packet = BuildValid4DdcPacket(1);
+        int f0 = 8;
+        int f1 = 8 + 512;
+        packet[f0 + 4] = 0x01; // C1[0] — ADC0 overload, frame 0
+        packet[f1 + 5] = 0x01; // C2[0] — ADC1 overload, frame 1
+        var (d0, d1, d2, d3) = Allocate4DdcBuffers();
+
+        Assert.True(PacketParser.TryParseHl2Ps4DdcPacket(
+            packet, d0, d1, d2, d3,
+            out _, out _, out _, out _, out byte bits));
+        Assert.Equal(0x03, bits);
+    }
 }

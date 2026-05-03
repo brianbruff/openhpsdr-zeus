@@ -105,7 +105,13 @@ jobs:
 
   build-linux:
     name: Build Linux Native Libraries
-    runs-on: ubuntu-latest
+    # Pinned to ubuntu-22.04 (glibc 2.35) so libwdsp.so loads on Ubuntu 22.04,
+    # Debian 12, RHEL 9 and equivalents. ubuntu-latest moved to 24.04 (glibc
+    # 2.39) and produced binaries that fail with `version GLIBC_2.38 not
+    # found` on every older distro. Do NOT bump this without a deliberate
+    # decision to drop those users — same applies to the arm64 cross-compile
+    # below, whose aarch64 sysroot comes from this host's apt.
+    runs-on: ubuntu-22.04
     strategy:
       matrix:
         arch: [x64, arm64]

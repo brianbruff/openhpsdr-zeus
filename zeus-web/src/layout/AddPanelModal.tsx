@@ -1,79 +1,50 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
 //
-// This program is free software: you can redistribute it and/or modify it
-// under the terms of the GNU General Public License as published by the
-// Free Software Foundation, either version 2 of the License, or (at your
-// option) any later version. See the LICENSE file at the root of this
-// repository for the full text, or https://www.gnu.org/licenses/.
+// Add Panel modal — categorized version. Left rail of category chips, right
+// pane of panel cards filtered by (selectedCategory, searchTerm). Replaces
+// the previous flat-list modal that came in via `feature/meters-panel`.
 //
-// Zeus is an independent reimplementation in .NET — not a fork. Its
-// Protocol-1 / Protocol-2 framing, WDSP integration, meter pipelines, and
-// TX behaviour were informed by studying the Thetis project
-// (https://github.com/ramdor/Thetis), the authoritative reference
-// implementation in the OpenHPSDR ecosystem. Zeus gratefully acknowledges
-// the Thetis contributors whose work made this possible:
-//
-//   Richard Samphire (MW0LGE), Warren Pratt (NR0V),
-//   Laurence Barker (G8NJJ),   Rick Koch (N1GP),
-//   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
-//   Doug Wigley (W5WC),        FlexRadio Systems,
-//   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
-//   Sigi Jetzlsperger (DH1KLM).
-//
-// Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
-// and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
-// here. See ATTRIBUTIONS.md at the repository root for the full provenance
-// statement and per-component attribution.
-//
-// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
-// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
-// Wüllen (DL1YCF); and by DeskHPSDR
-// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
-// Both are GPL-2.0-or-later.
-//
-// WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
-// (NR0V), distributed under GPL v2 or later.
-//
-// Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
-// License for details.
+// Category drill UX (locked decision per task #6 prompt): clicking a
+// category just FILTERS the right pane; it does NOT push a second modal.
+// Clicking a card adds the panel and closes the modal. For multi-instance
+// panels (Meters today), duplicates are allowed and a "+ Add another" badge
+// labels the card when an instance already exists.
 
 import { useState } from 'react';
-import { PANELS, type PanelCategory } from './panels';
+import {
+  PANELS,
+  PANEL_CATEGORIES,
+  PANEL_CATEGORY_LABELS,
+  type PanelCategory,
+} from './panels';
 
 interface AddPanelModalProps {
+  /** Set of panelIds currently in the workspace (one entry per id, regardless
+   *  of how many tiles use it). Drives the "+ Add another" multi-instance
+   *  badge and the "already added" filtering for single-instance panels. */
   existingPanels: Set<string>;
   onAdd: (panelId: string) => void;
   onClose: () => void;
 }
 
+type CategoryFilter = PanelCategory | 'all';
+
 export function AddPanelModal({ existingPanels, onAdd, onClose }: AddPanelModalProps) {
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState<PanelCategory | 'all'>('all');
-
-  const categories: Array<PanelCategory | 'all'> = [
-    'all',
-    'spectrum',
-    'vfo',
-    'meters',
-    'dsp',
-    'log',
-    'tools',
-    'controls',
-  ];
+  const [selectedCategory, setSelectedCategory] =
+    useState<CategoryFilter>('all');
 
   const availablePanels = Object.values(PANELS).filter((panel) => {
-    // Filter out panels that already exist in the layout
-    if (existingPanels.has(panel.id)) return false;
+    // Single-instance panels disappear from the list once added; multi-
+    // instance panels stay visible (the badge changes to "+ Add another").
+    if (existingPanels.has(panel.id) && !panel.multiInstance) return false;
 
-    // Filter by category
-    if (selectedCategory !== 'all' && panel.category !== selectedCategory) return false;
+    if (selectedCategory !== 'all' && panel.category !== selectedCategory)
+      return false;
 
-    // Filter by search term
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
       return (
@@ -81,7 +52,6 @@ export function AddPanelModal({ existingPanels, onAdd, onClose }: AddPanelModalP
         panel.tags.some((tag) => tag.toLowerCase().includes(term))
       );
     }
-
     return true;
   });
 
@@ -100,103 +70,96 @@ export function AddPanelModal({ existingPanels, onAdd, onClose }: AddPanelModalP
       onClick={onClose}
     >
       <div
-        className="modal-content"
-        style={{
-          background: 'var(--bg-1)',
-          border: '1px solid var(--line)',
-          borderRadius: 'var(--r-md)',
-          padding: 24,
-          maxWidth: 600,
-          width: '90%',
-          maxHeight: '80vh',
-          overflow: 'auto',
-        }}
+        className="add-panel-modal"
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label="Add panel"
       >
-        <div style={{ marginBottom: 16 }}>
-          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>Add Panel</h2>
+        <div className="add-panel-modal-header">
+          <h2>Add Panel</h2>
+          <button
+            type="button"
+            className="workspace-tile-close"
+            aria-label="Close add-panel modal"
+            onClick={onClose}
+            style={{ width: 22, height: 22 }}
+          >
+            ×
+          </button>
         </div>
 
-        <div style={{ marginBottom: 16 }}>
-          <input
-            type="text"
-            placeholder="Search panels..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            style={{
-              width: '100%',
-              padding: '8px 12px',
-              background: 'var(--bg-0)',
-              border: '1px solid var(--line)',
-              borderRadius: 'var(--r-sm)',
-              color: 'var(--fg-0)',
-              fontSize: 14,
-            }}
-          />
-        </div>
-
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-          {categories.map((cat) => (
+        <div className="add-panel-modal-rail" data-testid="add-panel-rail">
+          <button
+            type="button"
+            className="add-panel-category-btn"
+            aria-pressed={selectedCategory === 'all'}
+            onClick={() => setSelectedCategory('all')}
+            data-testid="add-panel-category-all"
+          >
+            All
+          </button>
+          {PANEL_CATEGORIES.map((cat) => (
             <button
               key={cat}
               type="button"
+              className="add-panel-category-btn"
+              aria-pressed={selectedCategory === cat}
               onClick={() => setSelectedCategory(cat)}
-              className={`btn sm ${selectedCategory === cat ? 'active' : ''}`}
-              style={{ textTransform: 'capitalize' }}
+              data-testid={`add-panel-category-${cat}`}
             >
-              {cat}
+              {PANEL_CATEGORY_LABELS[cat]}
             </button>
           ))}
         </div>
 
-        <div style={{ display: 'grid', gap: 8, marginBottom: 16 }}>
-          {availablePanels.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: 24, color: 'var(--fg-2)' }}>
-              {existingPanels.size === Object.keys(PANELS).length
-                ? 'All panels are already in the layout'
-                : 'No panels found'}
-            </div>
-          ) : (
-            availablePanels.map((panel) => (
-              <button
-                key={panel.id}
-                type="button"
-                onClick={() => {
-                  onAdd(panel.id);
-                  onClose();
-                }}
-                style={{
-                  padding: '12px 16px',
-                  background: 'var(--bg-0)',
-                  border: '1px solid var(--line)',
-                  borderRadius: 'var(--r-sm)',
-                  color: 'var(--fg-0)',
-                  textAlign: 'left',
-                  cursor: 'pointer',
-                  transition: 'all 0.15s',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = 'var(--bg-2)';
-                  e.currentTarget.style.borderColor = 'var(--accent)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'var(--bg-0)';
-                  e.currentTarget.style.borderColor = 'var(--line)';
-                }}
-              >
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>{panel.name}</div>
-                <div style={{ fontSize: 11, color: 'var(--fg-2)' }}>
-                  {panel.tags.join(' · ')}
-                </div>
-              </button>
-            ))
-          )}
-        </div>
+        <div className="add-panel-modal-body">
+          <input
+            type="text"
+            className="add-panel-search"
+            placeholder="Search panels…"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            aria-label="Search panels"
+          />
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <button type="button" onClick={onClose} className="btn">
-            Cancel
-          </button>
+          <div className="add-panel-cards" data-testid="add-panel-cards">
+            {availablePanels.length === 0 ? (
+              <div className="add-panel-empty">
+                {selectedCategory !== 'all' || searchTerm
+                  ? 'No panels match'
+                  : 'All panels are already in the layout'}
+              </div>
+            ) : (
+              availablePanels.map((panel) => {
+                const showMultiBadge =
+                  panel.multiInstance && existingPanels.has(panel.id);
+                return (
+                  <button
+                    key={panel.id}
+                    type="button"
+                    className="add-panel-card"
+                    data-panel-id={panel.id}
+                    onClick={() => {
+                      onAdd(panel.id);
+                      onClose();
+                    }}
+                  >
+                    <span className="add-panel-card-title">
+                      {panel.name}
+                      {showMultiBadge && (
+                        <span className="add-panel-card-title-multi">
+                          + Add another
+                        </span>
+                      )}
+                    </span>
+                    <span className="add-panel-card-tags">
+                      {panel.tags.join(' · ')}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
         </div>
       </div>
     </div>

@@ -148,12 +148,13 @@ export const NR4_DEFAULTS = {
 
 export const NR4_ALGO_LABELS = ['Algo 1', 'Algo 2', 'Algo 3'] as const;
 
-// Integer 1..8. Backend accepts up to 16 (SyntheticDspEngine.MaxZoomLevel)
-// but anything past 8 doesn't visibly narrow the span further at current
-// pan widths — capping the slider here keeps the control honest.
+// Integer 1..32. Matches the backend cap (SyntheticDspEngine.MaxZoomLevel).
+// At 32× the WDSP analyzer's centre-clipped bin count drops below typical
+// pan pixel widths, softening the trace — usable for narrow-signal (CW)
+// hunting even if not pixel-sharp.
 export type ZoomLevel = number;
 export const ZOOM_MIN: ZoomLevel = 1;
-export const ZOOM_MAX: ZoomLevel = 8;
+export const ZOOM_MAX: ZoomLevel = 32;
 
 export type RadioStateDto = {
   status: ConnectionStatus;
@@ -190,6 +191,13 @@ export type RadioStateDto = {
   psMoxDelaySec: number;
   psLoopDelaySec: number;
   psAmpDelayNs: number;
+  // psHwPeak is the live operator-tunable HW-peak; psHwPeakDefault is the
+  // per-board factory default frozen by RadioService at connect time. UI
+  // shows a "differs from default" hint when they don't match.
+  // mi0bot ref: PSForm.cs:830 `pbWarningSetPk.Visible = _PShwpeak !=
+  // HardwareSpecific.PSDefaultPeak;`.
+  psHwPeak: number;
+  psHwPeakDefault: number;
   psIntsSpiPreset: string;
   psFeedbackSource: 'internal' | 'external';
   twoToneFreq1: number;
@@ -426,6 +434,12 @@ export function normalizeState(raw: unknown): RadioStateDto {
     psMoxDelaySec: typeof r.psMoxDelaySec === 'number' ? r.psMoxDelaySec : 0.2,
     psLoopDelaySec: typeof r.psLoopDelaySec === 'number' ? r.psLoopDelaySec : 0,
     psAmpDelayNs: typeof r.psAmpDelayNs === 'number' ? r.psAmpDelayNs : 150,
+    // mi0bot ref: PSForm.cs:830 / clsHardwareSpecific.cs:303-328 — server
+    // freezes psHwPeakDefault at connect via ResolvePsHwPeak; psHwPeak is the
+    // operator-tunable live value. UI compares them for the warning hint.
+    psHwPeak: typeof r.psHwPeak === 'number' ? r.psHwPeak : 0.4072,
+    psHwPeakDefault:
+      typeof r.psHwPeakDefault === 'number' ? r.psHwPeakDefault : 0.4072,
     psIntsSpiPreset: typeof r.psIntsSpiPreset === 'string' ? r.psIntsSpiPreset : '16/256',
     psFeedbackSource:
       r.psFeedbackSource === 'External' || r.psFeedbackSource === 'external' ? 'external' : 'internal',
@@ -1291,6 +1305,27 @@ export async function setPsMonitor(
 ): Promise<RadioStateDto> {
   return jsonFetch(
     '/api/tx/ps/monitor',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+      signal,
+    },
+    (raw) => raw as RadioStateDto,
+  );
+}
+
+// TX Monitor toggle — engages the engine's audition path. The server
+// demodulates the post-CFIR TX IQ back to mono baseband audio at the actual
+// TX bandwidth profile and substitutes it for RX audio in the AudioFrame
+// stream while monitor is on. Operator preference, not persisted across
+// sessions; defaults off on connect.
+export async function setTxMonitor(
+  enabled: boolean,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/monitor',
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

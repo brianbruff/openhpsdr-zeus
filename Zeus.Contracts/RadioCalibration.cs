@@ -49,7 +49,8 @@ namespace Zeus.Contracts;
 /// the safe PA ceiling used for meter scaling. The power math is the same
 /// across boards — <c>watts = volts² / bridge_volt</c> where
 /// <c>volts = (adc − cal_offset) / 4095 · ref_voltage</c> — only the constants
-/// differ. Thetis <c>console.cs:25008-25072</c> is the reference.
+/// differ. Thetis <c>console.cs:25053-25118</c> (computeAlexFwdPower) is the
+/// authoritative reference.
 /// </summary>
 public sealed record RadioCalibration(
     double BridgeVolt,
@@ -69,4 +70,70 @@ public sealed record RadioCalibration(
         RefVoltage: 3.3,
         AdcCalOffset: 6,
         MaxWatts: 5.0);
+
+    /// <summary>
+    /// Hermes (board id 0x01) / Metis / Griffin / ANAN-10 / ANAN-10E
+    /// fallback. Thetis' <c>computeAlexFwdPower</c> default branch
+    /// (<c>console.cs:25095-25099</c>) when <c>HardwareSpecific.Model</c>
+    /// doesn't match a more specific case: bridge 0.09, ref 3.3, offset 6.
+    /// </summary>
+    public static readonly RadioCalibration Hermes = new(
+        BridgeVolt: 0.09,
+        RefVoltage: 3.3,
+        AdcCalOffset: 6,
+        MaxWatts: 10.0);
+
+    /// <summary>
+    /// ANAN-100 / 100B / 100D (board id 0x04 = Angelia) — Thetis
+    /// <c>console.cs:25063-25072</c>. Bridge 0.095, ref 3.3, offset 6.
+    /// 6 m alternate bridge ignored here — meter calibration on 6 m is a
+    /// Phase-3 detail; the issue body explicitly excluded per-band tweaks.
+    /// </summary>
+    public static readonly RadioCalibration Anan100 = new(
+        BridgeVolt: 0.095,
+        RefVoltage: 3.3,
+        AdcCalOffset: 6,
+        MaxWatts: 100.0);
+
+    /// <summary>
+    /// ANAN-200D (board id 0x05 = Orion) — Thetis
+    /// <c>console.cs:25074-25078</c>. Bridge 0.108, ref 5.0, offset 4.
+    /// </summary>
+    public static readonly RadioCalibration Anan200 = new(
+        BridgeVolt: 0.108,
+        RefVoltage: 5.0,
+        AdcCalOffset: 4,
+        MaxWatts: 200.0);
+
+    /// <summary>
+    /// ANAN-7000DLE / ANAN-G1 / ANAN-G2 / ANAN-G2-1K / Anvelina Pro3 /
+    /// RedPitaya — Thetis <c>console.cs:25079-25088</c>. Bridge 0.12,
+    /// ref 5.0, offset 32. KB2UKA's test G2 MkII reports board id 0x0A
+    /// (which Zeus collapses into <c>HpsdrBoardKind.OrionMkII</c>); the G2
+    /// hardware uses these constants, not the Thetis "ORIONMKII" /
+    /// ANAN-8000D bridge. See <see cref="OrionMkIIAnan8000"/> for the
+    /// other bucket and the dispatch caveat in <c>RadioCalibrations.For</c>.
+    /// </summary>
+    public static readonly RadioCalibration OrionMkII = new(
+        BridgeVolt: 0.12,
+        RefVoltage: 5.0,
+        AdcCalOffset: 32,
+        MaxWatts: 100.0);
+
+    /// <summary>
+    /// ANAN-8000D / Thetis "ORIONMKII" enum — Thetis
+    /// <c>console.cs:25089-25093</c>. Bridge 0.08, ref 5.0, offset 18.
+    /// Board id 0x0A in <c>HpsdrBoardKind</c> aliases both ANAN-8000D and
+    /// G2; without an extra discriminator we cannot disambiguate at runtime,
+    /// so the dispatch in <c>RadioCalibrations.For</c> picks
+    /// <see cref="OrionMkII"/> by default. ANAN-8000D operators who notice
+    /// a meter offset can revisit this — flag for maintainer review.
+    /// TODO(p2-cal): expose a per-radio override or extend discovery so
+    /// the right bucket lands automatically.
+    /// </summary>
+    public static readonly RadioCalibration OrionMkIIAnan8000 = new(
+        BridgeVolt: 0.08,
+        RefVoltage: 5.0,
+        AdcCalOffset: 18,
+        MaxWatts: 200.0);
 }

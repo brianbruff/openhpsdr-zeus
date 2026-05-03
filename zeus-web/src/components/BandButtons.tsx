@@ -154,10 +154,12 @@ export function BandButtons() {
 
   return (
     <>
-      {/* Desktop: horizontal row of buttons */}
-      <div className="ctrl-group hide-mobile">
-        <div className="label-xs ctrl-lbl">BAND</div>
-        <div className="btn-row wrap" style={{ width: 'auto', maxWidth: 480 }}>
+      {/* Desktop: horizontal row of buttons. The "BAND" label was dropped —
+          tile-chrome and panel-head already say "Band" above this control.
+          width:100% so the row fills its container and wraps as the tile
+          narrows. */}
+      <div className="ctrl-group hide-mobile" style={{ width: '100%' }}>
+        <div className="btn-row wrap" style={{ width: '100%' }}>
           {HF_BANDS.map((band) => (
             <button
               key={band.name}
@@ -179,7 +181,6 @@ export function BandButtons() {
 
       {/* Mobile: dropdown */}
       <div className="ctrl-group show-mobile" style={{ display: 'none' }}>
-        <div className="label-xs ctrl-lbl">BAND</div>
         <select
           value={currentBand}
           onChange={(e) => {

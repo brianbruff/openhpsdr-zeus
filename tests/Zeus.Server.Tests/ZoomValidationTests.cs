@@ -87,6 +87,8 @@ public class ZoomValidationTests : IDisposable
     [InlineData(7)]
     [InlineData(8)]
     [InlineData(16)]
+    [InlineData(24)]
+    [InlineData(32)]
     public void SetZoom_AcceptsInRangeLevels(int level)
     {
         using var radio = BuildRadio();
@@ -97,7 +99,7 @@ public class ZoomValidationTests : IDisposable
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
-    [InlineData(17)]
+    [InlineData(33)]
     [InlineData(100)]
     public void SetZoom_RejectsOutOfRangeLevels(int level)
     {

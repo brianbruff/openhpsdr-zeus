@@ -197,6 +197,11 @@ export type TxState = {
   setPsAmpDelayNs: (ns: number) => void;
   psHwPeak: number;
   setPsHwPeak: (p: number) => void;
+  // Per-board factory default resolved by the server at connect time. UI
+  // compares psHwPeak against this to show a "differs from default" hint.
+  // mi0bot ref: PSForm.cs:830 pbWarningSetPk.Visible = _PShwpeak !=
+  // HardwareSpecific.PSDefaultPeak.
+  psHwPeakDefault: number;
   psIntsSpiPreset: string;
   setPsIntsSpiPreset: (p: string) => void;
   // Feedback antenna source — Internal coupler (default) or External
@@ -213,6 +218,13 @@ export type TxState = {
   // UI on boards with no PS feedback path (e.g. HermesLite2).
   psMonitorEnabled: boolean;
   setPsMonitorEnabled: (on: boolean) => void;
+  // TX Monitor (issue #106 follow-up) — audition toggle that engages a
+  // parallel demod of the post-CFIR TX IQ. Substitutes for RX audio in the
+  // AudioFrame stream while on. Operator preference, default off, not
+  // persisted across sessions. UI lives in the VST Host submenu, not the
+  // main GUI (per maintainer rule).
+  txMonitorEnabled: boolean;
+  setTxMonitorEnabled: (on: boolean) => void;
   // Live readout pushed via MsgType.PsMeters (0x18) at 10 Hz when armed.
   psFeedbackLevel: number;
   psCorrectionDb: number;
@@ -344,12 +356,18 @@ export const useTxStore = create<TxState>()(
       setPsAmpDelayNs: (ns) => set({ psAmpDelayNs: ns }),
       psHwPeak: 0.4072,
       setPsHwPeak: (p) => set({ psHwPeak: p }),
+      // Pre-connect default mirrors PsHwPeak; ApplyPsHwPeakForConnection on
+      // the server will push the per-board value into the StateDto, and
+      // hydrateFromState below picks it up. mi0bot PSForm.cs:830 ref.
+      psHwPeakDefault: 0.4072,
       psIntsSpiPreset: '16/256',
       setPsIntsSpiPreset: (p) => set({ psIntsSpiPreset: p }),
       psFeedbackSource: 'internal',
       setPsFeedbackSource: (s) => set({ psFeedbackSource: s }),
       psMonitorEnabled: false,
       setPsMonitorEnabled: (on) => set({ psMonitorEnabled: on }),
+      txMonitorEnabled: false,
+      setTxMonitorEnabled: (on) => set({ txMonitorEnabled: on }),
       psFeedbackLevel: 0,
       psCorrectionDb: 0,
       psCalState: 0,
@@ -389,6 +407,11 @@ export const useTxStore = create<TxState>()(
           psAmpDelayNs: s.psAmpDelayNs,
           psIntsSpiPreset: s.psIntsSpiPreset,
           psFeedbackSource: s.psFeedbackSource,
+          // mi0bot ref: PSForm.cs:830 — per-board factory default frozen by
+          // the server in ApplyPsHwPeakForConnection. Hydrated alongside the
+          // operator-tuned psHwPeak so the UI sees a coherent pair.
+          psHwPeak: s.psHwPeak,
+          psHwPeakDefault: s.psHwPeakDefault,
           twoToneFreq1: s.twoToneFreq1,
           twoToneFreq2: s.twoToneFreq2,
           twoToneMag: s.twoToneMag,

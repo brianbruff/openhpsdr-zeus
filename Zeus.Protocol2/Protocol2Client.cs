@@ -62,6 +62,18 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private const int BufLen = 1444;
     private const int DiscoverySamplesPerPacket = 238;
 
+    // Hi-priority status packet (radio → host on UDP 1025). Thetis treats it
+    // as a 60-byte payload (network.c:683-756 reads up through byte 55), but
+    // some firmwares pad to a longer length. Gate on "at least byte 19 valid"
+    // — that's the highest offset the FWD/REV/exciter decode touches — so we
+    // do not silently drop a short packet that still carries the meter ADCs.
+    // 4-byte BE u32 P2 sequence header that prefixes every UDP packet, plus
+    // the 20-byte hi-pri field range we actually decode (PTT/PLL @ +0,
+    // exciter @ +2, FWD @ +10, REV @ +18). Real radios send 60-byte packets;
+    // the guard is the minimum we need to safely read every field.
+    private const int HiPriSeqHeaderBytes = 4;
+    private const int HiPriStatusMinBytes = HiPriSeqHeaderBytes + 20;
+
     // On ANAN G2 MkII (Orion-II / Saturn) the first two DDC slots are wired
     // to the PureSignal / diversity feedback path. User-visible receivers
     // start at DDC2. pihpsdr's `new_protocol_receive_specific` and
@@ -181,6 +193,27 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     public ChannelReader<IqFrame> IqFrames => _iqFrames.Reader;
     public long TotalFrames => Interlocked.Read(ref _totalFrames);
     public long DroppedFrames => Interlocked.Read(ref _droppedFrames);
+
+    /// <summary>
+    /// Raised from the RX loop on every successfully received hi-priority
+    /// status packet (UDP 1025, 60 B). Carries the FWD/REF/exciter ADC
+    /// readings that drive the operator's TX power meter, plus the PTT-in
+    /// and PLL-lock status bits. Mirrors P1's
+    /// <c>IProtocol1Client.TelemetryReceived</c> surface.
+    /// Fire-and-forget — handlers run synchronously on the RX thread and must
+    /// not block. Issue #174 (G2 / P2 TX power meter shows zero).
+    /// </summary>
+    public event Action<P2TelemetryReading>? TelemetryReceived;
+
+    /// <summary>
+    /// Monotonic count of hi-priority status (UDP 1025) packets parsed since
+    /// Start. Diagnostic — lets the operator confirm the radio is actually
+    /// publishing PA telemetry, separately from whether the watts math
+    /// looks right. Read by the 1 Hz log line in
+    /// <see cref="RxLoop(System.Threading.CancellationToken)"/>.
+    /// </summary>
+    public long HiPriPacketCount => Interlocked.Read(ref _hiPriPackets);
+    private long _hiPriPackets;
 
     public Task ConnectAsync(IPEndPoint radioEndpoint, CancellationToken ct)
     {
@@ -942,7 +975,17 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                         HandleDdcPacket(buf, ddcIndex);
                     }
                 }
-                // other ports (hi-pri status, mic, wideband) intentionally ignored for now
+                else if (srcPort == 1025 && n >= HiPriStatusMinBytes)
+                {
+                    // Hi-priority status (issue #174). Thetis decodes this at
+                    // network.c:683-756 (case portIdx == 0). The fields we
+                    // surface drive the operator's TX power meter — without
+                    // this, the bar reads zero on every P2-connected radio
+                    // because TxMetersService had no telemetry feed.
+                    HandleHiPriStatusPacket(buf);
+                }
+                // mic samples (1026), wideband ADC0..7 (1027..1034)
+                // intentionally ignored for now — separate features.
             }
         }
         finally
@@ -991,6 +1034,86 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
         Interlocked.Increment(ref _totalFrames);
         _iqFrames.Writer.TryWrite(frame);
+    }
+
+    // 1 Hz log throttle for hi-pri status. The first packet logs immediately
+    // so a fresh connect produces a clear "we're seeing the radio's
+    // telemetry" line; subsequent packets log at most once per second. Read
+    // and written only on the RX thread, so plain ticks are fine.
+    private long _lastHiPriLogTicks;
+
+    /// <summary>
+    /// Decode the Protocol-2 hi-priority status packet (UDP 1025). Field
+    /// offsets mirror Thetis <c>network.c:689-716</c>:
+    /// <list type="bullet">
+    ///   <item>byte 0 — bit 0 PTT, bit 4 PLL locked</item>
+    ///   <item>bytes 2..3 — exciter power ADC (BE u16)</item>
+    ///   <item>bytes 10..11 — PA forward power ADC (BE u16)</item>
+    ///   <item>bytes 18..19 — PA reverse power ADC (BE u16)</item>
+    /// </list>
+    /// Pure function — exposed for unit tests against captured radio
+    /// payloads. Caller must guarantee the buffer covers the 0..19 range.
+    /// </summary>
+    public static P2TelemetryReading DecodeHiPriStatus(ReadOnlySpan<byte> buf)
+    {
+        ushort exciter = BinaryPrimitives.ReadUInt16BigEndian(buf.Slice(2, 2));
+        ushort fwd = BinaryPrimitives.ReadUInt16BigEndian(buf.Slice(10, 2));
+        ushort rev = BinaryPrimitives.ReadUInt16BigEndian(buf.Slice(18, 2));
+        bool ptt = (buf[0] & 0x01) != 0;
+        bool pll = (buf[0] & 0x10) != 0;
+        return new P2TelemetryReading(
+            FwdAdc: fwd,
+            RevAdc: rev,
+            ExciterAdc: exciter,
+            PttIn: ptt,
+            PllLocked: pll);
+    }
+
+    /// <summary>
+    /// RX-thread handler for the hi-priority status packet. Decodes via
+    /// <see cref="DecodeHiPriStatus"/>, throttle-logs at 1 Hz, and dispatches
+    /// to <see cref="TelemetryReceived"/> subscribers.
+    /// </summary>
+    private void HandleHiPriStatusPacket(byte[] buf)
+    {
+        // Skip the 4-byte BE u32 sequence number that prefixes every P2 UDP
+        // packet (Thetis network.c:531 — `memcpy(bufp, readbuf + 4, 56)`).
+        // Without this slice the decoder reads the sequence bytes for
+        // exciter/fwd/rev — that's the bug behind issue #174's "exciter
+        // climbs by 1, FWD/REV stuck at zero" log signature.
+        var reading = DecodeHiPriStatus(buf.AsSpan(HiPriSeqHeaderBytes));
+
+        Interlocked.Increment(ref _hiPriPackets);
+
+        // Throttled log so an operator (or a rack-test session for #174) can
+        // confirm the path is alive without spamming. Cadence matches P1's
+        // `p1.tx.rate` line: one line / second while a stream is active.
+        // Promoted to Information so `dotnet run` / journalctl renders it
+        // without a debug-level config tweak — the operator's first
+        // post-fix sanity check needs to be friction-free.
+        long nowTicks = _stopwatch.ElapsedTicks;
+        long elapsedMs = (nowTicks - _lastHiPriLogTicks) * 1000 / Stopwatch.Frequency;
+        if (_lastHiPriLogTicks == 0 || elapsedMs >= 1000)
+        {
+            _lastHiPriLogTicks = nowTicks;
+            _log.LogInformation(
+                "p2.hi_pri.rx pkts={Pkts} fwd={Fwd} rev={Rev} exc={Exc} ptt={Ptt} pll={Pll}",
+                Interlocked.Read(ref _hiPriPackets),
+                reading.FwdAdc, reading.RevAdc, reading.ExciterAdc,
+                reading.PttIn, reading.PllLocked);
+        }
+
+        // Subscriber list is captured once so a handler that unsubscribes
+        // mid-invocation doesn't NRE. Same pattern P1 uses.
+        var handler = TelemetryReceived;
+        if (handler is not null)
+        {
+            try { handler(reading); }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "p2.hi_pri.handler threw");
+            }
+        }
     }
 
     // PS-armed packet shape on UDP 1035: 16-byte header (4 seq, 8 timestamp,

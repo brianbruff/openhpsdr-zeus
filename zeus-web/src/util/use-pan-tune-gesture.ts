@@ -46,6 +46,7 @@ import { createContext, useContext, useEffect, type RefObject } from 'react';
 import { setVfo, setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useDisplayStore } from '../state/display-store';
+import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 
 const MAX_HZ = 60_000_000;
 const CLICK_SLOP_PX = 3;
@@ -53,11 +54,11 @@ const CLICK_SLOP_PX = 3;
 // and band presets bypass it. Ham-friendly default; becomes user-settable
 // once the UX exists.
 const PAN_STEP_HZ = 500;
-// Wheel tune step. Kept in sync with the ArrowLeft/ArrowRight step in
-// use-keyboard-shortcuts.ts (TUNE_STEP_HZ) so wheel and arrow keys feel the
-// same. TODO: replace this constant with a user-settable tune-step control
-// (operator preference, bands commonly want 10/50/100/500/1000 Hz).
-const WHEEL_TUNE_STEP_HZ = 500;
+// Wheel tune step now follows the operator's TuningStepWidget choice
+// (toolbar-favorites-store.stepHz). Read at event time inside the wheel
+// handler so the latest value applies on every notch. Arrow-key tuning
+// in use-keyboard-shortcuts.ts reads the same store, so wheel + arrows
+// feel the same.
 // Scroll-wheel notches normalise mouse clicks (~100px/tick) and trackpad
 // deltas to one discrete tick per this many pixels of deltaY.
 const WHEEL_NOTCH_PX = 40;
@@ -387,7 +388,7 @@ export function usePanTuneGesture(
         nudgeZoom(-dir);
         return;
       }
-      nudgeVfo(dir * WHEEL_TUNE_STEP_HZ);
+      nudgeVfo(dir * useToolbarFavoritesStore.getState().stepHz);
     };
 
     canvas.style.cursor = 'grab';

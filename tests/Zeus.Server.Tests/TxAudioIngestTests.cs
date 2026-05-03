@@ -97,6 +97,7 @@ public class TxAudioIngestTests
         public int OpenTxChannel(int outputRateHz = 48_000) => 0;
         public void SetMox(bool moxOn) { }
         public double GetRxaSignalDbm(int channelId) => -140.0;
+        public RxStageMeters GetRxStageMeters(int channelId) => RxStageMeters.Silent;
         public void SetTxMode(RxMode mode) { }
         public void SetTxFilter(int lowHz, int highHz) { }
         public void SetTxPanelGain(double linearGain) { }
@@ -116,6 +117,11 @@ public class TxAudioIngestTests
         public void SavePsCorrection(string path) { }
         public void RestorePsCorrection(string path) { }
         public void SetCfcConfig(CfcConfig cfg) { }
+        public bool ProcessRxVstChain(Span<float> audio, int frames, int sampleRateHz) => false;
+        public bool ProcessTxMicVstChain(Span<float> audio, int frames, int sampleRateHz) => false;
+        public void SetTxMonitorEnabled(bool enabled) { }
+        public int ReadTxMonitorAudio(Span<float> output) => 0;
+        public bool IsTxMonitorOn => false;
         public void Dispose() { }
     }
 

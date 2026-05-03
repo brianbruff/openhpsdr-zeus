@@ -90,6 +90,22 @@ public sealed class Protocol1Client : IProtocol1Client
     private int _driveByteOverride = -1;
     private int _ocTxMask;      // user OC pin mask for TX (low 7 bits)
     private int _ocRxMask;      // user OC pin mask for RX (low 7 bits)
+    // PureSignal master arm. When set on HL2 the C0=0x14 (Attenuator) frame
+    // also writes puresignal_run into C2 bit 6, the predistortion register
+    // is added to the rotation, and (when MOX is on) two receivers are
+    // requested in the Config frame so the gateware emits paired DDC0/DDC1
+    // IQ. Issue #172. mi0bot networkproto1.c:1102, console.cs:8483-8503.
+    private int _psEnabled;
+    private int _psPredistortionValue;     // 0..15 (low nibble of C2)
+    private int _psPredistortionSubindex;  // 0..255 (whole C1 byte)
+    // HL2 TX-side step attenuator (AD9866 TX PGA) target in dB. Sentinel
+    // int.MinValue = "untouched" so the C4 byte falls through to the
+    // existing RX-side encoding in WriteAttenuatorPayload — first PS arm
+    // is bit-exact identical to today. PsAutoAttenuateService writes here
+    // each time mi0bot's timer2code SetNewValues state would fire ATTOnTX.
+    // mi0bot console.cs:2084 (UI range -28..+31), networkproto1.c:1086-1088
+    // (wire encoding).
+    private int _hl2TxAttnDb = int.MinValue;
     private long _droppedFrames;
     private long _totalFrames;
 
@@ -108,7 +124,13 @@ public sealed class Protocol1Client : IProtocol1Client
     public Protocol1Client(ILogger<Protocol1Client>? logger = null, ITxIqSource? iqSource = null)
     {
         _log = logger ?? NullLogger<Protocol1Client>.Instance;
-        _txIqSource = iqSource ?? new TestToneGenerator();
+        // Wrap the operator's IQ source in a tap so we can mirror every
+        // transmitted sample into the PS-feedback TX-side ring without
+        // changing the WriteUsbFrame signature. The tap is cheap (one
+        // s16→float and a ring-index bump per sample) and a no-op when
+        // PS isn't armed (the consumer side checks PsEnabled before
+        // touching the ring contents).
+        _txIqSource = new PsTapIqSource(iqSource ?? new TestToneGenerator(), this);
         _channel = Channel.CreateBounded<IqFrame>(new BoundedChannelOptions(DefaultFrameChannelCapacity)
         {
             FullMode = BoundedChannelFullMode.DropOldest,
@@ -123,6 +145,212 @@ public sealed class Protocol1Client : IProtocol1Client
 
     public event Action<TelemetryReading>? TelemetryReceived;
     public event Action<AdcOverloadStatus>? AdcOverloadObserved;
+
+    // ---- PureSignal feedback (HL2-only, P1) -------------------------
+    // 1024-sample paired blocks fed to WDSP `psccF`. Mirrors P2's
+    // Protocol2Client.PsFeedbackFrames channel so DspPipelineService can
+    // pump either protocol with the same code. Issue #172.
+    //
+    // TX side = the operator's TX IQ as we wrote it to the wire (snapshotted
+    // from _txIqSource on every TX packet). RX side = DDC1 samples decoded
+    // from the EP6 RX stream when PsEnabled && Mox && nddc==2 (HL2 paired
+    // layout, mi0bot networkproto1.c:990,1005).
+    private const int PsFeedbackBlockSize = 1024;
+    private readonly Channel<PsFeedbackFrame> _psFeedbackFrames = Channel.CreateUnbounded<PsFeedbackFrame>(
+        new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
+    private readonly float[] _psTxI = new float[PsFeedbackBlockSize];
+    private readonly float[] _psTxQ = new float[PsFeedbackBlockSize];
+    private readonly float[] _psRxI = new float[PsFeedbackBlockSize];
+    private readonly float[] _psRxQ = new float[PsFeedbackBlockSize];
+    private int _psBlockFill;
+    private ulong _psBlockStartSeq;
+    // Diagnostic counter — tells the operator (via 1-Hz log line) whether the
+    // gateware is actually emitting paired DDC0/DDC1 frames after PS arm.
+    // See lessons_puresignal_convergence_g2_mkii.md for the same idiom on P2.
+    private long _psPairedPacketCount;
+    private long _psBlocksEmitted;
+    public long PsPairedPacketCount => Interlocked.Read(ref _psPairedPacketCount);
+
+    public ChannelReader<PsFeedbackFrame> PsFeedbackFrames => _psFeedbackFrames.Reader;
+
+    // Small ring of the most-recent TX-IQ samples we wrote to the wire.
+    // When PS+MOX is on, the RX loop pulls a "TX side" out of this ring
+    // for each DDC1 feedback sample so the calcc state machine receives
+    // paired (tx_ref, rx_obs) blocks. The ring holds two PS feedback blocks
+    // worth of samples (2048) so the natural latency between writing an IQ
+    // sample and seeing its post-PA reflection on DDC1 (HL2 + external
+    // coupler total round-trip ≈ 1-2 ms or ~50-200 samples at 48 kHz)
+    // is comfortably absorbed without overwriting before the read.
+    //
+    // Aligning ring read offset with ring write offset is approximate —
+    // mi0bot/pihpsdr both rely on calcc's own coarse alignment search to
+    // recover the exact group-delay, and the operator-tunable "Amp delay"
+    // setting (PsAmpDelayNs) is exactly there to nudge it. So we read
+    // from the most-recent write minus a fixed lookback (currently 0 —
+    // calcc handles the rest).
+    private const int PsTxRingSize = 2048;
+    private readonly float[] _psTxRingI = new float[PsTxRingSize];
+    private readonly float[] _psTxRingQ = new float[PsTxRingSize];
+    private int _psTxRingWrite;
+
+    /// <summary>
+    /// Capture one TX-IQ sample-pair just after it has been written into the
+    /// EP2 payload. Called from <see cref="ControlFrame.WriteUsbFrame"/>
+    /// indirectly via the <see cref="ITxIqSource"/> seam — see
+    /// <see cref="ApplyPsTap"/>.
+    /// </summary>
+    internal void RecordPsTxSample(short i, short q)
+    {
+        // s16 → float in [-1, +1].
+        const float scale = 1f / 32768f;
+        int idx = _psTxRingWrite;
+        _psTxRingI[idx] = i * scale;
+        _psTxRingQ[idx] = q * scale;
+        idx = (idx + 1) & (PsTxRingSize - 1); // PsTxRingSize is power of 2.
+        // Volatile write so the RX-thread reader observes ordered writes.
+        Volatile.Write(ref _psTxRingWrite, idx);
+    }
+
+    /// <summary>
+    /// Decode an HL2 4-DDC PS-armed EP6 packet — mi0bot's canonical layout
+    /// (Thetis console.cs:8186-8265, networkproto1.c:WriteMainLoop_HL2,
+    /// cmaster.cs:8511-8550 FOUR_DDC routing). Stream assignment:
+    ///   DDC0 = RX1 audio (operator's listening freq) → publish to IqFrame
+    ///          channel so the panadapter and audio chain stay alive even
+    ///          while PS is keying.
+    ///   DDC1 = RX2 / unused on HL2 → discarded.
+    ///   DDC2 = PS RX feedback (post-PA tap, NCO=TX freq) → pscc "rx" arg.
+    ///   DDC3 = PS TX reference (TX-DAC loopback, NCO=TX freq) → pscc "tx".
+    /// Pair DDC2 + DDC3 samples 1:1, accumulate 1024 paired complex samples,
+    /// then emit a PsFeedbackFrame for the DspPipelineService pump.
+    /// </summary>
+    private void HandlePs4DdcPacket(ReadOnlySpan<byte> packet)
+    {
+        int needed = 2 * PacketParser.Hl2Ps4DdcSamplesPerPacket;
+        var ddc0 = ArrayPool<double>.Shared.Rent(needed);
+        var ddc1 = ArrayPool<double>.Shared.Rent(needed);
+        var ddc2 = ArrayPool<double>.Shared.Rent(needed);
+        var ddc3 = ArrayPool<double>.Shared.Rent(needed);
+        bool publishedToIqChannel = false;
+        try
+        {
+            if (!PacketParser.TryParseHl2Ps4DdcPacket(
+                    packet, ddc0, ddc1, ddc2, ddc3,
+                    out uint seq, out int samples,
+                    out TelemetryReading telemetry0,
+                    out TelemetryReading telemetry1,
+                    out byte overloadBits))
+                return;
+
+            Interlocked.Increment(ref _psPairedPacketCount);
+            ObserveSequence(seq);
+            Interlocked.Increment(ref _totalFrames);
+
+            // Fan out telemetry + overload exactly like the standard 1-DDC
+            // path (ReceiveLoopAsync). Without this, FWD/REF/PA-temp and
+            // ADC-overload signals freeze for the duration of any PS+TUN
+            // window — operator sees 0.0 W in the meter while the radio is
+            // visibly transmitting.
+            if (telemetry0.C0Address != 0)
+            {
+                try { TelemetryReceived?.Invoke(telemetry0); }
+                catch (Exception ex) { _log.LogWarning(ex, "TelemetryReceived handler threw"); }
+            }
+            if (telemetry1.C0Address != 0)
+            {
+                try { TelemetryReceived?.Invoke(telemetry1); }
+                catch (Exception ex) { _log.LogWarning(ex, "TelemetryReceived handler threw"); }
+            }
+            try { AdcOverloadObserved?.Invoke(AdcOverloadStatus.FromBits(overloadBits)); }
+            catch (Exception ex) { _log.LogWarning(ex, "AdcOverloadObserved handler threw"); }
+
+            // DDC0 → IqFrame channel — keeps panadapter / audio alive during PS+TX.
+            // Use a fresh rented buffer the channel can own; the ddc0 rental is
+            // freed in the finally block.
+            var rented = ArrayPool<double>.Shared.Rent(2 * samples);
+            new ReadOnlySpan<double>(ddc0, 0, 2 * samples)
+                .CopyTo(rented.AsSpan(0, 2 * samples));
+            int rateHz = (HpsdrSampleRate)Volatile.Read(ref _rate) switch
+            {
+                HpsdrSampleRate.Rate48k => 48_000,
+                HpsdrSampleRate.Rate96k => 96_000,
+                HpsdrSampleRate.Rate192k => 192_000,
+                HpsdrSampleRate.Rate384k => 384_000,
+                _ => 48_000,
+            };
+            var memory = new ReadOnlyMemory<double>(rented, 0, 2 * samples);
+            var frame = new IqFrame(memory, samples, rateHz, seq, NowNs());
+            if (_channel.Writer.TryWrite(frame))
+            {
+                publishedToIqChannel = true; // channel now owns `rented`
+            }
+            else
+            {
+                ArrayPool<double>.Shared.Return(rented);
+            }
+
+            // DDC2 → pscc RX, DDC3 → pscc TX. Mirror mi0bot cmaster.cs:8537-8538
+            // (FOUR_DDC routing for HL2 with tot=5: psrx=2, pstx=3).
+            for (int s = 0; s < samples; s++)
+            {
+                if (_psBlockFill == 0) _psBlockStartSeq = seq;
+                _psRxI[_psBlockFill] = (float)ddc2[2 * s];
+                _psRxQ[_psBlockFill] = (float)ddc2[2 * s + 1];
+                _psTxI[_psBlockFill] = (float)ddc3[2 * s];
+                _psTxQ[_psBlockFill] = (float)ddc3[2 * s + 1];
+                _psBlockFill++;
+
+                if (_psBlockFill >= PsFeedbackBlockSize)
+                {
+                    var txI = new float[PsFeedbackBlockSize];
+                    var txQ = new float[PsFeedbackBlockSize];
+                    var rxI = new float[PsFeedbackBlockSize];
+                    var rxQ = new float[PsFeedbackBlockSize];
+                    Array.Copy(_psTxI, txI, PsFeedbackBlockSize);
+                    Array.Copy(_psTxQ, txQ, PsFeedbackBlockSize);
+                    Array.Copy(_psRxI, rxI, PsFeedbackBlockSize);
+                    Array.Copy(_psRxQ, rxQ, PsFeedbackBlockSize);
+                    _psFeedbackFrames.Writer.TryWrite(new PsFeedbackFrame(
+                        txI, txQ, rxI, rxQ, _psBlockStartSeq));
+                    _psBlockFill = 0;
+
+                    // Heartbeat: every Nth block, log block-peak magnitudes so
+                    // we can see whether DDC2 / DDC3 are actually carrying signal.
+                    // PS at 192k emits ~187 blocks/s; log every ~190 = ~1 Hz.
+                    if (++_psBlocksEmitted % 190 == 0)
+                    {
+                        float rxPk = 0f, txPk = 0f, rxAbs = 0f, txAbs = 0f;
+                        for (int j = 0; j < PsFeedbackBlockSize; j++)
+                        {
+                            float ari = Math.Abs(rxI[j]);
+                            float arq = Math.Abs(rxQ[j]);
+                            float ati = Math.Abs(txI[j]);
+                            float atq = Math.Abs(txQ[j]);
+                            if (ari > rxPk) rxPk = ari;
+                            if (arq > rxPk) rxPk = arq;
+                            if (ati > txPk) txPk = ati;
+                            if (atq > txPk) txPk = atq;
+                            rxAbs += ari + arq;
+                            txAbs += ati + atq;
+                        }
+                        _log.LogInformation(
+                            "p1.ps.fb DDC2(rx) peak={RxPk:F4} mean={RxMn:F4} | DDC3(tx) peak={TxPk:F4} mean={TxMn:F4} | blocks={N}",
+                            rxPk, rxAbs / (2 * PsFeedbackBlockSize),
+                            txPk, txAbs / (2 * PsFeedbackBlockSize),
+                            _psBlocksEmitted);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            ArrayPool<double>.Shared.Return(ddc0);
+            ArrayPool<double>.Shared.Return(ddc1);
+            ArrayPool<double>.Shared.Return(ddc2);
+            ArrayPool<double>.Shared.Return(ddc3);
+            _ = publishedToIqChannel; // suppress unused warning
+        }
+    }
 
     public bool EnableHl2Dither
     {
@@ -242,6 +470,48 @@ public sealed class Protocol1Client : IProtocol1Client
         Interlocked.Exchange(ref _ocRxMask, rxMask & 0x7F);
     }
 
+    /// <summary>
+    /// Arm or disarm PureSignal on the wire. HL2-only effect: the C0=0x14
+    /// (Attenuator) frame OR's puresignal_run into C2 bit 6, and the
+    /// Predistortion register is added to the round-robin so calcc's
+    /// subindex/value are kept in sync. The packet decoder switches to
+    /// the 2-DDC paired layout only while PsEnabled is true AND MOX is
+    /// asserted (matching mi0bot networkproto1.c:990, 1005). Reverts to
+    /// 1-DDC standard layout otherwise.
+    ///
+    /// On non-HL2 boards this is a no-op on the wire — Protocol 2 has its
+    /// own PS path via Protocol2Client.SetPsFeedbackEnabled. Storing the
+    /// flag locally keeps the StateDto / engine in sync regardless of
+    /// board so the round-tripping pumps don't get out of sync.
+    /// </summary>
+    public void SetPsEnabled(bool on)
+    {
+        Interlocked.Exchange(ref _psEnabled, on ? 1 : 0);
+    }
+
+    public bool PsEnabled => Volatile.Read(ref _psEnabled) != 0;
+
+    /// <summary>
+    /// Set the HL2 predistortion register payload (0x2b). value is the 4-bit
+    /// PS-value (clamped to 0..15), subindex is the 8-bit subindex written
+    /// to C1. Driven by WDSP's calcc state machine via the engine's
+    /// SetPsControl pump; see DspPipelineService.
+    /// </summary>
+    public void SetPsPredistortion(byte value, byte subindex)
+    {
+        Interlocked.Exchange(ref _psPredistortionValue, value & 0x0F);
+        Interlocked.Exchange(ref _psPredistortionSubindex, subindex);
+    }
+
+    public void SetHl2TxStepAttenuationDb(int db)
+    {
+        // Range matches mi0bot console.cs:2084 (udTXStepAttData.Minimum=-28,
+        // Maximum=+31). ControlFrame.WriteAttenuatorPayload then maps to the
+        // 6-bit wire byte via (31 - db) | 0x40 per networkproto1.c:1086-1088.
+        int clamped = Math.Clamp(db, -28, 31);
+        Interlocked.Exchange(ref _hl2TxAttnDb, clamped);
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -259,6 +529,20 @@ public sealed class Protocol1Client : IProtocol1Client
             // RadioService hasn't pushed a calibrated byte (tests / legacy).
             : (byte)(Volatile.Read(ref _drivePct) * 255 / 100);
 
+        bool psOn = Volatile.Read(ref _psEnabled) != 0;
+        bool moxOn = Volatile.Read(ref _mox) != 0;
+        bool isHl2 = (HpsdrBoardKind)Volatile.Read(ref _boardKind) == HpsdrBoardKind.HermesLite2;
+        // Number of receivers requested in the Config payload (`(N-1) << 3`
+        // in C4 bits [5:3]). mi0bot's HL2 path (Thetis console.cs:8186-8265)
+        // uses **4 DDCs** during PS+MOX:
+        //   DDC0 → RX1 audio (operator's listening freq, stays alive!)
+        //   DDC1 → RX2 (or unused)
+        //   DDC2 → PS RX feedback (post-PA tap, NCO=TX freq) — pscc "rx"
+        //   DDC3 → PS TX reference (TX-DAC loopback, NCO=TX freq) — pscc "tx"
+        // Outside PS+MOX we stay at single-DDC so the existing 1-DDC EP6
+        // packet shape and parser are bit-exact unchanged.
+        byte numRxMinus1 = (byte)(psOn && isHl2 && moxOn ? 3 : 0);
+
         return new(
             VfoAHz: Interlocked.Read(ref _vfoAHz),
             Rate: (HpsdrSampleRate)Volatile.Read(ref _rate),
@@ -271,7 +555,16 @@ public sealed class Protocol1Client : IProtocol1Client
             HasN2adr: Volatile.Read(ref _hasN2adr) != 0,
             DriveLevel: drive,
             UserOcTxMask: (byte)Volatile.Read(ref _ocTxMask),
-            UserOcRxMask: (byte)Volatile.Read(ref _ocRxMask));
+            UserOcRxMask: (byte)Volatile.Read(ref _ocRxMask),
+            PsEnabled: psOn,
+            PsPredistortionValue: (byte)Volatile.Read(ref _psPredistortionValue),
+            PsPredistortionSubindex: (byte)Volatile.Read(ref _psPredistortionSubindex),
+            NumReceiversMinusOne: numRxMinus1,
+            // mi0bot networkproto1.c:1086-1088 — when MOX is on and the
+            // operator/auto-att has set ATTOnTX, swap C4 source from
+            // rx_step_attn to tx_step_attn. Sentinel int.MinValue means
+            // untouched, fall through to the RX-side encoding above.
+            Hl2TxAttnDb: Volatile.Read(ref _hl2TxAttnDb));
     }
 
     private void RxLoop()
@@ -315,6 +608,48 @@ public sealed class Protocol1Client : IProtocol1Client
                 consecutiveTimeouts = 0;
 
                 if (n != PacketParser.PacketLength) continue;
+
+                // PS-armed 4-DDC layout (HL2 only). HL2 emits the 26-byte-
+                // per-slot 4-DDC packet shape only when the last Config
+                // frame carried NumReceiversMinusOne=3 — and SnapshotState
+                // only requests that during MOX+PS+HL2. Outside that window
+                // the operator gets normal single-RX 8-byte packets, so the
+                // parser must follow the same gate (mi0bot Thetis
+                // console.cs:8186-8265 — the !_mox branch keeps single-DDC
+                // even with PS armed). Brief mismatch on MOX edges (1-3 ms
+                // while the new Config frame propagates) is tolerated;
+                // pscc resets cleanly on any garbage block via its
+                // MOX-delay state. The 4-DDC handler publishes DDC0 to
+                // the IqFrame channel (RX1 audio + panadapter stay alive)
+                // and DDC2/DDC3 to the PsFeedbackFrame channel.
+                if (Volatile.Read(ref _psEnabled) != 0
+                    && Volatile.Read(ref _mox) != 0
+                    && (HpsdrBoardKind)Volatile.Read(ref _boardKind) == HpsdrBoardKind.HermesLite2)
+                {
+                    HandlePs4DdcPacket(buffer.AsSpan(0, n));
+                    // Pace the TX loop off the same RX clock so MOX TX
+                    // continues to fire while PS is armed.
+                    var psRateHz = (HpsdrSampleRate)Volatile.Read(ref _rate) switch
+                    {
+                        HpsdrSampleRate.Rate48k => 48_000,
+                        HpsdrSampleRate.Rate96k => 96_000,
+                        HpsdrSampleRate.Rate192k => 192_000,
+                        HpsdrSampleRate.Rate384k => 384_000,
+                        _ => 48_000,
+                    };
+                    // 4-DDC packets are 38 paired samples/packet, so the
+                    // RX pkt rate is rateHz/38 (vs rateHz/126 for N=1).
+                    // Target TX pkt rate stays at 48k/126 ≈ 381. Rounded
+                    // division avoids the integer-truncation overshoot we
+                    // had earlier.
+                    double rxPktsPerSec = psRateHz / (double)PacketParser.Hl2Ps4DdcSamplesPerPacket;
+                    int psTxDivider = Math.Max(1, (int)Math.Round(rxPktsPerSec / 381.0));
+                    if ((++rxPktCounter % psTxDivider) == 0)
+                    {
+                        try { _txSignal.Release(); } catch (SemaphoreFullException) { }
+                    }
+                    continue;
+                }
 
                 var rented = ArrayPool<double>.Shared.Rent(2 * PacketParser.ComplexSamplesPerPacket);
                 bool ok = PacketParser.TryParsePacket(
@@ -418,7 +753,78 @@ public sealed class Protocol1Client : IProtocol1Client
     // TxFreq when Split/RIT are off, which matches what we do here since Zeus
     // has no separate TX VFO yet.
     internal static (ControlFrame.CcRegister first, ControlFrame.CcRegister second) PhaseRegisters(int phase, bool mox)
+        => PhaseRegisters(phase, mox, psArmed: false);
+
+    /// <summary>
+    /// Round-robin register selector. When <paramref name="psArmed"/> is true
+    /// the rotation is widened to 8 phases and includes the new HL2-PS
+    /// registers — RxFreq2 (DDC1 NCO) and AdcRouting (per-RX→ADC selector,
+    /// HL2-doc 0x0e). Without RxFreq2 the second DDC sits at 0 Hz; without
+    /// AdcRouting it samples ADC0 instead of the dedicated PA-coupler ADC1
+    /// — pscc would then see no useful feedback and binfo[6] would NaN out
+    /// (Issue #172, observed before this fix). Mirrors mi0bot
+    /// networkproto1.c:WriteMainLoop_HL2 case 2/3/4.
+    /// </summary>
+    internal static (ControlFrame.CcRegister first, ControlFrame.CcRegister second) PhaseRegisters(
+        int phase, bool mox, bool psArmed)
     {
+        if (psArmed)
+        {
+            int q = phase & 0xF;
+            if (mox)
+            {
+                // PS+MOX (HL2 4-DDC). Every 16-frame window emits each of
+                // the seven PS-critical registers (Config, TxFreq, RxFreq,
+                // RxFreq2, RxFreq3, RxFreq4, AdcRouting, Attenuator,
+                // DriveFilter) at least twice. RxFreq3/RxFreq4 carry the
+                // pscc TX/RX NCO frequencies — without them DDC2 and DDC3
+                // sit at 0 Hz and pscc gets DC. Predistortion is omitted;
+                // mi0bot doesn't emit it for HL2.
+                return q switch
+                {
+                    0  => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.RxFreq3),
+                    1  => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.RxFreq4),
+                    2  => (ControlFrame.CcRegister.Attenuator, ControlFrame.CcRegister.TxFreq),
+                    3  => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.DriveFilter),
+                    4  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.RxFreq3),
+                    5  => (ControlFrame.CcRegister.RxFreq2,    ControlFrame.CcRegister.RxFreq4),
+                    6  => (ControlFrame.CcRegister.AdcRouting, ControlFrame.CcRegister.TxFreq),
+                    7  => (ControlFrame.CcRegister.Config,     ControlFrame.CcRegister.TxFreq),
+                    8  => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.RxFreq3),
+                    9  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.RxFreq4),
+                    10 => (ControlFrame.CcRegister.Attenuator, ControlFrame.CcRegister.RxFreq3),
+                    11 => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.DriveFilter),
+                    12 => (ControlFrame.CcRegister.RxFreq2,    ControlFrame.CcRegister.RxFreq3),
+                    13 => (ControlFrame.CcRegister.RxFreq4,    ControlFrame.CcRegister.TxFreq),
+                    14 => (ControlFrame.CcRegister.AdcRouting, ControlFrame.CcRegister.RxFreq3),
+                    _  => (ControlFrame.CcRegister.Config,     ControlFrame.CcRegister.RxFreq4),
+                };
+            }
+            // PS armed but RX-only: cache RxFreq3 / RxFreq4 / AdcRouting so
+            // the radio has them ready for the next MOX edge. Number-of-
+            // receivers in Config is 0 here so DDC2/DDC3 aren't streaming;
+            // these writes are harmless.
+            return q switch
+            {
+                0  => (ControlFrame.CcRegister.Config,     ControlFrame.CcRegister.RxFreq),
+                1  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.DriveFilter),
+                2  => (ControlFrame.CcRegister.Attenuator, ControlFrame.CcRegister.RxFreq),
+                3  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.RxFreq2),
+                4  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.RxFreq3),
+                5  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.RxFreq4),
+                6  => (ControlFrame.CcRegister.AdcRouting, ControlFrame.CcRegister.RxFreq),
+                7  => (ControlFrame.CcRegister.Attenuator, ControlFrame.CcRegister.RxFreq),
+                8  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.Config),
+                9  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.DriveFilter),
+                10 => (ControlFrame.CcRegister.RxFreq3,    ControlFrame.CcRegister.RxFreq4),
+                11 => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.Attenuator),
+                12 => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.RxFreq3),
+                13 => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.RxFreq4),
+                14 => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.AdcRouting),
+                _  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.Config),
+            };
+        }
+
         int p = phase & 0x3;
         if (mox)
         {
@@ -458,8 +864,14 @@ public sealed class Protocol1Client : IProtocol1Client
             {
                 await _txSignal.WaitAsync(ct).ConfigureAwait(false);
                 var state = SnapshotState();
-                var (first, second) = PhaseRegisters(phase, state.Mox);
-                phase = (phase + 1) & 0x3;
+                // PS-armed rotation widens to 8 phases to fit the
+                // Predistortion (0x2b) register without crowding TxFreq.
+                // The phase counter wraps modulo whichever rotation is in
+                // effect, recomputed every tick so a mid-stream PS toggle
+                // doesn't lose its slot.
+                bool psArmed = state.PsEnabled && state.Board == HpsdrBoardKind.HermesLite2;
+                var (first, second) = PhaseRegisters(phase, state.Mox, psArmed);
+                phase = (phase + 1) & (psArmed ? 0xF : 0x3);
                 ControlFrame.BuildDataPacket(buf, sendSeq++, first, second, in state, _txIqSource);
                 rateWindowPkts++;
                 var nowUtc = DateTime.UtcNow;
@@ -525,4 +937,26 @@ public sealed class Protocol1Client : IProtocol1Client
 
     private static long NowNs() =>
         (long)(Stopwatch.GetTimestamp() * (1_000_000_000.0 / Stopwatch.Frequency));
+
+    /// <summary>
+    /// Pass-through IQ source that mirrors every sample into the owning
+    /// client's PS-TX ring. Cheap regardless of PS arm state — the ring
+    /// reader checks PsEnabled before consuming. Issue #172.
+    /// </summary>
+    private sealed class PsTapIqSource : ITxIqSource
+    {
+        private readonly ITxIqSource _inner;
+        private readonly Protocol1Client _owner;
+        public PsTapIqSource(ITxIqSource inner, Protocol1Client owner)
+        {
+            _inner = inner;
+            _owner = owner;
+        }
+        public (short i, short q) Next(double amplitude)
+        {
+            var (i, q) = _inner.Next(amplitude);
+            _owner.RecordPsTxSample(i, q);
+            return (i, q);
+        }
+    }
 }

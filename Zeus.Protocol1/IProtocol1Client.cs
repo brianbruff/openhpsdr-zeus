@@ -152,4 +152,58 @@ public interface IProtocol1Client : IDisposable
     /// flip on if a bench measurement shows it's needed for a particular HL2 gateware.
     /// </summary>
     bool EnableHl2Dither { get; set; }
+
+    /// <summary>
+    /// Arm or disarm PureSignal predistortion on the wire. HL2-only effect:
+    /// flips bit 22 of register 0x0a (= C2 bit 6 of the C0=0x14 frame), adds
+    /// the Predistortion (0x2b) register to the rotation, and asks the
+    /// gateware for 2 receivers so the EP6 packet layout switches to the
+    /// 2-DDC paired form (DDC0 + DDC1, with DDC1 carrying feedback ADC
+    /// samples during MOX). On non-HL2 boards this stores the flag for
+    /// state-tracking only — the wire stays untouched. Issue #172.
+    /// </summary>
+    void SetPsEnabled(bool on);
+
+    /// <summary>
+    /// Current PS arm state, as set by <see cref="SetPsEnabled"/>. Read by
+    /// DspPipelineService to gate the P1 PS feedback pump.
+    /// </summary>
+    bool PsEnabled { get; }
+
+    /// <summary>
+    /// Push the latest WDSP <c>calcc</c> predistortion subindex/value to
+    /// register 0x2b. Subindex (0..255) lands in C1; value (clamped to
+    /// 0..15) lands in C2 [3:0]. Per the HL2 protocol doc, value bits
+    /// [19:16] = C2 [3:0], NOT [23:20] / C2 [7:4] (PR #119 regression).
+    /// </summary>
+    void SetPsPredistortion(byte value, byte subindex);
+
+    /// <summary>
+    /// HL2 TX-side step attenuator (AD9866 TX PGA) target in dB, range
+    /// -28..+31. Used by <c>PsAutoAttenuateService</c> to bring the PS
+    /// feedback envelope into calcc's [128, 181] convergence window. Out-of-
+    /// range values are clamped to the bounds. Honoured only on HL2 during
+    /// MOX with PS enabled; <see cref="ControlFrame.WriteAttenuatorPayload"/>
+    /// overrides C4 with the mi0bot networkproto1.c:1086-1088 / console.cs:
+    /// 10947-10948 wire encoding (<c>(31 - db) | 0x40</c>). Non-HL2 boards
+    /// store the flag for state-tracking only — the wire stays untouched.
+    /// </summary>
+    void SetHl2TxStepAttenuationDb(int db);
+
+    /// <summary>
+    /// 1024-sample paired feedback blocks decoded from the EP6 stream when
+    /// PS is armed. TX side comes from the in-flight TX-IQ ring (the
+    /// samples we just wrote to the wire); RX side is DDC1, the dedicated
+    /// feedback-ADC path. Single reader (the DspPipelineService PS pump).
+    /// </summary>
+    ChannelReader<PsFeedbackFrame> PsFeedbackFrames { get; }
+
+    /// <summary>
+    /// Diagnostic: monotonic count of PS-armed paired EP6 packets the RX
+    /// loop has decoded since Start. Surfaces "is the radio actually
+    /// emitting paired DDC0/DDC1 frames after PS arm?" — a value that
+    /// stays at 0 after arming is the canonical "PS armed but no
+    /// feedback samples reached the engine" symptom.
+    /// </summary>
+    long PsPairedPacketCount { get; }
 }

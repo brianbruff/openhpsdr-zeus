@@ -1,0 +1,388 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later
+ * Theming for the workspace-level react-grid-layout substrate that replaces
+ * flexlayout-react. Mirrors the meters-grid.css patterns — same RGL CSS
+ * imports (deduped by the bundler), tokenised chrome on every selector. */
+
+@import 'react-grid-layout/css/styles.css';
+@import 'react-resizable/css/styles.css';
+
+/* Outer FlexWorkspace container — held over from the legacy CSS so layouts
+ * don't shift when the flex-layout.css file was removed. Establishes the
+ * positioning context for the absolute "+ Add Panel" button. */
+.flex-workspace {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Inner workspace shell — measured by useContainerWidth, hosts the RGL
+ * grid, scrolls vertically when tiles overflow. */
+.all-panels-workspace {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  /* Use the dark token (--bg-0) for the workspace ground so the gap
+   * between tiles reads like the dark band between the top toolbar
+   * and the second control row — not the blue-gray gutter. */
+  background: var(--bg-0);
+}
+
+.all-panels-grid.react-grid-layout {
+  background: transparent;
+  position: relative;
+}
+
+/* Each grid item — a workspace tile wrapper. Snappy transitions on
+ * place/resize so drags read crisply. */
+.all-panels-grid .react-grid-item {
+  background: transparent;
+  transition: transform var(--dur-fast) var(--ease-out),
+    width var(--dur-fast) var(--ease-out),
+    height var(--dur-fast) var(--ease-out);
+}
+
+/* Item being dragged / resized — RGL adds .react-draggable-dragging or
+ * .resizing while the operator's pointer is live. Lift z so the drag
+ * preview doesn't disappear under siblings. */
+.all-panels-grid .react-grid-item.react-draggable-dragging,
+.all-panels-grid .react-grid-item.resizing {
+  z-index: 4;
+  opacity: 0.92;
+}
+
+/* Drop placeholder — accent-blue ghost where the dragged tile will land. */
+.all-panels-grid .react-grid-placeholder {
+  background: var(--accent);
+  opacity: 0.18;
+  border-radius: var(--r-sm);
+  transition: all var(--dur-fast) var(--ease-out);
+}
+
+/* Bottom-right resize handle — bigger chevron + larger hit area than the
+ * meters-grid (workspace tiles are larger so the handle should be too).
+ * Always visible at low contrast; brightens to --accent on hover so the
+ * operator sees the affordance the moment they hover the tile. The hit
+ * box is 20×20 (vs the chevron's 10×10) to match the easier-to-hit RGL
+ * default and to overlay the panel body for tiles whose body content
+ * (panadapter canvas) would otherwise capture the pointerdown. */
+.all-panels-grid .react-resizable-handle {
+  background-image: none;
+  width: 20px;
+  height: 20px;
+  right: 2px;
+  bottom: 2px;
+  cursor: se-resize;
+  /* Sit above the panel body so corner-grabs aren't intercepted by canvas
+   * pointerdown listeners (panadapter, world map). z-index here is low so
+   * the workspace's own dragging overlays still win. */
+  z-index: 2;
+}
+.all-panels-grid .react-resizable-handle::after {
+  content: '';
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid var(--fg-2);
+  border-bottom: 2px solid var(--fg-2);
+  opacity: 0.7;
+  transition: opacity var(--dur-fast), border-color var(--dur-fast);
+}
+.all-panels-grid .react-grid-item:hover .react-resizable-handle::after {
+  opacity: 1;
+  border-color: var(--accent);
+}
+.all-panels-grid .react-grid-item.resizing .react-resizable-handle::after {
+  border-color: var(--accent);
+  opacity: 1;
+}
+
+/* Workspace tile — beveled chrome wrapping the panel body. Mirrors the
+ * .panel recipe from layout.css so RGL tiles read the same as the legacy
+ * fixed-grid panels. */
+.workspace-tile {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-1);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm, 4px);
+  overflow: hidden;
+  box-shadow:
+    inset 0 1px 0 var(--panel-hl-top, rgba(255, 255, 255, 0.10)),
+    0 1px 0 rgba(0, 0, 0, 0.6),
+    0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+/* Tile chrome header — title + drag-handle + remove-X. Always-visible X
+ * (locked decision); width budget tight at narrow tile widths but the
+ * title ellipsises before the X gets in its way. */
+.workspace-tile-header {
+  height: 24px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  background: linear-gradient(180deg, var(--panel-head-top, var(--panel-top)), var(--panel-head-bot, var(--panel-bot)));
+  border-bottom: 1px solid var(--panel-border);
+  /* Whole header is the drag handle (RGL dragConfig.handle). Show grab
+   * cursor across the full width so the operator knows it's draggable —
+   * tiny grip-only target meant tiles with their own pointer logic
+   * (panadapter canvas) couldn't be moved. */
+  cursor: grab;
+}
+.workspace-tile-header:active {
+  cursor: grabbing;
+}
+
+.workspace-tile-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--fg-3);
+  cursor: grab;
+  flex-shrink: 0;
+}
+.workspace-tile-drag-handle:active {
+  cursor: grabbing;
+}
+.workspace-tile-drag-handle:hover {
+  color: var(--fg-1);
+}
+
+.workspace-tile-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-family: var(--font-sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-1);
+  user-select: none;
+}
+
+.workspace-tile-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: var(--r-xs, 2px);
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
+  flex-shrink: 0;
+}
+.workspace-tile-close:hover {
+  color: var(--tx);
+  background: var(--bg-2);
+}
+.workspace-tile-close:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.workspace-tile-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  /* Auto so panel content (DSP NR sub-controls, full Tuning Step grid,
+   * Logbook rows, etc.) can scroll inside the tile when the operator's
+   * chosen tile size doesn't accommodate everything. Tiles whose body
+   * is a fixed-size canvas (panadapter, world map) don't trigger a
+   * scrollbar because their content fits exactly. */
+  overflow: auto;
+}
+
+/* Workspace-level "+ Add Panel" button — fixed top-right of the workspace
+ * (matches DisplayPanel's "Reset Layout" placement convention). Sits above
+ * tiles via z-index so it stays clickable even when a tile snaps under it
+ * mid-drag. */
+.workspace-add-panel-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  background: linear-gradient(180deg, var(--btn-top), var(--btn-bot));
+  border: 1px solid var(--btn-edge);
+  color: var(--fg-1);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
+}
+.workspace-add-panel-btn:hover {
+  background: linear-gradient(180deg, var(--btn-active-top), var(--btn-active-bot));
+  border-color: var(--accent);
+  color: var(--btn-active-text, var(--fg-0));
+}
+.workspace-add-panel-btn:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Categorized AddPanel modal — left rail of category chips, right pane of
+ * panel cards. Stacks the rail vertically so all categories are reachable
+ * without tab-bar overflow. */
+.add-panel-modal {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 0;
+  background: var(--bg-1);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-md);
+  width: 90%;
+  max-width: 720px;
+  max-height: 80vh;
+  overflow: hidden;
+}
+
+.add-panel-modal-header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--panel-border);
+  background: linear-gradient(180deg, var(--panel-head-top, var(--panel-top)), var(--panel-head-bot, var(--panel-bot)));
+}
+.add-panel-modal-header h2 {
+  margin: 0;
+  font-size: 13px;
+  font-family: var(--font-sans);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-1);
+}
+
+.add-panel-modal-rail {
+  border-right: 1px solid var(--panel-border);
+  background: var(--bg-0);
+  padding: 8px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  min-height: 240px;
+}
+
+.add-panel-category-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-xs);
+  color: var(--fg-2);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.add-panel-category-btn:hover {
+  background: var(--bg-2);
+  color: var(--fg-0);
+}
+.add-panel-category-btn[aria-pressed='true'] {
+  background: linear-gradient(180deg, var(--btn-active-top), var(--btn-active-bot));
+  color: var(--btn-active-text, var(--fg-0));
+  border-color: var(--accent);
+}
+
+.add-panel-modal-body {
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  max-height: calc(80vh - 70px);
+}
+
+.add-panel-search {
+  width: 100%;
+  padding: 6px 10px;
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm);
+  color: var(--fg-0);
+  font-size: 12px;
+  font-family: var(--font-sans);
+}
+
+.add-panel-cards {
+  display: grid;
+  gap: 6px;
+}
+
+.add-panel-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm);
+  color: var(--fg-1);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
+  font-family: var(--font-sans);
+}
+.add-panel-card:hover {
+  background: var(--bg-2);
+  border-color: var(--accent);
+}
+.add-panel-card:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.add-panel-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-0);
+}
+.add-panel-card-title-multi {
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.add-panel-card-tags {
+  font-size: 10px;
+  color: var(--fg-2);
+  letter-spacing: 0.04em;
+}
+
+.add-panel-empty {
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--fg-2);
+}

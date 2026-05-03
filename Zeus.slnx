@@ -2,13 +2,20 @@
   <Folder Name="/tests/">
     <Project Path="tests/Zeus.Contracts.Tests/Zeus.Contracts.Tests.csproj" />
     <Project Path="tests/Zeus.Dsp.Tests/Zeus.Dsp.Tests.csproj" />
+    <Project Path="tests/Zeus.PluginHost.Tests/Zeus.PluginHost.Tests.csproj" />
     <Project Path="tests/Zeus.Protocol1.Tests/Zeus.Protocol1.Tests.csproj" />
     <Project Path="tests/Zeus.Protocol2.Tests/Zeus.Protocol2.Tests.csproj" />
     <Project Path="tests/Zeus.Server.Tests/Zeus.Server.Tests.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Zeus.PluginScanner/Zeus.PluginScanner.csproj" />
+  </Folder>
   <Project Path="Zeus.Contracts/Zeus.Contracts.csproj" />
   <Project Path="Zeus.Dsp/Zeus.Dsp.csproj" />
+  <Project Path="Zeus.PluginHost/Zeus.PluginHost.csproj" />
   <Project Path="Zeus.Protocol1/Zeus.Protocol1.csproj" />
   <Project Path="Zeus.Protocol2/Zeus.Protocol2.csproj" />
   <Project Path="Zeus.Server/Zeus.Server.csproj" />
+  <Project Path="Zeus.Server.Hosting/Zeus.Server.Hosting.csproj" />
+  <Project Path="Zeus.Desktop/Zeus.Desktop.csproj" />
 </Solution>

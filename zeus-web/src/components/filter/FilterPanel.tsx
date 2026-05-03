@@ -9,7 +9,7 @@
 // Operators drag any preset chip out of the ribbon onto one of the three
 // buttons here to pin it — same UX as the Mode/Band/Step toolbar groups.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionStore } from '../../state/connection-store';
 import {
   setFilter,
@@ -19,6 +19,7 @@ import {
 } from '../../api/client';
 import { useFilterFavoritesStore, useFavoritesForMode } from '../../state/filter-favorites-store';
 import { FILTER_DRAG_MIME } from './FilterRibbon';
+import { getPresetsForMode } from './filterPresets';
 
 const RIBBON_OPEN_KEY = 'zeus.filter.advancedPaneOpen';
 
@@ -31,16 +32,29 @@ export function FilterPanel() {
   const updateFavorites = useFilterFavoritesStore((s) => s.update);
   const favoriteSlotNames = useFavoritesForMode(mode);
 
-  const [presets, setPresets] = useState<FilterPresetDto[]>([]);
+  // Seed from the local Thetis preset table so labels render correctly on
+  // first paint. Without this, the buttons collapse to raw slot names
+  // ("F4", "F5", "F6") for the time it takes /api/filter/presets to resolve,
+  // because the lookup `presets.find(...)` returns undefined against an
+  // empty array. Server VAR overrides land here too once the fetch completes.
+  const localPresets = useMemo<FilterPresetDto[]>(
+    () => getPresetsForMode(mode).map((p) => ({ ...p })),
+    [mode],
+  );
+  const [presets, setPresets] = useState<FilterPresetDto[]>(localPresets);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
 
   useEffect(() => { void loadFavorites(mode); }, [mode, loadFavorites]);
 
+  // Reseed `presets` to the new mode's local table whenever the mode flips,
+  // so labels never reflect the old mode while the server fetch is in flight.
+  useEffect(() => { setPresets(localPresets); }, [localPresets]);
+
   useEffect(() => {
     let cancelled = false;
     getFilterPresets(mode)
-      .then((list) => { if (!cancelled) setPresets(list); })
-      .catch(() => { if (!cancelled) setPresets([]); });
+      .then((list) => { if (!cancelled && list.length > 0) setPresets(list); })
+      .catch(() => { /* keep local fallback */ });
     return () => { cancelled = true; };
   }, [mode]);
 

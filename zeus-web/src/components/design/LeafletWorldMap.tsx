@@ -45,6 +45,7 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { ACTIVE_MAP_REF } from '../../state/active-map-ref';
 import {
   bearingDeg,
   destinationPoint,
@@ -301,6 +302,10 @@ export function LeafletWorldMap({
     layerRef.current = L.layerGroup().addTo(map);
     mapRef.current = map;
     if (externalMapRef) externalMapRef.current = map;
+    // Populate the shared ACTIVE_MAP_REF singleton so global keyboard
+    // shortcuts (Alt+Up/Down) can drive zoom regardless of which layout
+    // tree mounted us.
+    ACTIVE_MAP_REF.current = map;
 
     const ro = new ResizeObserver(() => map.invalidateSize());
     ro.observe(el);
@@ -311,6 +316,10 @@ export function LeafletWorldMap({
       mapRef.current = null;
       layerRef.current = null;
       if (externalMapRef) externalMapRef.current = null;
+      // Only clear the shared ref if it still points at OUR map — defensive
+      // against React 18 strict-mode double-mounts where a fresh instance
+      // could have set the singleton between our mount and unmount.
+      if (ACTIVE_MAP_REF.current === map) ACTIVE_MAP_REF.current = null;
     };
   }, [externalMapRef]);
 

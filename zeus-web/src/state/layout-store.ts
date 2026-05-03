@@ -9,139 +9,118 @@
 // Free Software Foundation, either version 2 of the License, or (at your
 // option) any later version. See the LICENSE file at the root of this
 // repository for the full text, or https://www.gnu.org/licenses/.
-//
-// Zeus is an independent reimplementation in .NET — not a fork. Its
-// Protocol-1 / Protocol-2 framing, WDSP integration, meter pipelines, and
-// TX behaviour were informed by studying the Thetis project
-// (https://github.com/ramdor/Thetis), the authoritative reference
-// implementation in the OpenHPSDR ecosystem. Zeus gratefully acknowledges
-// the Thetis contributors whose work made this possible:
-//
-//   Richard Samphire (MW0LGE), Warren Pratt (NR0V),
-//   Laurence Barker (G8NJJ),   Rick Koch (N1GP),
-//   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
-//   Doug Wigley (W5WC),        FlexRadio Systems,
-//   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
-//   Sigi Jetzlsperger (DH1KLM).
-//
-// Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
-// and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
-// here. See ATTRIBUTIONS.md at the repository root for the full provenance
-// statement and per-component attribution.
-//
-// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
-// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
-// Wüllen (DL1YCF); and by DeskHPSDR
-// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
-// Both are GPL-2.0-or-later.
-//
-// WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
-// (NR0V), distributed under GPL v2 or later.
-//
-// Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
-// License for details.
 
 import { create } from 'zustand';
-
-// Opaque flexlayout-react JSON blob — we don't strongly-type the tree.
-type FlexLayoutJson = Record<string, unknown>;
-
-// Bump whenever DEFAULT_LAYOUT gains/loses a panel, or when weights
-// change in a way existing users should pick up on next load. Stored in
-// localStorage; on mismatch we discard the server-side layout and fall
-// through to DEFAULT_LAYOUT.
-//   v2 (2026-04-24): added 'filter' bandwidth-filter panel above hero.
-//   v3 (2026-04-24): shrunk filter tabset weight for tighter default.
-//   v4 (2026-04-27): VFO weight 15→21, QRZ Lookup pulled out of right
-//                    column into bottom row before Logbook, Azimuth Map
-//                    becomes the sole tab in its previous slot.
-//   v5 (2026-04-27): Azimuth Map moved below DSP in the right-column
-//                    stack (classic-layout parity).
-const LAYOUT_SCHEMA_VERSION = 5;
-const VERSION_KEY = 'zeus.layout.schemaVersion';
-
-function getStoredVersion(): number {
-  try {
-    const v = window.localStorage.getItem(VERSION_KEY);
-    return v ? parseInt(v, 10) : 0;
-  } catch {
-    return 0;
-  }
-}
-
-function setStoredVersion(v: number) {
-  try { window.localStorage.setItem(VERSION_KEY, String(v)); } catch { /* ok */ }
-}
+import {
+  EMPTY_WORKSPACE_LAYOUT,
+  newTileUid,
+  parseWorkspaceLayout,
+  placeTileInGrid,
+  type WorkspaceLayout,
+  type WorkspaceTile,
+} from '../layout/workspace';
+import { DEFAULT_WORKSPACE_LAYOUT } from '../layout/defaultLayout';
 
 interface LayoutState {
-  layout: FlexLayoutJson | null;
+  /** The active workspace layout. Never null — falls back to
+   *  DEFAULT_WORKSPACE_LAYOUT when the server has nothing or returns junk. */
+  workspace: WorkspaceLayout;
+  /** True after loadFromServer() has run (success or 404 / network error). */
   isLoaded: boolean;
   loadFromServer: () => Promise<void>;
-  setLayout: (json: FlexLayoutJson) => void;
+  /** Replace the entire workspace blob. Triggers a debounced server PUT. */
+  setWorkspace: (next: WorkspaceLayout) => void;
+  /** Forget the saved layout — back to DEFAULT_WORKSPACE_LAYOUT and DELETE
+   *  the server copy. Used by the "Reset Layout" button. */
   resetLayout: () => void;
+  /** Debounced PUT to /api/ui/layout. */
   syncToServer: () => void;
+  /** sendBeacon-with-fetch-fallback for page-unload persistence. */
   syncToServerBeforeUnload: () => void;
+  // Tile mutators — keep workspace state shape & persistence in one place.
+  /** Append a fresh tile for `panelId`. New uid is minted; placement uses
+   *  defaultSpanFor(panelId) at y = max existing y+h. RGL compacts at
+   *  render time. For multi-instance panels (just `meters`), the panelId
+   *  may already be present — that's expected. */
+  addTile: (panelId: string, opts?: { instanceConfig?: unknown }) => string;
+  /** Remove the tile with the given uid. No-op if not found. */
+  removeTile: (uid: string) => void;
+  /** Replace a tile's grid placement (x/y/w/h). Called from RGL's
+   *  onLayoutChange. */
+  updateTilePlacement: (
+    uid: string,
+    layout: Pick<WorkspaceTile, 'x' | 'y' | 'w' | 'h'>,
+  ) => void;
+  /** Replace a tile's instanceConfig blob. Called from MetersPanel's
+   *  setConfig path. */
+  updateTileInstanceConfig: (uid: string, instanceConfig: unknown) => void;
+  // Add-Panel modal visibility — lifted into the store so the trigger
+  // button can live in the App.tsx control row (after AF gain) while the
+  // modal itself still renders inside the workspace.
+  addPanelOpen: boolean;
+  setAddPanelOpen: (open: boolean) => void;
 }
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const useLayoutStore = create<LayoutState>((set, get) => ({
-  layout: null,
+  workspace: DEFAULT_WORKSPACE_LAYOUT,
   isLoaded: false,
+  addPanelOpen: false,
+  setAddPanelOpen: (open) => set({ addPanelOpen: open }),
 
   loadFromServer: async () => {
-    // Stale schema: discard any server-side layout so DEFAULT_LAYOUT wins.
-    if (getStoredVersion() !== LAYOUT_SCHEMA_VERSION) {
-      await fetch('/api/ui/layout', { method: 'DELETE' }).catch(() => {});
-      setStoredVersion(LAYOUT_SCHEMA_VERSION);
-      set({ layout: null, isLoaded: true });
-      return;
-    }
     try {
       const res = await fetch('/api/ui/layout');
-      if (res.status === 404) {
-        set({ isLoaded: true });
-        return;
-      }
-      if (!res.ok) {
-        set({ isLoaded: true });
+      if (res.status === 404 || !res.ok) {
+        set({ workspace: DEFAULT_WORKSPACE_LAYOUT, isLoaded: true });
         return;
       }
       const dto = (await res.json()) as { layoutJson: string };
-      set({ layout: JSON.parse(dto.layoutJson) as FlexLayoutJson, isLoaded: true });
+      let parsed: WorkspaceLayout;
+      try {
+        parsed = parseWorkspaceLayout(JSON.parse(dto.layoutJson));
+      } catch {
+        parsed = EMPTY_WORKSPACE_LAYOUT;
+      }
+      // parseWorkspaceLayout returns EMPTY when the saved blob is from an
+      // older schema (or otherwise unparseable). Render the default in that
+      // case but DO NOT delete the server copy — a different browser may
+      // still be on the matching schema, and the next save here will
+      // overwrite cleanly.
+      const next =
+        parsed.tiles.length === 0 ? DEFAULT_WORKSPACE_LAYOUT : parsed;
+      set({ workspace: next, isLoaded: true });
     } catch {
-      set({ isLoaded: true });
+      set({ workspace: DEFAULT_WORKSPACE_LAYOUT, isLoaded: true });
     }
   },
 
-  setLayout: (json) => {
-    set({ layout: json });
+  setWorkspace: (next) => {
+    set({ workspace: next });
     get().syncToServer();
   },
 
   resetLayout: () => {
-    set({ layout: null });
+    set({ workspace: DEFAULT_WORKSPACE_LAYOUT });
     fetch('/api/ui/layout', { method: 'DELETE' }).catch(() => {});
   },
 
   syncToServer: () => {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
-      const { layout } = get();
-      if (!layout) return;
+      const { workspace } = get();
       void fetch('/api/ui/layout', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ layoutJson: JSON.stringify(layout) }),
+        body: JSON.stringify({ layoutJson: JSON.stringify(workspace) }),
       });
     }, 1000);
   },
 
   syncToServerBeforeUnload: () => {
-    const { layout } = get();
-    if (!layout) return;
-    const body = JSON.stringify({ layoutJson: JSON.stringify(layout) });
+    const { workspace } = get();
+    const body = JSON.stringify({ layoutJson: JSON.stringify(workspace) });
     const blob = new Blob([body], { type: 'application/json' });
     if (!navigator.sendBeacon('/api/ui/layout-beacon', blob)) {
       void fetch('/api/ui/layout', {
@@ -151,5 +130,68 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
         keepalive: true,
       });
     }
+  },
+
+  addTile: (panelId, opts) => {
+    const { workspace } = get();
+    const placement = placeTileInGrid(panelId, workspace.tiles);
+    const uid = newTileUid();
+    const tile: WorkspaceTile = {
+      uid,
+      panelId,
+      ...placement,
+      ...(opts?.instanceConfig !== undefined
+        ? { instanceConfig: opts.instanceConfig }
+        : {}),
+    };
+    const next: WorkspaceLayout = {
+      ...workspace,
+      tiles: [...workspace.tiles, tile],
+    };
+    set({ workspace: next });
+    get().syncToServer();
+    return uid;
+  },
+
+  removeTile: (uid) => {
+    const { workspace } = get();
+    if (!workspace.tiles.some((t) => t.uid === uid)) return;
+    const next: WorkspaceLayout = {
+      ...workspace,
+      tiles: workspace.tiles.filter((t) => t.uid !== uid),
+    };
+    set({ workspace: next });
+    get().syncToServer();
+  },
+
+  updateTilePlacement: (uid, layout) => {
+    const { workspace } = get();
+    let changed = false;
+    const tiles = workspace.tiles.map((t) => {
+      if (t.uid !== uid) return t;
+      if (
+        t.x === layout.x &&
+        t.y === layout.y &&
+        t.w === layout.w &&
+        t.h === layout.h
+      ) {
+        return t;
+      }
+      changed = true;
+      return { ...t, ...layout };
+    });
+    if (!changed) return;
+    set({ workspace: { ...workspace, tiles } });
+    get().syncToServer();
+  },
+
+  updateTileInstanceConfig: (uid, instanceConfig) => {
+    const { workspace } = get();
+    if (!workspace.tiles.some((t) => t.uid === uid)) return;
+    const tiles = workspace.tiles.map((t) =>
+      t.uid === uid ? { ...t, instanceConfig } : t,
+    );
+    set({ workspace: { ...workspace, tiles } });
+    get().syncToServer();
   },
 }));

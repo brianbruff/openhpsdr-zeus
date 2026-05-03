@@ -64,7 +64,6 @@ import { FilterPanel } from './components/filter/FilterPanel';
 import { FilterRibbon, useFilterRibbonOpenSync } from './components/filter/FilterRibbon';
 import { MoxButton } from './components/MoxButton';
 import { PsToggleButton } from './components/PsToggleButton';
-import { TwoToneButton } from './components/TwoToneButton';
 import { Panadapter } from './components/Panadapter';
 import { PaTempChip } from './components/PaTempChip';
 import { PreampButton } from './components/PreampButton';
@@ -1054,7 +1053,6 @@ export default function App() {
         <MoxButton />
         <TunButton />
         <PsToggleButton />
-        <TwoToneButton />
         <div className="transport-sep" />
         <AudioToggle />
         <MicMeter />

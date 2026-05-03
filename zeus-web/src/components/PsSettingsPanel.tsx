@@ -26,7 +26,6 @@ import {
   setPsFeedbackSource,
   setPsMonitor,
   resetPs,
-  setTwoTone,
 } from '../api/client';
 import { useRadioStore } from '../state/radio-store';
 import { useTxStore } from '../state/tx-store';
@@ -109,15 +108,6 @@ export function PsSettingsPanel() {
   const setPsIntsSpiPreset = useTxStore((s) => s.setPsIntsSpiPreset);
   const setPsFeedbackSourceLocal = useTxStore((s) => s.setPsFeedbackSource);
 
-  const twoToneOn = useTxStore((s) => s.twoToneOn);
-  const twoToneFreq1 = useTxStore((s) => s.twoToneFreq1);
-  const twoToneFreq2 = useTxStore((s) => s.twoToneFreq2);
-  const twoToneMag = useTxStore((s) => s.twoToneMag);
-  const setTwoToneOn = useTxStore((s) => s.setTwoToneOn);
-  const setTwoToneFreq1 = useTxStore((s) => s.setTwoToneFreq1);
-  const setTwoToneFreq2 = useTxStore((s) => s.setTwoToneFreq2);
-  const setTwoToneMag = useTxStore((s) => s.setTwoToneMag);
-
   // Cal-mode radio buttons send the new combination on every change.
   const setMode = useCallback(
     (auto: boolean, single: boolean) => {
@@ -169,50 +159,6 @@ export function PsSettingsPanel() {
       setPsMonitor(next).catch(() => setPsMonitorLocal(prev));
     },
     [psMonitorEnabled, setPsMonitorLocal],
-  );
-
-  const onTwoToneToggle = useCallback(() => {
-    const next = !twoToneOn;
-    setTwoToneOn(next);
-    setTwoTone({
-      enabled: next,
-      freq1: twoToneFreq1,
-      freq2: twoToneFreq2,
-      mag: twoToneMag,
-    }).catch(() => setTwoToneOn(!next));
-  }, [twoToneOn, twoToneFreq1, twoToneFreq2, twoToneMag, setTwoToneOn]);
-
-  // Two-tone freq/mag POSTs always go to the server, even when twoToneOn is
-  // false. The server persists freq1/freq2/mag via PsSettingsStore so an
-  // operator who dials in tones first ("set up the test, then arm") sees the
-  // values stick across restarts. Server SetTwoTone accepts partial fields
-  // and only flips the master arm if `enabled` changes — passing the current
-  // twoToneOn state keeps the radio's TwoTone arm state untouched.
-  const onTwoToneFreq1Change = useCallback(
-    (hz: number) => {
-      const v = Math.max(50, Math.min(5000, Math.round(hz)));
-      setTwoToneFreq1(v);
-      setTwoTone({ enabled: twoToneOn, freq1: v }).catch(() => {});
-    },
-    [twoToneOn, setTwoToneFreq1],
-  );
-
-  const onTwoToneFreq2Change = useCallback(
-    (hz: number) => {
-      const v = Math.max(50, Math.min(5000, Math.round(hz)));
-      setTwoToneFreq2(v);
-      setTwoTone({ enabled: twoToneOn, freq2: v }).catch(() => {});
-    },
-    [twoToneOn, setTwoToneFreq2],
-  );
-
-  const onTwoToneMagChange = useCallback(
-    (mag: number) => {
-      const v = Math.max(0, Math.min(1, mag));
-      setTwoToneMag(v);
-      setTwoTone({ enabled: twoToneOn, mag: v }).catch(() => {});
-    },
-    [twoToneOn, setTwoToneMag],
   );
 
   const calStateLabel = CAL_STATE_NAMES[psCalState] ?? `state ${psCalState}`;
@@ -489,46 +435,6 @@ export function PsSettingsPanel() {
         </Row>
       </Section>
 
-      {/* Two-tone */}
-      <Section title="Two-tone test signal">
-        <Row label="">
-          <button
-            type="button"
-            onClick={onTwoToneToggle}
-            className={`btn sm ${twoToneOn ? 'active' : ''}`}
-            title="Standard PureSignal calibration excitation"
-          >
-            {twoToneOn ? '2-Tone ON' : '2-Tone OFF'}
-          </button>
-        </Row>
-        <Row label="Freq 1 (Hz)">
-          <NumberInput
-            value={twoToneFreq1}
-            min={50}
-            max={5000}
-            step={10}
-            onChange={onTwoToneFreq1Change}
-          />
-        </Row>
-        <Row label="Freq 2 (Hz)">
-          <NumberInput
-            value={twoToneFreq2}
-            min={50}
-            max={5000}
-            step={10}
-            onChange={onTwoToneFreq2Change}
-          />
-        </Row>
-        <Row label="Magnitude">
-          <NumberInput
-            value={twoToneMag}
-            min={0}
-            max={1}
-            step={0.01}
-            onChange={onTwoToneMagChange}
-          />
-        </Row>
-      </Section>
     </div>
   );
 }

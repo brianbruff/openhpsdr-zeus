@@ -120,16 +120,16 @@ describe('parseWorkspaceLayout', () => {
     expect(parseWorkspaceLayout(42)).toEqual(EMPTY_WORKSPACE_LAYOUT);
   });
 
-  it('drops blobs whose schemaVersion is not 6', () => {
-    const v5 = { schemaVersion: 5, tiles: [] };
-    expect(parseWorkspaceLayout(v5)).toEqual(EMPTY_WORKSPACE_LAYOUT);
+  it('drops blobs whose schemaVersion is not 7', () => {
+    const v6 = { schemaVersion: 6, tiles: [] };
+    expect(parseWorkspaceLayout(v6)).toEqual(EMPTY_WORKSPACE_LAYOUT);
     const future = { schemaVersion: 99, tiles: [] };
     expect(parseWorkspaceLayout(future)).toEqual(EMPTY_WORKSPACE_LAYOUT);
   });
 
   it('drops tiles whose panelId is not in the registry', () => {
     const dirty = {
-      schemaVersion: 6,
+      schemaVersion: 7,
       tiles: [
         { uid: 'a', panelId: 'hero', x: 0, y: 0, w: 9, h: 12 },
         { uid: 'b', panelId: 'no-such-panel', x: 0, y: 0, w: 1, h: 1 },
@@ -142,7 +142,7 @@ describe('parseWorkspaceLayout', () => {
 
   it('drops tiles missing required numeric fields', () => {
     const dirty = {
-      schemaVersion: 6,
+      schemaVersion: 7,
       tiles: [
         { uid: 'good', panelId: 'hero', x: 0, y: 0, w: 9, h: 12 },
         { uid: 'no-x', panelId: 'hero', y: 0, w: 9, h: 12 },
@@ -157,7 +157,7 @@ describe('parseWorkspaceLayout', () => {
   it('preserves instanceConfig verbatim across a parse round-trip', () => {
     const cfg = { schemaVersion: 1, widgets: [{ uid: 'w' }] };
     const blob = {
-      schemaVersion: 6,
+      schemaVersion: 7,
       tiles: [
         {
           uid: 'm',

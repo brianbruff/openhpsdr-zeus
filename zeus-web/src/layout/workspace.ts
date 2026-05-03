@@ -46,12 +46,12 @@ export interface WorkspaceTile {
 
 /** Top-level workspace blob persisted to /api/ui/layout. */
 export interface WorkspaceLayout {
-  schemaVersion: 6;
+  schemaVersion: 7;
   tiles: WorkspaceTile[];
 }
 
 export const EMPTY_WORKSPACE_LAYOUT: WorkspaceLayout = {
-  schemaVersion: 6,
+  schemaVersion: 7,
   tiles: [],
 };
 
@@ -114,7 +114,7 @@ export function placeTileInGrid(
 export function parseWorkspaceLayout(raw: unknown): WorkspaceLayout {
   if (!raw || typeof raw !== 'object') return EMPTY_WORKSPACE_LAYOUT;
   const obj = raw as Partial<WorkspaceLayout>;
-  if (obj.schemaVersion !== 6) return EMPTY_WORKSPACE_LAYOUT;
+  if (obj.schemaVersion !== 7) return EMPTY_WORKSPACE_LAYOUT;
   const rawTiles = Array.isArray(obj.tiles) ? obj.tiles : [];
   const tiles: WorkspaceTile[] = [];
   for (const t of rawTiles) {
@@ -142,5 +142,5 @@ export function parseWorkspaceLayout(raw: unknown): WorkspaceLayout {
         : {}),
     });
   }
-  return { schemaVersion: 6, tiles };
+  return { schemaVersion: 7, tiles };
 }

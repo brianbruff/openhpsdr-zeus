@@ -172,12 +172,13 @@
   padding-right: 0.4em;
 }
 
-/* Classic-layout side-stack only: give the Tuning Step slot a taller
-   floor so the wrapped step grid has room to breathe (~2 rows + the
-   label) without the panel chrome pinching it. Flex-layout tabsets
-   are sized by the operator's drag and don't read this rule. */
-.workspace .side-stack .side-slot--tuning-step {
-  min-height: 110px;
+/* Classic-layout side-stack only: give the TX Stage Meters slot
+   enough vertical room to render four meter rows (MIC / ALC / PWR /
+   SWR) plus the footer status strip without the panel chrome
+   pinching them. Flex-layout tabsets are sized by the operator's
+   drag and don't read this rule. */
+.workspace .side-stack .side-slot--tx-stage-meters {
+  min-height: 280px;
 }
 
 /* ===== Buttons — chunky dark gradient chrome (matches reference) ===== */

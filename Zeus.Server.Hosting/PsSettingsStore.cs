@@ -25,18 +25,14 @@ using Zeus.Contracts;
 namespace Zeus.Server;
 
 // PureSignal settings persistence. Stores the operator's calibration tuning
-// (timing delays, ints/spi preset, ptol mode, auto-attenuate) plus the PS-A
-// master-arm bit so it all survives server restarts. Shares zeus-prefs.db
-// with DspSettingsStore.
+// (timing delays, ints/spi preset, ptol mode, auto-attenuate) so it survives
+// server restarts. Shares zeus-prefs.db with DspSettingsStore.
 //
-// PsEnabled (the PS-A master arm) IS persisted — matches Thetis, where the
-// PS-A button on the Console form is saved/restored by Common.SaveForm /
-// Console.GetStateList like every other CheckBoxTS. PsAuto / PsSingle (cal
-// mode) are persisted similarly. PsHwPeak is NOT persisted because
-// RadioService re-derives it per-radio at connect time. TwoToneEnabled
-// stays NOT persisted: in Thetis it's a transient ButtonTS toggle that
-// resets each session, and arming a test-tone generator on boot would be
-// a surprise.
+// Deliberately does NOT persist `PsEnabled` (the master arm) or `PsAuto` /
+// `PsSingle` (cal mode) — these reset to safe defaults each session. Same
+// pattern as MOX / TUN: arming PS is an operator action, never an automatic
+// "resume what we did last time" behaviour. PsHwPeak isn't persisted either
+// because RadioService re-derives it per-radio at connect time.
 public sealed class PsSettingsStore : IDisposable
 {
     private readonly LiteDatabase _db;
@@ -93,11 +89,6 @@ public sealed class PsSettingsEntry
 {
     public int Id { get; set; }
     public string ProfileId { get; set; } = string.Empty;
-    // PS-A master arm. Persisted to match Thetis (chkFWCATUBypass on the
-    // Console form survives application close/reopen via SaveForm). Defaults
-    // to false on a fresh install so the operator opts in once, not every
-    // session.
-    public bool Enabled { get; set; }
     // Cal-mode default — Auto = continuous adapt. Persisted because operators
     // who prefer single-shot calibration (and run TwoTone manually) want that
     // selection to stick across sessions.
@@ -114,9 +105,9 @@ public sealed class PsSettingsEntry
     public PsFeedbackSource Source { get; set; } = PsFeedbackSource.Internal;
     // Two-tone test generator settings. Persisted so an operator who has
     // dialled in custom IMD test tones (e.g. for a specific filter response
-    // or PA test) doesn't have to re-enter them every session. The
-    // TwoToneEnabled run-flag is NOT persisted — booting Zeus and finding
-    // the radio already injecting a two-tone test signal would be hostile.
+    // or PA test) doesn't have to re-enter them every session. PsEnabled and
+    // TwoToneEnabled are intentionally NOT persisted — same operator-action
+    // discipline as MOX/TUN — but the dialled-in freqs/mag are.
     // Defaults match tx-store.ts (700/1900/0.49) and pihpsdr.
     public double TwoToneFreq1 { get; set; } = 700.0;
     public double TwoToneFreq2 { get; set; } = 1900.0;

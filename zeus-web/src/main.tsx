@@ -52,6 +52,7 @@ import './styles/toolbar-favorites.css';
 import './styles/nr-settings.css';
 import './styles/meters-grid.css';
 import './styles/all-panels.css';
+import './styles/ps-settings.css';
 import App from './App.tsx';
 import { installFetchInterceptor } from './serverUrl';
 

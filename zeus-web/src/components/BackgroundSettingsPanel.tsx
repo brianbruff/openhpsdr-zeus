@@ -20,10 +20,58 @@ import {
   type PanBackgroundMode,
 } from '../state/display-settings-store';
 
-const MODE_OPTIONS: ReadonlyArray<{ id: PanBackgroundMode; label: string; help: string }> = [
-  { id: 'basic', label: 'Basic', help: 'Plain panadapter and waterfall — no overlay.' },
-  { id: 'beam-map', label: 'Beam Map', help: 'World map behind the panadapter, with QRZ contact and rotator overlays when configured.' },
-  { id: 'image', label: 'Image', help: 'Show a custom image behind the panadapter.' },
+type ModeOption = {
+  id: PanBackgroundMode;
+  label: string;
+  help: string;
+  icon: React.ReactNode;
+};
+
+const iconSvg: React.CSSProperties = {
+  width: 13,
+  height: 13,
+  stroke: 'currentColor',
+  fill: 'none',
+  strokeWidth: 1.6,
+  strokeLinecap: 'round',
+  strokeLinejoin: 'round',
+};
+
+const MODE_OPTIONS: ReadonlyArray<ModeOption> = [
+  {
+    id: 'basic',
+    label: 'Basic',
+    help: 'Plain panadapter and waterfall — no overlay.',
+    icon: (
+      <svg viewBox="0 0 16 16" style={iconSvg}>
+        <path d="M2 11l3-3 3 3 3-4 3 3" />
+        <path d="M2 14h12" />
+      </svg>
+    ),
+  },
+  {
+    id: 'beam-map',
+    label: 'Beam Map',
+    help: 'World map with QRZ contact and rotator overlays.',
+    icon: (
+      <svg viewBox="0 0 16 16" style={iconSvg}>
+        <circle cx="8" cy="8" r="6" />
+        <path d="M2 8h12M8 2c2.5 2.7 2.5 9.3 0 12M8 2c-2.5 2.7-2.5 9.3 0 12" />
+      </svg>
+    ),
+  },
+  {
+    id: 'image',
+    label: 'Image',
+    help: 'Show a custom image behind the panadapter.',
+    icon: (
+      <svg viewBox="0 0 16 16" style={iconSvg}>
+        <rect x="2" y="3" width="12" height="10" rx="1.5" />
+        <circle cx="6" cy="7" r="1.2" />
+        <path d="M2 11l3-3 4 4 2-2 3 3" />
+      </svg>
+    ),
+  },
 ];
 
 const FIT_OPTIONS: ReadonlyArray<{ id: BackgroundImageFit; label: string }> = [
@@ -127,36 +175,36 @@ export function BackgroundSettingsPanel() {
 
   return (
     <section>
-      <h3 style={sectionH3}>Panadapter Background</h3>
-      <p style={sectionP}>
-        Choose what's drawn behind the panadapter and waterfall. Beam Map needs
-        QRZ configured under the QRZ tab to populate contact lookups.
-      </p>
+      <div style={sectionHead}>
+        <h3 style={sectionH3}>Panadapter Background</h3>
+        <p style={sectionP}>Beam Map needs QRZ configured to populate contact lookups.</p>
+      </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div role="radiogroup" aria-label="Panadapter background mode" style={segmentedGrid(3)}>
         {MODE_OPTIONS.map((opt) => {
           const active = panBackground === opt.id;
           return (
-            <label key={opt.id} style={modeRowStyle(active)}>
-              <input
-                type="radio"
-                name="pan-background"
-                value={opt.id}
-                checked={active}
-                onChange={() => { void setPanBackground(opt.id); }}
-                style={{ cursor: 'pointer' }}
-              />
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg-0)' }}>{opt.label}</div>
-                <div style={{ fontSize: 11, color: 'var(--fg-2)', marginTop: 2 }}>{opt.help}</div>
+            <button
+              key={opt.id}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              onClick={() => { void setPanBackground(opt.id); }}
+              style={segCardStyle(active)}
+            >
+              <span style={checkDotStyle(active)} aria-hidden />
+              <div style={segTopRow}>
+                <span style={segIconBoxStyle(active)} aria-hidden>{opt.icon}</span>
+                <span style={segTitle}>{opt.label}</span>
               </div>
-            </label>
+              <span style={segHelp}>{opt.help}</span>
+            </button>
           );
         })}
       </div>
 
       {panBackground === 'image' && (
-        <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div
             onDragEnter={onDragEnter}
             onDragOver={onDragOver}
@@ -200,10 +248,8 @@ export function BackgroundSettingsPanel() {
           {busy && <div style={{ fontSize: 11, color: 'var(--fg-2)' }}>Processing…</div>}
           {error && <div style={{ fontSize: 11, color: 'var(--tx)' }}>{error}</div>}
 
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-1)', marginBottom: 6 }}>
-              Sizing
-            </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={inlineLabel}>Sizing</span>
             <div style={{ display: 'flex', gap: 6 }}>
               {FIT_OPTIONS.map((opt) => {
                 const active = backgroundImageFit === opt.id;
@@ -219,52 +265,127 @@ export function BackgroundSettingsPanel() {
                 );
               })}
             </div>
+            {backgroundImage && (
+              <button
+                type="button"
+                className="btn sm"
+                style={{ marginLeft: 'auto' }}
+                onClick={() => { void setBackgroundImage(null); }}
+              >
+                CLEAR IMAGE
+              </button>
+            )}
           </div>
-
-          {backgroundImage && (
-            <button
-              type="button"
-              className="btn sm"
-              style={{ alignSelf: 'flex-start' }}
-              onClick={() => { void setBackgroundImage(null); }}
-            >
-              CLEAR IMAGE
-            </button>
-          )}
         </div>
       )}
     </section>
   );
 }
 
+const sectionHead: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'baseline',
+  flexWrap: 'wrap',
+  gap: 10,
+  marginBottom: 10,
+};
 const sectionH3: React.CSSProperties = {
-  margin: '0 0 10px 0',
+  margin: 0,
   fontSize: 11,
   fontWeight: 700,
-  letterSpacing: '0.12em',
+  letterSpacing: '0.18em',
   textTransform: 'uppercase',
   color: 'var(--fg-0)',
 };
 const sectionP: React.CSSProperties = {
-  margin: '0 0 12px 0',
+  margin: 0,
   fontSize: 12,
   lineHeight: 1.5,
   color: 'var(--fg-2)',
 };
-function modeRowStyle(active: boolean): React.CSSProperties {
+const inlineLabel: React.CSSProperties = {
+  fontSize: 10,
+  letterSpacing: '0.16em',
+  textTransform: 'uppercase',
+  color: 'var(--fg-2)',
+  fontWeight: 600,
+};
+
+function segmentedGrid(cols: number): React.CSSProperties {
   return {
-    display: 'flex',
-    alignItems: 'center',
+    display: 'grid',
+    gridTemplateColumns: `repeat(${cols}, 1fr)`,
     gap: 8,
-    padding: '8px 12px',
-    borderRadius: 'var(--r-sm)',
-    background: active ? 'var(--bg-2)' : 'transparent',
-    border: '1px solid',
-    borderColor: active ? 'var(--accent)' : 'var(--line)',
-    cursor: 'pointer',
-    transition: 'all var(--dur-fast)',
   };
 }
+
+function segCardStyle(active: boolean): React.CSSProperties {
+  return {
+    position: 'relative',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+    minHeight: 76,
+    padding: '12px 12px 11px',
+    textAlign: 'left',
+    border: '1px solid',
+    borderColor: active ? 'var(--accent)' : 'var(--line)',
+    background: active ? 'var(--accent-soft)' : 'var(--bg-1)',
+    boxShadow: active ? 'inset 0 0 0 1px var(--accent)' : 'none',
+    borderRadius: 'var(--r-md)',
+    cursor: 'pointer',
+    color: 'var(--fg-1)',
+    transition: 'background var(--dur-fast), border-color var(--dur-fast)',
+  };
+}
+
+function segIconBoxStyle(active: boolean): React.CSSProperties {
+  return {
+    width: 22,
+    height: 22,
+    display: 'inline-grid',
+    placeItems: 'center',
+    borderRadius: 'var(--r-sm)',
+    background: active ? 'var(--accent)' : 'var(--bg-3)',
+    border: active ? '1px solid var(--accent)' : '1px solid var(--line)',
+    color: active ? '#0b1220' : 'var(--fg-1)',
+    flexShrink: 0,
+  };
+}
+
+function checkDotStyle(active: boolean): React.CSSProperties {
+  return {
+    position: 'absolute',
+    top: 9,
+    right: 9,
+    width: 14,
+    height: 14,
+    borderRadius: '50%',
+    border: `1.5px solid ${active ? 'var(--accent)' : 'var(--line)'}`,
+    background: active
+      ? 'radial-gradient(circle at center, var(--accent) 0 4px, transparent 4.5px)'
+      : 'transparent',
+    transition: 'border-color var(--dur-fast), background var(--dur-fast)',
+  };
+}
+
+const segTopRow: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+};
+const segTitle: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 700,
+  color: 'var(--fg-0)',
+  letterSpacing: '0.02em',
+};
+const segHelp: React.CSSProperties = {
+  fontSize: 11.5,
+  color: 'var(--fg-2)',
+  lineHeight: 1.45,
+};
+
 function dropZoneStyle(active: boolean): React.CSSProperties {
   return {
     border: '2px dashed',
@@ -272,7 +393,7 @@ function dropZoneStyle(active: boolean): React.CSSProperties {
     borderRadius: 'var(--r-sm)',
     padding: 14,
     cursor: 'pointer',
-    background: active ? 'rgba(74, 158, 255, 0.06)' : 'rgba(255,255,255,0.02)',
+    background: active ? 'var(--accent-soft)' : 'rgba(255,255,255,0.02)',
     transition: 'all var(--dur-fast)',
   };
 }

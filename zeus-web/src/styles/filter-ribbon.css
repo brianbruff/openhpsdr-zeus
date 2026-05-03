@@ -16,7 +16,7 @@
   grid-template-rows: auto 1fr 200px;
 }
 .workspace.has-filter-ribbon .filter-ribbon { grid-column: 1; grid-row: 1; }
-.workspace.has-filter-ribbon .hero         { grid-row: 2; }
+.workspace.has-filter-ribbon .hero         { grid-row: 2; align-self: stretch; }
 .workspace.has-filter-ribbon .bottom-row   { grid-row: 3; }
 .workspace.has-filter-ribbon .side-stack   { grid-row: 1 / span 3; }
 

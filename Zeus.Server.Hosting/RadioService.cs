@@ -190,10 +190,10 @@ public sealed class RadioService : IDisposable
                 _lastPresetPerMode[m] = filterPresetStore.GetLastSelectedPreset(m);
         }
 
-        // Load persisted PS settings — operator's calibration tuning plus
-        // the PS-A master-arm bit (Thetis-faithful: chkFWCATUBypass survives
-        // app close/reopen via Common.SaveForm). PsHwPeak is left at the P1
-        // default; ConnectAsync / ConnectP2Async overrides per-radio.
+        // Load persisted PS settings — operator's calibration tuning. Master
+        // arm and cal-mode are deliberately NOT persisted (parity with MOX);
+        // only the timing/preset/auto-att tuning is. PsHwPeak is left at the
+        // P1 default; ConnectAsync / ConnectP2Async overrides per-radio.
         var ps = _psStore?.Get();
 
         _state = new(
@@ -215,13 +215,7 @@ public sealed class RadioService : IDisposable
             FilterPresetName: "VAR1",
             FilterAdvancedPaneOpen: filterPresetStore?.GetAdvancedPaneOpen() ?? false,
             // PS persisted fields (or DTO defaults when not persisted yet).
-            // PsEnabled IS persisted — Thetis-faithful sticky PS-A arm.
-            // DspPipelineService gates engine.SetPsEnabled on engine!=null,
-            // so a true value here is harmless until the operator connects;
-            // ConnectP2Async then sets _psResyncRequired so the next
-            // OnRadioStateChanged pushes the arm bit into the freshly-opened
-            // engine.
-            PsEnabled: ps?.Enabled ?? false,
+            // PsEnabled NOT persisted — always starts off each session.
             PsAuto: ps?.Auto ?? true,
             PsPtol: ps?.Ptol ?? false,
             PsAutoAttenuate: ps?.AutoAttenuate ?? true,
@@ -244,9 +238,9 @@ public sealed class RadioService : IDisposable
     /// callers don't drop fields by writing only what they touched. Called
     /// from SetPs, SetPsAdvanced, SetPsFeedbackSource, and SetTwoTone.
     ///
-    /// TwoToneEnabled (transient run-flag) and PsHwPeak (per-radio derived)
-    /// are intentionally NOT in the entry. PsEnabled IS persisted — see
-    /// PsSettingsStore header for the Thetis parity rationale.
+    /// PsEnabled / TwoToneEnabled (master arm flags) and PsHwPeak (per-radio
+    /// derived) are intentionally NOT in the entry — same operator-action
+    /// discipline as MOX/TUN.
     /// </summary>
     private void PersistPsState()
     {
@@ -254,7 +248,6 @@ public sealed class RadioService : IDisposable
         var snap = Snapshot();
         _psStore.Upsert(new PsSettingsEntry
         {
-            Enabled = snap.PsEnabled,
             Auto = snap.PsAuto,
             Ptol = snap.PsPtol,
             AutoAttenuate = snap.PsAutoAttenuate,
@@ -1079,8 +1072,9 @@ public sealed class RadioService : IDisposable
             PsAuto = req.Auto,
             PsSingle = req.Single,
         });
-        // Persist arm + cal-mode so the PS-A button is sticky across server
-        // restarts (Thetis parity).
+        // Persist Auto/Single change so the operator's cal-mode preference
+        // sticks across restarts. (PsEnabled is the master arm — not
+        // persisted; same discipline as MOX/TUN.)
         PersistPsState();
         return Snapshot();
     }
@@ -1123,7 +1117,7 @@ public sealed class RadioService : IDisposable
     /// from the PS-feedback analyzer instead of the post-CFIR TX analyzer
     /// so the operator sees the actual on-air RF rather than the
     /// predistorted baseband. Operator viewing preference — NOT persisted
-    /// across sessions (same discipline as MOX / TUN).
+    /// across sessions (same discipline as PsEnabled / MOX).
     /// </summary>
     public StateDto SetPsMonitor(PsMonitorSetRequest req)
     {
@@ -1137,8 +1131,7 @@ public sealed class RadioService : IDisposable
     /// next DspPipelineService.UpdateState tick latches the value into
     /// engine.SetTxMonitorEnabled. Mirrors PsMonitor's lifecycle — operator
     /// preference, not persisted across sessions; resets to off on each new
-    /// connect so the radio doesn't come up auditioning unintentionally
-    /// (same discipline as MOX / TUN).</summary>
+    /// connect so the radio doesn't come up auditioning unintentionally.</summary>
     public StateDto SetTxMonitor(TxMonitorSetRequest req)
     {
         ArgumentNullException.ThrowIfNull(req);

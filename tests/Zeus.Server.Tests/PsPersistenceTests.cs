@@ -30,9 +30,8 @@ namespace Zeus.Server.Tests;
 /// PureSignal settings persistence — guards the round-3 fix where SetPs and
 /// SetTwoTone silently failed to call _psStore.Upsert. After the fix, every
 /// Set* path that mutates a persisted PS field must drop a doc into the
-/// LiteDB-backed store. PsEnabled (PS-A) IS persisted (Thetis parity);
-/// TwoToneEnabled is NOT — it's a transient run-flag and arming a test
-/// generator on boot would be hostile.
+/// LiteDB-backed store. Master-arm flags (PsEnabled, TwoToneEnabled) are
+/// intentionally NOT persisted — same operator-action discipline as MOX/TUN.
 /// </summary>
 public class PsPersistenceTests : IDisposable
 {
@@ -72,18 +71,6 @@ public class PsPersistenceTests : IDisposable
         var entry = store.Get();
         Assert.NotNull(entry);
         Assert.False(entry!.Auto);
-    }
-
-    [Fact]
-    public void SetPs_PersistsEnabledFlag()
-    {
-        var (radio, store) = BuildRadioWithStore();
-
-        radio.SetPs(new PsControlSetRequest(Enabled: true, Auto: true, Single: false));
-
-        var entry = store.Get();
-        Assert.NotNull(entry);
-        Assert.True(entry!.Enabled);
     }
 
     [Fact]
@@ -180,21 +167,8 @@ public class PsPersistenceTests : IDisposable
         Assert.Equal(0.35, snap.PsMoxDelaySec);
         Assert.Equal("16/512", snap.PsIntsSpiPreset);
         Assert.Equal(PsFeedbackSource.External, snap.PsFeedbackSource);
-        // TwoToneEnabled is a transient run-flag — stays false on every fresh
-        // session even if it had been on previously.
+        // Master-arm flag should NOT survive — TwoToneEnabled stays false on
+        // every fresh session even if Enabled=true had been set previously.
         Assert.False(snap.TwoToneEnabled);
-    }
-
-    [Fact]
-    public void NewRadioService_RehydratesPsEnabled()
-    {
-        // PS-A (the master arm) must be sticky across server restarts —
-        // matches Thetis chkFWCATUBypass behaviour. If the operator armed PS
-        // last session, a fresh RadioService should snapshot PsEnabled=true.
-        var (radio1, _) = BuildRadioWithStore();
-        radio1.SetPs(new PsControlSetRequest(Enabled: true, Auto: true, Single: false));
-
-        var (radio2, _) = BuildRadioWithStore();
-        Assert.True(radio2.Snapshot().PsEnabled);
     }
 }

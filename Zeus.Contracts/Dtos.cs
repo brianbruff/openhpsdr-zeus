@@ -170,10 +170,10 @@ public sealed record StateDto(
     double AgcOffsetDb = 0.0,
 
     // ---- PureSignal predistortion (TXA-side; WDSP calcc/iqc stages) ----
-    // PsEnabled is the master arm bit. Persisted via PsSettingsStore so the
-    // PS-A button is sticky across server restarts (Thetis parity — see
-    // PsSettingsStore header). The other PS fields are persisted alongside
-    // it so the operator's calibration tuning survives too.
+    // PsEnabled is the master arm bit. Deliberately NOT persisted server-side
+    // — operator must re-arm each session (parity with MOX). The other PS
+    // fields ARE persisted via PsSettingsStore so the operator's calibration
+    // tuning survives restarts.
     bool PsEnabled = false,
     // PsMonitorEnabled — operator-facing "Monitor PA output" toggle
     // (issue #121). When true AND PsEnabled AND PS has converged
@@ -184,7 +184,7 @@ public sealed record StateDto(
     // Thetis-style predistorted view. Hidden / disabled in the UI on
     // boards that have no PS feedback path (e.g. HermesLite2). NOT
     // persisted server-side: this is an operator viewing preference,
-    // resets to off each session (same discipline as MOX / TUN).
+    // resets to off each session same as PsEnabled.
     bool PsMonitorEnabled = false,
     // TX Monitor — operator-facing audition toggle (issue #106 follow-up).
     // When true, the engine demodulates the post-CFIR TX IQ back to mono
@@ -194,7 +194,7 @@ public sealed record StateDto(
     // is OFF so VST plugins receive samples and meters animate continuously.
     // RX audio is suppressed in the broadcast while monitor is on so the
     // operator hears only the TX audition. NOT persisted across sessions —
-    // resets to off each connect, matching MOX / TUN discipline.
+    // resets to off each connect, matching MOX/TUN/PsEnabled discipline.
     bool TxMonitorEnabled = false,
     bool PsAuto = true,             // continuous adapt by default once armed
     bool PsSingle = false,          // one-shot SetPSControl(1,1,0,0)

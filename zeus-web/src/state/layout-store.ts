@@ -21,37 +21,6 @@ import {
 } from '../layout/workspace';
 import { DEFAULT_WORKSPACE_LAYOUT } from '../layout/defaultLayout';
 
-// Bump whenever DEFAULT_WORKSPACE_LAYOUT gains/loses a tile, or the wire
-// shape changes in a way that existing operators must pick up. Stored in
-// localStorage; on mismatch we DELETE the server-side layout so
-// DEFAULT_WORKSPACE_LAYOUT wins on first load.
-//   v2 (2026-04-24): added 'filter' bandwidth-filter panel above hero.
-//   v3 (2026-04-24): shrunk filter tabset weight for tighter default.
-//   v4 (2026-04-27): VFO weight 15→21, QRZ Lookup pulled out of right
-//                    column into bottom row before Logbook, Azimuth Map
-//                    becomes the sole tab in its previous slot.
-//   v5 (2026-04-27): Azimuth Map moved below DSP in the right-column
-//                    stack (classic-layout parity).
-//   v6 (2026-05-01): swapped flexlayout-react workspace for react-grid-
-//                    layout tiles. Saved v5 layouts are not parseable by
-//                    the new code; reset on first load via the existing
-//                    schema-mismatch DELETE path.
-const LAYOUT_SCHEMA_VERSION = 6;
-const VERSION_KEY = 'zeus.layout.schemaVersion';
-
-function getStoredVersion(): number {
-  try {
-    const v = window.localStorage.getItem(VERSION_KEY);
-    return v ? parseInt(v, 10) : 0;
-  } catch {
-    return 0;
-  }
-}
-
-function setStoredVersion(v: number) {
-  try { window.localStorage.setItem(VERSION_KEY, String(v)); } catch { /* ok */ }
-}
-
 interface LayoutState {
   /** The active workspace layout. Never null — falls back to
    *  DEFAULT_WORKSPACE_LAYOUT when the server has nothing or returns junk. */
@@ -101,13 +70,6 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   setAddPanelOpen: (open) => set({ addPanelOpen: open }),
 
   loadFromServer: async () => {
-    // Stale schema: discard any server-side layout so DEFAULT wins.
-    if (getStoredVersion() !== LAYOUT_SCHEMA_VERSION) {
-      await fetch('/api/ui/layout', { method: 'DELETE' }).catch(() => {});
-      setStoredVersion(LAYOUT_SCHEMA_VERSION);
-      set({ workspace: DEFAULT_WORKSPACE_LAYOUT, isLoaded: true });
-      return;
-    }
     try {
       const res = await fetch('/api/ui/layout');
       if (res.status === 404 || !res.ok) {
@@ -121,8 +83,11 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       } catch {
         parsed = EMPTY_WORKSPACE_LAYOUT;
       }
-      // Empty parse result = unparseable / wrong-shape blob. Fall back to
-      // default rather than rendering an empty workspace.
+      // parseWorkspaceLayout returns EMPTY when the saved blob is from an
+      // older schema (or otherwise unparseable). Render the default in that
+      // case but DO NOT delete the server copy — a different browser may
+      // still be on the matching schema, and the next save here will
+      // overwrite cleanly.
       const next =
         parsed.tiles.length === 0 ? DEFAULT_WORKSPACE_LAYOUT : parsed;
       set({ workspace: next, isLoaded: true });
@@ -230,6 +195,3 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
     get().syncToServer();
   },
 }));
-
-// Re-export for tests.
-export { LAYOUT_SCHEMA_VERSION };

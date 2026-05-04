@@ -71,6 +71,7 @@ export const TX_FIXED_DB_MAX = 20;
 const STORAGE_KEY = 'zeus.display.dbRange';
 const TX_STORAGE_KEY = 'zeus.display.txDbRange';
 const WF_STORAGE_KEY = 'zeus.display.wfDbRange';
+const WF_TX_STORAGE_KEY = 'zeus.display.wfTxDbRange';
 const RX_TRACE_COLOR_KEY = 'zeus.display.rxTraceColor';
 
 // Legacy localStorage keys — pre-server-side storage. Read once on first
@@ -193,6 +194,32 @@ function writeSavedWfRange(wfDbMin: number, wfDbMax: number): void {
   }
 }
 
+function readSavedWfTxRange(): { wfTxDbMin: number; wfTxDbMax: number } {
+  try {
+    if (typeof localStorage === 'undefined') return { wfTxDbMin: TX_FIXED_DB_MIN, wfTxDbMax: TX_FIXED_DB_MAX };
+    const raw = localStorage.getItem(WF_TX_STORAGE_KEY);
+    if (!raw) return { wfTxDbMin: TX_FIXED_DB_MIN, wfTxDbMax: TX_FIXED_DB_MAX };
+    const parsed = JSON.parse(raw);
+    const wfTxDbMin = typeof parsed?.wfTxDbMin === 'number' ? parsed.wfTxDbMin : TX_FIXED_DB_MIN;
+    const wfTxDbMax = typeof parsed?.wfTxDbMax === 'number' ? parsed.wfTxDbMax : TX_FIXED_DB_MAX;
+    if (!(wfTxDbMin < wfTxDbMax) || !Number.isFinite(wfTxDbMin) || !Number.isFinite(wfTxDbMax)) {
+      return { wfTxDbMin: TX_FIXED_DB_MIN, wfTxDbMax: TX_FIXED_DB_MAX };
+    }
+    return { wfTxDbMin, wfTxDbMax };
+  } catch {
+    return { wfTxDbMin: TX_FIXED_DB_MIN, wfTxDbMax: TX_FIXED_DB_MAX };
+  }
+}
+
+function writeSavedWfTxRange(wfTxDbMin: number, wfTxDbMax: number): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(WF_TX_STORAGE_KEY, JSON.stringify({ wfTxDbMin, wfTxDbMax }));
+  } catch {
+    // quota exceeded / private mode — accept silently.
+  }
+}
+
 // Exponential smoothing constant for the auto-range tracker. 0.1 trades
 // flicker resistance for responsiveness — band-change artifacts fade over
 // ~30 frames at 30 Hz (~1 s).
@@ -218,6 +245,11 @@ export type DisplaySettingsState = {
   // the panadapter's noise-floor view. Driven by its own DbScale slider.
   wfDbMin: number;
   wfDbMax: number;
+  // Separate dB range for TX waterfall (rendered during MOX/TUN). Mirrors
+  // the TX panadapter pair so the operator can darken/brighten the keyed
+  // waterfall window independently of their RX waterfall view.
+  wfTxDbMin: number;
+  wfTxDbMax: number;
   // Separate dB range for TX panadapter (rendered during MOX/TUN). Thetis
   // parity — see TX_FIXED_DB_MIN/MAX constants.
   txDbMin: number;
@@ -252,6 +284,8 @@ export type DisplaySettingsState = {
   shiftTxDbRange: (deltaDb: number) => void;
   // Same as shiftDbRange but for the waterfall's independent range.
   shiftWfDbRange: (deltaDb: number) => void;
+  // Same as shiftWfDbRange but for the TX-specific waterfall range.
+  shiftWfTxDbRange: (deltaDb: number) => void;
 };
 
 const DB_ABS_LIMIT = 200;
@@ -259,6 +293,7 @@ const DB_ABS_LIMIT = 200;
 const initialRange = readSavedRange();
 const initialTxRange = readSavedTxRange();
 const initialWfRange = readSavedWfRange();
+const initialWfTxRange = readSavedWfTxRange();
 
 export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) => ({
   autoRange: false,
@@ -266,6 +301,8 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   dbMax: initialRange.dbMax,
   wfDbMin: initialWfRange.wfDbMin,
   wfDbMax: initialWfRange.wfDbMax,
+  wfTxDbMin: initialWfTxRange.wfTxDbMin,
+  wfTxDbMax: initialWfTxRange.wfTxDbMax,
   txDbMin: initialTxRange.txDbMin,
   txDbMax: initialTxRange.txDbMax,
   colormap: 'blue',
@@ -372,6 +409,13 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
     const nextMax = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, wfDbMax + deltaDb));
     set({ wfDbMin: nextMin, wfDbMax: nextMax });
     writeSavedWfRange(nextMin, nextMax);
+  },
+  shiftWfTxDbRange: (deltaDb) => {
+    const { wfTxDbMin, wfTxDbMax } = get();
+    const nextMin = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, wfTxDbMin + deltaDb));
+    const nextMax = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, wfTxDbMax + deltaDb));
+    set({ wfTxDbMin: nextMin, wfTxDbMax: nextMax });
+    writeSavedWfTxRange(nextMin, nextMax);
   },
   updateAutoRange: (wfDb) => {
     if (!get().autoRange || wfDb.length === 0) return;

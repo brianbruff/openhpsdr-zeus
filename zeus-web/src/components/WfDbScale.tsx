@@ -6,16 +6,33 @@
 
 import { useCallback, useRef } from 'react';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
+import { useTxStore } from '../state/tx-store';
 
 const TICK_STRIDE_DB = 10;
 
 // Draggable dB scale on the waterfall, mirroring DbScale's look and feel
 // but bound to the waterfall's independent dB window so panadapter and
-// waterfall noise floors can be set separately.
+// waterfall noise floors can be set separately. Mirrors DbScale's RX/TX
+// swap so the operator can drag the waterfall scale during MOX/TUN without
+// disturbing their RX waterfall view.
 export function WfDbScale() {
-  const dbMin = useDisplaySettingsStore((s) => s.wfDbMin);
-  const dbMax = useDisplaySettingsStore((s) => s.wfDbMax);
-  const shift = useDisplaySettingsStore((s) => s.shiftWfDbRange);
+  const rxDbMin = useDisplaySettingsStore((s) => s.wfDbMin);
+  const rxDbMax = useDisplaySettingsStore((s) => s.wfDbMax);
+  const txDbMin = useDisplaySettingsStore((s) => s.wfTxDbMin);
+  const txDbMax = useDisplaySettingsStore((s) => s.wfTxDbMax);
+  const shiftRx = useDisplaySettingsStore((s) => s.shiftWfDbRange);
+  const shiftTx = useDisplaySettingsStore((s) => s.shiftWfTxDbRange);
+  const moxOn = useTxStore((s) => s.moxOn);
+  const tunOn = useTxStore((s) => s.tunOn);
+  const keyed = moxOn || tunOn;
+
+  // Pick the active range + shifter based on whether we're keyed. Mirrors
+  // DbScale.tsx — each side has its own waterfall Grid Min/Max so the
+  // operator can hide the silence-time TX floor without moving the RX
+  // noise-floor view.
+  const dbMin = keyed ? txDbMin : rxDbMin;
+  const dbMax = keyed ? txDbMax : rxDbMax;
+  const shift = keyed ? shiftTx : shiftRx;
 
   const dragState = useRef<{
     startY: number;

@@ -23,6 +23,7 @@ export function WfDbScale() {
     startDbMax: number;
     pointerId: number;
     containerHeight: number;
+    lastShiftApplied: number;
   } | null>(null);
 
   const onPointerDown = useCallback(
@@ -34,6 +35,7 @@ export function WfDbScale() {
         startDbMax: dbMax,
         pointerId: e.pointerId,
         containerHeight: rect.height,
+        lastShiftApplied: 0,
       };
       e.currentTarget.setPointerCapture(e.pointerId);
     },
@@ -47,11 +49,15 @@ export function WfDbScale() {
       const dySig = e.clientY - d.startY;
       const dbPerPixel = (d.startDbMax - d.startDbMin) / d.containerHeight;
       const deltaDb = dySig * dbPerPixel;
-      const nextMin = d.startDbMin + deltaDb;
-      const targetShift = nextMin - dbMin;
-      if (Math.abs(targetShift) > 0.5) shift(targetShift);
+      // Incremental, not total — see DbScale for the rationale; same
+      // stale-closure drift bug (issue #234) lived here too.
+      const incrementalShift = deltaDb - d.lastShiftApplied;
+      if (Math.abs(incrementalShift) > 0.5) {
+        shift(incrementalShift);
+        d.lastShiftApplied = deltaDb;
+      }
     },
-    [dbMin, shift],
+    [shift],
   );
 
   const onPointerUp = useCallback(

@@ -784,6 +784,42 @@ public static class ZeusEndpoints
             return Results.Ok();
         });
 
+        // Layout collection: multiple named layouts with active layout tracking.
+        // GET returns 404 when no collection has been saved yet (frontend falls back to
+        // default layout). PUT replaces the entire collection.
+        app.MapGet("/api/ui/layout-collection", (LayoutCollectionStore store) =>
+        {
+            var collection = store.Get();
+            return collection is null ? Results.NotFound() : Results.Ok(collection);
+        });
+
+        app.MapPut("/api/ui/layout-collection", (LayoutCollectionDto req, LayoutCollectionStore store) =>
+        {
+            if (req?.Layouts is null || req.Layouts.Length == 0)
+                return Results.BadRequest(new { error = "layouts required" });
+            if (string.IsNullOrWhiteSpace(req.ActiveLayoutId))
+                return Results.BadRequest(new { error = "activeLayoutId required" });
+            store.Upsert(req);
+            return Results.Ok(store.Get());
+        });
+
+        // Beacon endpoint for layout collection: navigator.sendBeacon posts a Blob with
+        // Content-Type application/json; minimal response so the browser's 204-check passes.
+        app.MapPost("/api/ui/layout-collection-beacon", async (LayoutCollectionStore store, HttpContext ctx) =>
+        {
+            using var reader = new StreamReader(ctx.Request.Body);
+            var body = await reader.ReadToEndAsync(ctx.RequestAborted);
+            try
+            {
+                var req = System.Text.Json.JsonSerializer.Deserialize<LayoutCollectionDto>(
+                    body, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                if (req?.Layouts is { Length: > 0 } && !string.IsNullOrWhiteSpace(req.ActiveLayoutId))
+                    store.Upsert(req);
+            }
+            catch { /* sendBeacon is fire-and-forget; swallow parse errors */ }
+            return Results.Ok();
+        });
+
         app.MapGet("/api/qrz/status", (QrzService qrz) => qrz.GetStatus());
 
         app.MapPost("/api/qrz/login", async (QrzLoginRequest req, QrzService qrz, HttpContext ctx) =>

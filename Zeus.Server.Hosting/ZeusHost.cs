@@ -177,6 +177,7 @@ public static class ZeusHost
         builder.Services.AddSingleton<CredentialStore>();
         builder.Services.AddSingleton<BandMemoryStore>();
         builder.Services.AddSingleton<LayoutStore>();
+        builder.Services.AddSingleton<LayoutCollectionStore>();
         builder.Services.AddSingleton<DspSettingsStore>();
         builder.Services.AddSingleton<PaSettingsStore>();
         builder.Services.AddSingleton<PreferredRadioStore>();

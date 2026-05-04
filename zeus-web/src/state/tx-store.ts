@@ -80,13 +80,14 @@ export type TxMeters = {
 };
 
 export enum AlertKind {
+  // Wire kinds — must match Zeus.Contracts.AlertKind byte values exactly.
   SwrTrip = 0,
   TxTimeout = 1,
   OutOfBand = 2,
-  // Frontend-only sentinel for service-worker update prompts. Shares the
-  // numeric value with TxTimeout, but the wire never sends this — it's
-  // raised locally by useSwUpdatePrompt and consumed by AlertBanner.
-  FrontendUpdate = 1,
+  // Frontend-only sentinel for service-worker update prompts. Raised locally
+  // by useSwUpdatePrompt and consumed by AlertBanner; never sent on the wire,
+  // so its value lives outside the wire-byte range to avoid collisions.
+  FrontendUpdate = 1000,
 }
 
 export type AlertAction = {

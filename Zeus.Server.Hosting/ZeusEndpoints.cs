@@ -775,13 +775,56 @@ public static class ZeusEndpoints
             var body = await reader.ReadToEndAsync(ctx.RequestAborted);
             try
             {
-                var req = System.Text.Json.JsonSerializer.Deserialize<UiLayoutSetRequest>(
+                // Accept either the legacy single-layout shape or the v2
+                // named-layout shape — beforeunload handlers in the field can
+                // still be sending the old format while the page is reloading
+                // into the new client.
+                var named = System.Text.Json.JsonSerializer.Deserialize<SaveNamedLayoutRequest>(
                     body, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                if (req?.LayoutJson is { } json && !string.IsNullOrWhiteSpace(json))
-                    store.Upsert(json);
+                if (named?.LayoutJson is { } njson && !string.IsNullOrWhiteSpace(njson)
+                    && !string.IsNullOrWhiteSpace(named.LayoutId))
+                {
+                    store.UpsertNamed(named.RadioKey ?? "default", named.LayoutId, named.Name ?? named.LayoutId, njson);
+                }
+                else
+                {
+                    var req = System.Text.Json.JsonSerializer.Deserialize<UiLayoutSetRequest>(
+                        body, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    if (req?.LayoutJson is { } json && !string.IsNullOrWhiteSpace(json))
+                        store.Upsert(json);
+                }
             }
             catch { /* sendBeacon is fire-and-forget; swallow parse errors */ }
             return Results.Ok();
+        });
+
+        // Multi-layout API (issue #241) — named layouts keyed per radio.
+        // `radio` query param is the BoardKind string ("HermesLite2", etc.) or
+        // "default" while no radio is connected.
+        app.MapGet("/api/ui/layouts", (string? radio, LayoutStore store) =>
+            Results.Ok(store.GetForRadio(radio ?? "default")));
+
+        app.MapPut("/api/ui/layouts", (SaveNamedLayoutRequest req, LayoutStore store) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.LayoutJson))
+                return Results.BadRequest(new { error = "layoutJson required" });
+            if (string.IsNullOrWhiteSpace(req.LayoutId))
+                return Results.BadRequest(new { error = "layoutId required" });
+            return Results.Ok(store.UpsertNamed(req.RadioKey ?? "default", req.LayoutId, req.Name ?? req.LayoutId, req.LayoutJson));
+        });
+
+        app.MapPost("/api/ui/layouts/active", (SetActiveLayoutRequest req, LayoutStore store) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.LayoutId))
+                return Results.BadRequest(new { error = "layoutId required" });
+            return Results.Ok(store.SetActive(req.RadioKey ?? "default", req.LayoutId));
+        });
+
+        app.MapDelete("/api/ui/layouts", (string? radio, string? id, LayoutStore store) =>
+        {
+            if (string.IsNullOrWhiteSpace(id))
+                return Results.BadRequest(new { error = "id required" });
+            return Results.Ok(store.DeleteNamed(radio ?? "default", id));
         });
 
         app.MapGet("/api/qrz/status", (QrzService qrz) => qrz.GetStatus());

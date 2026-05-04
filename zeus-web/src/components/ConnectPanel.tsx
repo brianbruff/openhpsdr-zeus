@@ -116,7 +116,14 @@ function applyPostConnectEffects() {
   void setLevelerMaxGain(tx.levelerMaxGainDb).catch(() => {});
 }
 
-export function ConnectPanel() {
+export interface ConnectPanelProps {
+  /** When true and connected, render only the Disconnect button (no
+   *  endpoint chip). The bottom status bar shows the radio IP separately
+   *  in this layout, so the chip would be redundant in the top bar. */
+  compact?: boolean;
+}
+
+export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
   const status = useConnectionStore((s) => s.status);
   const endpoint = useConnectionStore((s) => s.endpoint);
   const applyState = useConnectionStore((s) => s.applyState);
@@ -371,16 +378,18 @@ export function ConnectPanel() {
   if (status === 'Connected') {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span className="chip accent">
-          <span className="k">RADIO</span>
-          <span className="v mono">{endpoint ?? '—'}</span>
-        </span>
+        {!compact && (
+          <span className="chip accent">
+            <span className="k">RADIO</span>
+            <span className="v mono">{endpoint ?? '—'}</span>
+          </span>
+        )}
         {error && (
           <span className="label-xs" style={{ color: 'var(--tx)' }}>
             {error}
           </span>
         )}
-        <button type="button" onClick={handleDisconnect} disabled={inflight} className="btn sm">
+        <button type="button" onClick={handleDisconnect} disabled={inflight} className="btn">
           {inflight ? 'Disconnecting…' : 'Disconnect'}
         </button>
       </div>

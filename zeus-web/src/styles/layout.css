@@ -1,10 +1,28 @@
 /* ===========================================================
    Zeus SDR — Layout & component CSS (faithful to reference)
-   =========================================================== */
+   ===========================================================
+
+   App shell grid (issue #241):
+
+       ┌──────┬──────────────────────────────────┐
+       │ left │   topbar        (68 px)          │
+       │ bar  │   alert banner  (auto)           │
+       │      │   workspace     (1fr, scrolls)   │
+       │      │   transport     (44 px, pinned) │
+       └──────┴──────────────────────────────────┘
+
+   The left bar spans the full app height; the rest stack in the right
+   column. Workspace (FlexWorkspace) is the only row that scrolls — the
+   transport row (TX controls + radio status pills + "+ Add Panel") stays
+   pinned at the bottom. Top bar holds inline transport-level controls
+   (mode/filter/band/step/front-end/AGC/AF) plus brand and the settings
+   + connect/disconnect buttons.
+*/
 
 .app {
   display: grid;
-  grid-template-rows: 54px 68px auto 1fr 44px;
+  grid-template-columns: 60px 1fr;
+  grid-template-rows: 68px auto 1fr 44px;
   height: 100vh;
   width: 100vw;
   background: var(--bg-0);
@@ -13,7 +31,190 @@
   gap: 6px;
 }
 
-/* ===== Top bar — beveled gradient strip with embedded pills ===== */
+.app > .left-layout-bar   { grid-column: 1; grid-row: 1 / -1; }
+.app > .topbar            { grid-column: 2; grid-row: 1; }
+.app > .alert-banner      { grid-column: 2; grid-row: 2; }
+.app > .flex-workspace    { grid-column: 2; grid-row: 3; min-height: 0; overflow: auto; }
+.app > .transport         { grid-column: 2; grid-row: 4; }
+
+/* ===== Left layout bar — issue #241 ===== */
+.left-layout-bar {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 4px;
+  background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--r-lg);
+  box-shadow: var(--panel-shadow);
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Subtle blue brand accent overlay. Two layers:
+   - ::before is the deep-blue wash (matches the VFO frequency-display blue).
+     Solid 0–50%, fades out across 50–70%, fully transparent below 70%.
+   - ::after is the diffused dot matrix. Invisible above 50%, fades in across
+     50–70%, gone by 70%.
+   Both layers use raw VFO-tab colors (#14243e ≈ rgba(20,36,62,…)) +
+   var(--accent) for the dots; the bar's panel chrome shows through cleanly
+   below 70%. */
+.left-layout-bar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: linear-gradient(
+    to bottom,
+    rgba(20, 36, 62, 0.55) 0%,
+    rgba(20, 36, 62, 0.55) 50%,
+    rgba(20, 36, 62, 0.00) 70%,
+    rgba(20, 36, 62, 0.00) 100%
+  );
+}
+.left-layout-bar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(circle, rgba(74, 158, 255, 0.22) 1px, transparent 1.5px)
+    0 0 / 8px 8px;
+  /* Dots only paint in the 50–70% band: fully transparent above 50%, fade
+     in to ~60% peak, fully transparent again by 70% so the bar's bottom
+     half stays clean. */
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    transparent 50%,
+    black 60%,
+    transparent 70%,
+    transparent 100%
+  );
+          mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    transparent 50%,
+    black 60%,
+    transparent 70%,
+    transparent 100%
+  );
+}
+
+/* Direct children sit above the accent layer so layout buttons / actions
+   stay fully readable and clickable. */
+.left-layout-bar > * { position: relative; z-index: 1; }
+.left-layout-bar .lb-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.left-layout-bar .lb-empty {
+  text-align: center;
+  font-size: 16px;
+  color: var(--fg-3);
+  padding: 12px 0;
+}
+.left-layout-bar .lb-item {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+}
+.left-layout-bar .lb-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-1);
+  background: linear-gradient(180deg, var(--btn-top), var(--btn-bot));
+  border: 1px solid var(--btn-edge);
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 1px 0 var(--btn-hl);
+  cursor: pointer;
+  text-align: center;
+  min-height: 36px;
+  word-break: break-word;
+  hyphens: auto;
+  transition: background var(--dur-fast), border-color var(--dur-fast),
+    color var(--dur-fast), box-shadow var(--dur-fast);
+}
+.left-layout-bar .lb-tab:hover { filter: brightness(1.12); }
+.left-layout-bar .lb-item.active .lb-tab {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: inset 0 1px 0 var(--btn-hl), 0 0 8px var(--accent-soft);
+}
+.left-layout-bar .lb-tab-name {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  line-clamp: 3;
+  overflow: hidden;
+}
+.left-layout-bar .lb-rename {
+  flex: 1;
+  width: 100%;
+  background: #0a1220;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  color: var(--fg-0);
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+  text-transform: uppercase;
+  padding: 6px 4px;
+}
+.left-layout-bar .lb-x {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  background: linear-gradient(180deg, #2e2f33, #1c1d20);
+  border: 1px solid var(--btn-edge);
+  border-radius: 50%;
+  color: var(--fg-2);
+  cursor: pointer;
+  line-height: 1;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+.left-layout-bar .lb-x:hover {
+  color: var(--tx);
+  border-color: var(--tx);
+}
+.left-layout-bar .lb-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.left-layout-bar .lb-action {
+  width: 100%;
+  padding: 6px 0;
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* ===== Top bar — issue #241 =====
+   Beveled gradient strip. Holds brand+radio label, transport-level inline
+   controls (mode/filter/band/step/front-end/AGC/AF), and the right-side
+   status pills + ⚙ settings. */
 .topbar {
   display: flex;
   align-items: center;
@@ -23,7 +224,19 @@
   border: 1px solid var(--panel-edge);
   border-radius: var(--r-lg);
   box-shadow: var(--panel-shadow);
-  height: 54px;
+  height: 68px;
+  overflow: hidden;
+}
+.topbar .topbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  /* Allow the controls block to scroll horizontally instead of bleeding off
+     the bar on narrow desktop windows; the bar's own overflow:hidden keeps
+     it from spilling into the workspace below. */
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 .brand {
   display: flex;

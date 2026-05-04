@@ -47,14 +47,25 @@ using Zeus.Contracts;
 
 namespace Zeus.Server;
 
-// UI layout persistence — stores the opaque flexlayout-react JSON blob so the
-// operator's panel arrangement survives page reloads and reinstalls.
-// Shares zeus-prefs.db with BandMemoryStore (layout isn't sensitive).
+// UI layout persistence — stores the operator's panel arrangement so it
+// survives page reloads and reinstalls. Shares zeus-prefs.db with
+// BandMemoryStore (layout isn't sensitive).
+//
+// Two collections live here:
+//   - `ui_layout` (legacy, one row): single-workspace JSON. Kept for read
+//     so old clients continue to work and so the multi-layout system can
+//     migrate it on first read of a radio that has no v2 entry yet.
+//   - `ui_layouts_v2` (issue #241): one row per radio, holding a list of
+//     named layouts plus which one is currently active. RadioKey is the
+//     stringified board kind (HermesLite2, AnanG2, …) or "default" while
+//     no radio is connected.
 public sealed class LayoutStore : IDisposable
 {
     private readonly LiteDatabase _db;
-    private readonly ILiteCollection<LayoutEntry> _entries;
+    private readonly ILiteCollection<LayoutEntry> _legacy;
+    private readonly ILiteCollection<RadioLayoutsEntry> _v2;
     private readonly ILogger<LayoutStore> _log;
+    private readonly object _lock = new();
 
     public LayoutStore(ILogger<LayoutStore> log)
     {
@@ -66,15 +77,21 @@ public sealed class LayoutStore : IDisposable
             Directory.CreateDirectory(dir);
 
         _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
-        _entries = _db.GetCollection<LayoutEntry>("ui_layout");
-        _entries.EnsureIndex(x => x.ProfileId, unique: true);
+        _legacy = _db.GetCollection<LayoutEntry>("ui_layout");
+        _legacy.EnsureIndex(x => x.ProfileId, unique: true);
+        _v2 = _db.GetCollection<RadioLayoutsEntry>("ui_layouts_v2");
+        _v2.EnsureIndex(x => x.RadioKey, unique: true);
 
         _log.LogInformation("LayoutStore initialized at {Path}", dbPath);
     }
 
+    // -----------------------------------------------------------------
+    // Legacy single-layout API (back-compat)
+    // -----------------------------------------------------------------
+
     public UiLayoutDto? Get(string profileId = "default")
     {
-        var e = _entries.FindOne(x => x.ProfileId == profileId);
+        var e = _legacy.FindOne(x => x.ProfileId == profileId);
         return e is null
             ? null
             : new UiLayoutDto(e.LayoutJson, new DateTimeOffset(e.UpdatedUtc).ToUnixTimeMilliseconds());
@@ -82,26 +99,203 @@ public sealed class LayoutStore : IDisposable
 
     public void Upsert(string layoutJson, string profileId = "default")
     {
-        var existing = _entries.FindOne(x => x.ProfileId == profileId);
-        if (existing is null)
+        lock (_lock)
         {
-            _entries.Insert(new LayoutEntry
+            var existing = _legacy.FindOne(x => x.ProfileId == profileId);
+            if (existing is null)
             {
-                ProfileId = profileId,
-                LayoutJson = layoutJson,
-                UpdatedUtc = DateTime.UtcNow,
-            });
-        }
-        else
-        {
-            existing.LayoutJson = layoutJson;
-            existing.UpdatedUtc = DateTime.UtcNow;
-            _entries.Update(existing);
+                _legacy.Insert(new LayoutEntry
+                {
+                    ProfileId = profileId,
+                    LayoutJson = layoutJson,
+                    UpdatedUtc = DateTime.UtcNow,
+                });
+            }
+            else
+            {
+                existing.LayoutJson = layoutJson;
+                existing.UpdatedUtc = DateTime.UtcNow;
+                _legacy.Update(existing);
+            }
         }
     }
 
     public void Delete(string profileId = "default")
-        => _entries.DeleteMany(x => x.ProfileId == profileId);
+        => _legacy.DeleteMany(x => x.ProfileId == profileId);
+
+    // -----------------------------------------------------------------
+    // Multi-layout per-radio API (issue #241)
+    // -----------------------------------------------------------------
+
+    /// <summary>
+    /// Read all named layouts for the given radio. When the radio has no v2
+    /// row yet AND a legacy single-layout exists, the legacy row is migrated
+    /// in: it becomes a single "Default" layout under the radio key. When
+    /// nothing exists, returns an empty list — the client seeds the Default.
+    /// </summary>
+    public RadioLayoutsDto GetForRadio(string radioKey)
+    {
+        radioKey = NormalizeRadioKey(radioKey);
+        lock (_lock)
+        {
+            var entry = _v2.FindOne(x => x.RadioKey == radioKey);
+            if (entry is null)
+            {
+                // First-read migration: bring the legacy row in (if any) under
+                // the "default" radio key only, so we don't auto-attach a
+                // single saved layout to every board the operator plugs in.
+                if (radioKey == "default")
+                {
+                    var legacy = _legacy.FindOne(x => x.ProfileId == "default");
+                    if (legacy is not null && !string.IsNullOrWhiteSpace(legacy.LayoutJson))
+                    {
+                        var seeded = new RadioLayoutsEntry
+                        {
+                            RadioKey = radioKey,
+                            ActiveLayoutId = "default",
+                            Layouts = new List<NamedLayoutEntry>
+                            {
+                                new()
+                                {
+                                    LayoutId = "default",
+                                    Name = "Default",
+                                    LayoutJson = legacy.LayoutJson,
+                                    UpdatedUtc = legacy.UpdatedUtc,
+                                },
+                            },
+                        };
+                        _v2.Insert(seeded);
+                        return ToDto(seeded);
+                    }
+                }
+                return new RadioLayoutsDto(radioKey, Array.Empty<NamedLayoutDto>(), string.Empty);
+            }
+            return ToDto(entry);
+        }
+    }
+
+    /// <summary>
+    /// Upsert one named layout. Creates the radio's row on first call.
+    /// If there is no active layout yet, the new layout becomes active.
+    /// </summary>
+    public RadioLayoutsDto UpsertNamed(string radioKey, string layoutId, string name, string layoutJson)
+    {
+        radioKey = NormalizeRadioKey(radioKey);
+        layoutId = NormalizeLayoutId(layoutId);
+        if (string.IsNullOrWhiteSpace(name)) name = layoutId;
+
+        lock (_lock)
+        {
+            var entry = _v2.FindOne(x => x.RadioKey == radioKey) ?? new RadioLayoutsEntry
+            {
+                RadioKey = radioKey,
+                ActiveLayoutId = layoutId,
+                Layouts = new List<NamedLayoutEntry>(),
+            };
+
+            var existing = entry.Layouts.FirstOrDefault(l => l.LayoutId == layoutId);
+            if (existing is null)
+            {
+                entry.Layouts.Add(new NamedLayoutEntry
+                {
+                    LayoutId = layoutId,
+                    Name = name,
+                    LayoutJson = layoutJson,
+                    UpdatedUtc = DateTime.UtcNow,
+                });
+            }
+            else
+            {
+                existing.Name = name;
+                existing.LayoutJson = layoutJson;
+                existing.UpdatedUtc = DateTime.UtcNow;
+            }
+
+            if (string.IsNullOrEmpty(entry.ActiveLayoutId))
+                entry.ActiveLayoutId = layoutId;
+
+            if (entry.Id == 0) _v2.Insert(entry);
+            else _v2.Update(entry);
+
+            return ToDto(entry);
+        }
+    }
+
+    /// <summary>
+    /// Mark the given layoutId as active for this radio. No-op if the id is
+    /// not among the radio's saved layouts.
+    /// </summary>
+    public RadioLayoutsDto SetActive(string radioKey, string layoutId)
+    {
+        radioKey = NormalizeRadioKey(radioKey);
+        layoutId = NormalizeLayoutId(layoutId);
+        lock (_lock)
+        {
+            var entry = _v2.FindOne(x => x.RadioKey == radioKey);
+            if (entry is null)
+                return new RadioLayoutsDto(radioKey, Array.Empty<NamedLayoutDto>(), string.Empty);
+            if (!entry.Layouts.Any(l => l.LayoutId == layoutId))
+                return ToDto(entry);
+            entry.ActiveLayoutId = layoutId;
+            _v2.Update(entry);
+            return ToDto(entry);
+        }
+    }
+
+    /// <summary>
+    /// Delete the given layout. If it was active, the first remaining layout
+    /// becomes active. If it was the last one, the row's ActiveLayoutId
+    /// resets to empty (the client re-seeds Default).
+    /// </summary>
+    public RadioLayoutsDto DeleteNamed(string radioKey, string layoutId)
+    {
+        radioKey = NormalizeRadioKey(radioKey);
+        layoutId = NormalizeLayoutId(layoutId);
+        lock (_lock)
+        {
+            var entry = _v2.FindOne(x => x.RadioKey == radioKey);
+            if (entry is null)
+                return new RadioLayoutsDto(radioKey, Array.Empty<NamedLayoutDto>(), string.Empty);
+            entry.Layouts.RemoveAll(l => l.LayoutId == layoutId);
+            if (entry.ActiveLayoutId == layoutId)
+                entry.ActiveLayoutId = entry.Layouts.FirstOrDefault()?.LayoutId ?? string.Empty;
+            _v2.Update(entry);
+            return ToDto(entry);
+        }
+    }
+
+    private static RadioLayoutsDto ToDto(RadioLayoutsEntry e) => new(
+        e.RadioKey,
+        e.Layouts
+            .Select(l => new NamedLayoutDto(
+                l.LayoutId,
+                l.Name,
+                l.LayoutJson,
+                new DateTimeOffset(l.UpdatedUtc).ToUnixTimeMilliseconds()))
+            .ToList(),
+        e.ActiveLayoutId);
+
+    // The radio key keeps to a small alphabet so it survives JSON round-trips
+    // and URL query params without escaping. BoardKind values already match
+    // (e.g. "HermesLite2", "AnanG2"), but operators sending freeform strings
+    // get sanitised here.
+    private static string NormalizeRadioKey(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "default";
+        var trimmed = raw.Trim();
+        var safe = new string(trimmed.Where(c =>
+            char.IsLetterOrDigit(c) || c == '-' || c == '_' || c == '.').ToArray());
+        return string.IsNullOrEmpty(safe) ? "default" : safe;
+    }
+
+    private static string NormalizeLayoutId(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "default";
+        var trimmed = raw.Trim();
+        var safe = new string(trimmed.Where(c =>
+            char.IsLetterOrDigit(c) || c == '-' || c == '_').ToArray());
+        return string.IsNullOrEmpty(safe) ? "default" : safe;
+    }
 
     public void Dispose() => _db.Dispose();
 
@@ -118,6 +312,22 @@ public sealed class LayoutEntry
 {
     public int Id { get; set; }
     public string ProfileId { get; set; } = string.Empty;
+    public string LayoutJson { get; set; } = string.Empty;
+    public DateTime UpdatedUtc { get; set; }
+}
+
+public sealed class RadioLayoutsEntry
+{
+    public int Id { get; set; }
+    public string RadioKey { get; set; } = string.Empty;
+    public string ActiveLayoutId { get; set; } = string.Empty;
+    public List<NamedLayoutEntry> Layouts { get; set; } = new();
+}
+
+public sealed class NamedLayoutEntry
+{
+    public string LayoutId { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
     public string LayoutJson { get; set; } = string.Empty;
     public DateTime UpdatedUtc { get; set; }
 }

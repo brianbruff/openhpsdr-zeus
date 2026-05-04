@@ -344,13 +344,28 @@ public sealed record BandMemoryDto(string Band, long Hz, RxMode Mode);
 
 public sealed record BandMemorySetRequest(long Hz, RxMode Mode);
 
-// UI layout: opaque flexlayout-react JSON persisted server-side so the
-// operator's panel arrangement survives page reloads and reinstalls.
-// The JSON is stored as a string to avoid strongly-typing the flex-layout
-// tree on the wire — the frontend owns the schema.
+// UI layout: opaque workspace JSON persisted server-side so the operator's
+// panel arrangement survives page reloads and reinstalls. The JSON is stored
+// as a string to avoid strongly-typing the workspace tree on the wire — the
+// frontend owns the schema.
+//
+// `UiLayoutDto` / `UiLayoutSetRequest` are the legacy single-layout shape
+// (one workspace per server). Kept so older clients keep working and so the
+// new multi-layout system can migrate the legacy row on first read.
 public sealed record UiLayoutDto(string LayoutJson, long UpdatedUtc);
 
 public sealed record UiLayoutSetRequest(string LayoutJson);
+
+// Multi-layout shape (issue #241). Layouts are keyed per radio (board kind /
+// "default" while disconnected). Each radio holds a list of named layouts and
+// remembers which one was active.
+public sealed record NamedLayoutDto(string Id, string Name, string LayoutJson, long UpdatedUtc);
+
+public sealed record RadioLayoutsDto(string RadioKey, IReadOnlyList<NamedLayoutDto> Layouts, string ActiveLayoutId);
+
+public sealed record SaveNamedLayoutRequest(string RadioKey, string LayoutId, string Name, string LayoutJson);
+
+public sealed record SetActiveLayoutRequest(string RadioKey, string LayoutId);
 
 // Per-band PA settings. Mirrors Thetis `PAProfile._gainValues[]` / piHPSDR
 // `band->pa_calibration` (single scalar dB per band — 9-point curve is a

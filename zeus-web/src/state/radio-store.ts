@@ -11,16 +11,29 @@ import {
   type BoardKind,
   type RadioSelection,
 } from '../api/radio';
+import {
+  fetchBoardCapabilities,
+  UNKNOWN_BOARD_CAPABILITIES,
+  type BoardCapabilities,
+} from '../api/board-capabilities';
+import {
+  fetchOrionMkIIVariant,
+  setOrionMkIIVariant as setVariantApi,
+  type OrionMkIIVariant,
+} from '../api/orion-mkii-variant';
 import { usePaStore } from './pa-store';
 
 type RadioStore = {
   selection: RadioSelection;
+  capabilities: BoardCapabilities;
+  variant: OrionMkIIVariant;
   loaded: boolean;
   inflight: boolean;
   error: string | null;
   load: () => Promise<void>;
   setPreferred: (preferred: BoardKind, overrideDetection?: boolean) => Promise<void>;
   setOverrideDetection: (enabled: boolean) => Promise<void>;
+  setVariant: (variant: OrionMkIIVariant) => Promise<void>;
 };
 
 // The radio preference is persisted server-side (LiteDB) rather than in
@@ -34,6 +47,8 @@ export const useRadioStore = create<RadioStore>((set, get) => ({
     effective: 'Unknown',
     overrideDetection: false,
   },
+  capabilities: UNKNOWN_BOARD_CAPABILITIES,
+  variant: 'G2',
   loaded: false,
   inflight: false,
   error: null,
@@ -41,8 +56,21 @@ export const useRadioStore = create<RadioStore>((set, get) => ({
   load: async () => {
     set({ inflight: true, error: null });
     try {
-      const s = await fetchRadioSelection();
-      set({ selection: s, loaded: true, inflight: false });
+      // Three calls in parallel — selection / capabilities / variant
+      // depend on the same backend snapshot but are independent endpoints,
+      // and the UI shows a "loaded" gate keyed on the selection arrival.
+      const [s, caps, variant] = await Promise.all([
+        fetchRadioSelection(),
+        fetchBoardCapabilities().catch(() => UNKNOWN_BOARD_CAPABILITIES),
+        fetchOrionMkIIVariant().catch(() => 'G2' as OrionMkIIVariant),
+      ]);
+      set({
+        selection: s,
+        capabilities: caps,
+        variant,
+        loaded: true,
+        inflight: false,
+      });
     } catch (err) {
       set({
         error: err instanceof Error ? err.message : String(err),
@@ -96,6 +124,36 @@ export const useRadioStore = create<RadioStore>((set, get) => ({
     } catch (err) {
       set({
         selection: prev,
+        error: err instanceof Error ? err.message : String(err),
+        inflight: false,
+      });
+    }
+  },
+
+  // Persists the operator-selected variant for the 0x0A wire-byte alias
+  // family (issue #218). Optimistic update mirrors setPreferred. Once the
+  // variant lands, the PA panel reloads to pick up the new defaults
+  // (8000DLE → Anan100 bracket / OrionMkII original → Hermes bracket / G2
+  // variants → OrionG2 bracket) — same flow as a board change.
+  setVariant: async (variant) => {
+    const prev = get().variant;
+    set({ variant, inflight: true, error: null });
+    try {
+      const v = await setVariantApi(variant);
+      set({ variant: v, inflight: false });
+      // Refresh the PA panel + capabilities — both depend on variant.
+      const sel = get().selection;
+      const override = sel.preferred === 'Auto' ? undefined : sel.preferred;
+      await usePaStore.getState().load(override);
+      try {
+        const caps = await fetchBoardCapabilities();
+        set({ capabilities: caps });
+      } catch {
+        // Non-fatal — capabilities surface is best-effort UI gating.
+      }
+    } catch (err) {
+      set({
+        variant: prev,
         error: err instanceof Error ? err.message : String(err),
         inflight: false,
       });

@@ -44,6 +44,7 @@
 
 using System.Net;
 using System.Net.NetworkInformation;
+using Zeus.Contracts;
 using Zeus.Protocol1.Discovery;
 
 namespace Zeus.Protocol1.Tests;
@@ -91,6 +92,52 @@ public class DiscoveryTests
         Assert.Null(radio.Details.HermesLite2MinorVersion);
         Assert.False(radio.Details.FixedIpEnabled);
         Assert.Equal((byte)0x01, radio.Details.RawBoardId);
+    }
+
+    [Theory]
+    [InlineData((byte)0x00, HpsdrBoardKind.Metis)]      // original HPSDR Mercury+Penelope+Metis
+    [InlineData((byte)0x01, HpsdrBoardKind.Hermes)]
+    [InlineData((byte)0x02, HpsdrBoardKind.HermesII)]    // ANAN-10E / 100B / Hermes-II firmware
+    [InlineData((byte)0x04, HpsdrBoardKind.Angelia)]    // ANAN-100D
+    [InlineData((byte)0x05, HpsdrBoardKind.Orion)]      // ANAN-200D
+    [InlineData((byte)0x06, HpsdrBoardKind.HermesLite2)]
+    [InlineData((byte)0x0A, HpsdrBoardKind.OrionMkII)]  // 0x0A alias family — see issue #218
+    [InlineData((byte)0x14, HpsdrBoardKind.HermesC10)]  // ANAN-G2E (N1GP firmware)
+    public void Maps_Every_Recognised_WireByte_To_BoardKind(byte boardId, HpsdrBoardKind expected)
+    {
+        // Pin every wire byte that ramdor/Thetis (MW0LGE) recognises in
+        // HPSDRHW (enums.cs:389-402) so a regression in MapBoard cannot
+        // silently land. Cross-references docs/references/protocol-1/thetis-board-matrix.md.
+        var reply = BuildReply(new ReplyFields(
+            Status: 0x02,
+            Mac: new byte[] { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55 },
+            CodeVersion: 31,
+            BoardId: boardId,
+            GatewareBuild: 0));
+
+        Assert.True(ReplyParser.TryParse(reply, FromIp, out var radio));
+        Assert.Equal(expected, radio.Board);
+        Assert.Equal(boardId, radio.Details.RawBoardId);
+    }
+
+    [Fact]
+    public void Parses_HermesC10_Reply_AnanG2E()
+    {
+        // Apache Labs ANAN-G2E reports board id 0x14 (Thetis HPSDRHW.HermesC10).
+        // Before this mapping landed, a G2E discovery fell through to
+        // HpsdrBoardKind.Unknown and skipped per-board PA / calibration dispatch.
+        var reply = BuildReply(new ReplyFields(
+            Status: 0x02,
+            Mac: new byte[] { 0x00, 0x55, 0x66, 0x77, 0x88, 0x99 },
+            CodeVersion: 71,
+            BoardId: 0x14,
+            GatewareBuild: 11));
+
+        Assert.True(ReplyParser.TryParse(reply, FromIp, out var radio));
+        Assert.Equal(HpsdrBoardKind.HermesC10, radio.Board);
+        Assert.Equal((byte)0x14, radio.Details.RawBoardId);
+        Assert.Equal("7.1", radio.FirmwareString);
+        Assert.Null(radio.Details.HermesLite2MinorVersion);
     }
 
     [Fact]

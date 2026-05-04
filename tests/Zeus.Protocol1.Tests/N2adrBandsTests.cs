@@ -42,6 +42,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+using Zeus.Contracts;
 using Zeus.Protocol1.Discovery;
 
 namespace Zeus.Protocol1.Tests;

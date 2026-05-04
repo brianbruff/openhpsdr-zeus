@@ -250,7 +250,11 @@ export function LeafletWorldMap({
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
-  const layerRef = useRef<L.LayerGroup | null>(null);
+  // Two layer groups so beam updates (rotator turning live) don't tear down
+  // the marker layer — see issue #244. `markerLayerRef` holds home/target
+  // avatars + great-circle arc; `beamLayerRef` holds the beam wedge + rays.
+  const markerLayerRef = useRef<L.LayerGroup | null>(null);
+  const beamLayerRef = useRef<L.LayerGroup | null>(null);
   const zoomCtrlRef = useRef<L.Control.Zoom | null>(null);
   // Stash the callback in a ref so the marker effect doesn't tear down on
   // every parent re-render — we want the popup to pick up the latest handler
@@ -299,7 +303,8 @@ export function LeafletWorldMap({
       // at lower zoom levels. Error boundary handles catastrophic init failures.
     }).addTo(map);
 
-    layerRef.current = L.layerGroup().addTo(map);
+    markerLayerRef.current = L.layerGroup().addTo(map);
+    beamLayerRef.current = L.layerGroup().addTo(map);
     mapRef.current = map;
     if (externalMapRef) externalMapRef.current = map;
     // Populate the shared ACTIVE_MAP_REF singleton so global keyboard
@@ -314,7 +319,8 @@ export function LeafletWorldMap({
       ro.disconnect();
       map.remove();
       mapRef.current = null;
-      layerRef.current = null;
+      markerLayerRef.current = null;
+      beamLayerRef.current = null;
       if (externalMapRef) externalMapRef.current = null;
       // Only clear the shared ref if it still points at OUR map — defensive
       // against React 18 strict-mode double-mounts where a fresh instance
@@ -350,10 +356,21 @@ export function LeafletWorldMap({
     }
   }, [interactive]);
 
-  // Redraw markers + arcs whenever props change. Cheap; runs on target swap.
+  // Redraw markers + great-circle arc when home/target change.
+  //
+  // Deps are primitive on purpose: parents (App.tsx, HeroPanel) build the
+  // `home` / `target` objects inline, so a fresh reference arrives on every
+  // render — and App re-renders many times per second while streaming
+  // (vfoHz updates, rotator status polls). Depending on the object identity
+  // would tear down the marker layer ~10×/s, re-mount the avatar `<img>`,
+  // and flash the fallback emoji while the browser re-decoded — that is the
+  // macOS "blinking map" reported in issue #244. Primitive deps make the
+  // effect re-run only when something the user can see has actually changed.
+  // Beam lines live in a separate layer / effect so rotator-azimuth updates
+  // don't disturb these markers.
   useEffect(() => {
     const map = mapRef.current;
-    const layer = layerRef.current;
+    const layer = markerLayerRef.current;
     if (!map || !layer) return;
     layer.clearLayers();
     if (!active) return;
@@ -408,65 +425,86 @@ export function LeafletWorldMap({
         };
       });
     }
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [
+    home.call, home.lat, home.lon, home.grid, home.imageUrl,
+    target?.call, target?.lat, target?.lon, target?.grid, target?.imageUrl,
+    active,
+  ]);
 
-    // Beam lines — render whenever the caller supplies a bearing (rotator
-    // connected + pointing, manual Go override, or derived from the current
-    // target). Great-circle paths so the beam follows Earth's curvature;
-    // three parallel rays (centre + ±halfWidth) visualise the antenna's
-    // approximate 3 dB span at long range. Cyan centre + red sides keeps the
-    // semantic separate from the amber home→target arc above.
+  // Beam lines — render whenever the caller supplies a bearing (rotator
+  // connected + pointing, manual Go override, or derived from the current
+  // target). Great-circle paths so the beam follows Earth's curvature;
+  // three parallel rays (centre + ±halfWidth) visualise the antenna's
+  // approximate 3 dB span at long range. Cyan centre + red sides keeps the
+  // semantic separate from the amber home→target arc above.
+  //
+  // Lives in its own layer so live rotator-azimuth updates only redraw the
+  // beam wedge, not the avatar markers (issue #244).
+  useEffect(() => {
+    const map = mapRef.current;
+    const layer = beamLayerRef.current;
+    if (!map || !layer) return;
+    layer.clearLayers();
+    if (!active) return;
+
     const implicitBeam = target
       ? bearingDeg(home.lat, home.lon, target.lat, target.lon)
       : null;
     const beam = beamBearing ?? implicitBeam;
-    if (beam != null) {
-      // Shaded wedge between the two edge beams — unwrapped continuous paths
-      // keep the ring closed across the antimeridian. Rendered first so the
-      // centre/edge polylines draw on top.
-      if (beamHalfWidthDeg > 0) {
-        const edgeLeft = destinationPoint(home.lat, home.lon, beam - beamHalfWidthDeg, beamRangeKm);
-        const edgeRight = destinationPoint(home.lat, home.lon, beam + beamHalfWidthDeg, beamRangeKm);
-        const pathLeft = greatCirclePath(
-          { lat: home.lat, lon: home.lon },
-          { lat: edgeLeft[0], lon: edgeLeft[1] },
-        );
-        const pathRight = greatCirclePath(
-          { lat: home.lat, lon: home.lon },
-          { lat: edgeRight[0], lon: edgeRight[1] },
-        );
-        const ring: [number, number][] = [...pathLeft, ...pathRight.slice().reverse()];
-        L.polygon(ring, {
-          stroke: false,
-          fill: true,
-          fillColor: COLOR_RED,
-          fillOpacity: 0.22,
-          interactive: false,
+    if (beam == null) return;
+
+    // Shaded wedge between the two edge beams — unwrapped continuous paths
+    // keep the ring closed across the antimeridian. Rendered first so the
+    // centre/edge polylines draw on top.
+    if (beamHalfWidthDeg > 0) {
+      const edgeLeft = destinationPoint(home.lat, home.lon, beam - beamHalfWidthDeg, beamRangeKm);
+      const edgeRight = destinationPoint(home.lat, home.lon, beam + beamHalfWidthDeg, beamRangeKm);
+      const pathLeft = greatCirclePath(
+        { lat: home.lat, lon: home.lon },
+        { lat: edgeLeft[0], lon: edgeLeft[1] },
+      );
+      const pathRight = greatCirclePath(
+        { lat: home.lat, lon: home.lon },
+        { lat: edgeRight[0], lon: edgeRight[1] },
+      );
+      const ring: [number, number][] = [...pathLeft, ...pathRight.slice().reverse()];
+      L.polygon(ring, {
+        stroke: false,
+        fill: true,
+        fillColor: COLOR_RED,
+        fillOpacity: 0.22,
+        interactive: false,
+      }).addTo(layer);
+    }
+
+    const offsets = beamHalfWidthDeg > 0
+      ? [-beamHalfWidthDeg, 0, beamHalfWidthDeg]
+      : [0];
+    for (const offset of offsets) {
+      const bearingForLine = beam + offset;
+      const endpoint = destinationPoint(home.lat, home.lon, bearingForLine, beamRangeKm);
+      const beamSegments = greatCircleSegments(
+        { lat: home.lat, lon: home.lon },
+        { lat: endpoint[0], lon: endpoint[1] },
+      );
+      const isCentre = offset === 0;
+      for (const seg of beamSegments) {
+        L.polyline(seg, {
+          color: isCentre ? COLOR_CYAN : COLOR_RED,
+          weight: isCentre ? 3 : 2,
+          opacity: isCentre ? 0.75 : 0.55,
+          dashArray: '10, 5',
+          lineCap: 'round',
         }).addTo(layer);
       }
-
-      const offsets = beamHalfWidthDeg > 0
-        ? [-beamHalfWidthDeg, 0, beamHalfWidthDeg]
-        : [0];
-      for (const offset of offsets) {
-        const bearingForLine = beam + offset;
-        const endpoint = destinationPoint(home.lat, home.lon, bearingForLine, beamRangeKm);
-        const beamSegments = greatCircleSegments(
-          { lat: home.lat, lon: home.lon },
-          { lat: endpoint[0], lon: endpoint[1] },
-        );
-        const isCentre = offset === 0;
-        for (const seg of beamSegments) {
-          L.polyline(seg, {
-            color: isCentre ? COLOR_CYAN : COLOR_RED,
-            weight: isCentre ? 3 : 2,
-            opacity: isCentre ? 0.75 : 0.55,
-            dashArray: '10, 5',
-            lineCap: 'round',
-          }).addTo(layer);
-        }
-      }
     }
-  }, [home, target, beamBearing, beamRangeKm, beamHalfWidthDeg, active]);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [
+    home.lat, home.lon,
+    target?.lat, target?.lon,
+    beamBearing, beamRangeKm, beamHalfWidthDeg, active,
+  ]);
 
   return (
     <div

@@ -81,15 +81,17 @@ const SAMPLE_RATES: SampleRate[] = [48_000, 96_000, 192_000, 384_000];
 
 // Same set as the Settings RadioSelector, in the same order. Auto first so
 // the default Manual-mode connect behaviour is "let discovery decide".
+// Post-#218 Phase 4: Griffin renamed → HermesII, HermesC10 (G2E) added.
 const MANUAL_BOARD_OPTIONS: ReadonlyArray<BoardKind> = [
   'Auto',
   'HermesLite2',
   'OrionMkII',
+  'HermesC10',
   'Orion',
   'Angelia',
   'Hermes',
+  'HermesII',
   'Metis',
-  'Griffin',
 ];
 
 function endpointFor(r: RadioInfoDto): string {
@@ -116,7 +118,14 @@ function applyPostConnectEffects() {
   void setLevelerMaxGain(tx.levelerMaxGainDb).catch(() => {});
 }
 
-export function ConnectPanel() {
+export interface ConnectPanelProps {
+  /** When true and connected, render only the Disconnect button (no
+   *  endpoint chip). The bottom status bar shows the radio IP separately
+   *  in this layout, so the chip would be redundant in the top bar. */
+  compact?: boolean;
+}
+
+export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
   const status = useConnectionStore((s) => s.status);
   const endpoint = useConnectionStore((s) => s.endpoint);
   const applyState = useConnectionStore((s) => s.applyState);
@@ -371,16 +380,18 @@ export function ConnectPanel() {
   if (status === 'Connected') {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span className="chip accent">
-          <span className="k">RADIO</span>
-          <span className="v mono">{endpoint ?? '—'}</span>
-        </span>
+        {!compact && (
+          <span className="chip accent">
+            <span className="k">RADIO</span>
+            <span className="v mono">{endpoint ?? '—'}</span>
+          </span>
+        )}
         {error && (
           <span className="label-xs" style={{ color: 'var(--tx)' }}>
             {error}
           </span>
         )}
-        <button type="button" onClick={handleDisconnect} disabled={inflight} className="btn sm">
+        <button type="button" onClick={handleDisconnect} disabled={inflight} className="btn">
           {inflight ? 'Disconnecting…' : 'Disconnect'}
         </button>
       </div>

@@ -57,9 +57,10 @@ export function AlertBanner() {
   // container pinned to an `auto` row with 0 intrinsic height.
   // Always render something so the parent grid keeps a stable row count —
   // returning null collapses the grid track below (see App.tsx grid-template).
-  if (alert == null) return <div aria-hidden style={{ height: 0 }} />;
+  if (alert == null) return <div className="alert-banner" aria-hidden style={{ height: 0 }} />;
   return (
     <div
+      className="alert-banner"
       role="alert"
       style={{
         display: 'flex',

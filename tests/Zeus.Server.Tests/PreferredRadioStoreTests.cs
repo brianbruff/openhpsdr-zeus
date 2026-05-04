@@ -5,6 +5,7 @@
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 
 using Microsoft.Extensions.Logging.Abstractions;
+using Zeus.Contracts;
 using Zeus.Protocol1.Discovery;
 using Zeus.Server;
 
@@ -82,5 +83,50 @@ public class PreferredRadioStoreTests : IDisposable
         store.Set(HpsdrBoardKind.Hermes);
         store.Set(null);
         Assert.Equal(2, fired);
+    }
+
+    [Fact]
+    public void Empty_Store_Returns_G2_For_OrionMkIIVariant()
+    {
+        // Issue #218: shipping default for the 0x0A wire-byte alias family is
+        // G2. An untouched store must report G2 so dispatch keeps Zeus'
+        // pre-#218 behaviour for operators who never visit the variant UI.
+        using var store = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath);
+        Assert.Equal(OrionMkIIVariant.G2, store.GetOrionMkIIVariant());
+    }
+
+    [Fact]
+    public void OrionMkIIVariant_Round_Trips()
+    {
+        using var store = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath);
+        store.SetOrionMkIIVariant(OrionMkIIVariant.Anan8000DLE);
+        Assert.Equal(OrionMkIIVariant.Anan8000DLE, store.GetOrionMkIIVariant());
+    }
+
+    [Fact]
+    public void OrionMkIIVariant_Persists_Across_Instances()
+    {
+        using (var s1 = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath))
+        {
+            s1.SetOrionMkIIVariant(OrionMkIIVariant.G2_1K);
+        }
+        using var s2 = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath);
+        Assert.Equal(OrionMkIIVariant.G2_1K, s2.GetOrionMkIIVariant());
+    }
+
+    [Fact]
+    public void OrionMkIIVariant_Coexists_With_Board_Selection()
+    {
+        // Setting board and variant must persist independently; old code
+        // paths that touch only the board field must not stomp the variant.
+        using var store = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath);
+        store.Set(HpsdrBoardKind.OrionMkII);
+        store.SetOrionMkIIVariant(OrionMkIIVariant.Anan8000DLE);
+        Assert.Equal(HpsdrBoardKind.OrionMkII, store.Get());
+        Assert.Equal(OrionMkIIVariant.Anan8000DLE, store.GetOrionMkIIVariant());
+
+        // Re-setting only the board must not clobber the variant.
+        store.Set(HpsdrBoardKind.OrionMkII, overrideDetection: true);
+        Assert.Equal(OrionMkIIVariant.Anan8000DLE, store.GetOrionMkIIVariant());
     }
 }

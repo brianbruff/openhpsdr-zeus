@@ -42,6 +42,7 @@
 //   - mi0bot/openhpsdr-thetis — HL2-specific fork; look there for
 //     further HL2 quirks Zeus may need to mirror.
 
+using Zeus.Contracts;
 using Zeus.Protocol1.Discovery;
 
 namespace Zeus.Server;

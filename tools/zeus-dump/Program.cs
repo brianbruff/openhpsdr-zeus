@@ -50,6 +50,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using Microsoft.Extensions.Logging.Abstractions;
+using Zeus.Contracts;
 using Zeus.Protocol1;
 using Zeus.Protocol1.Discovery;
 

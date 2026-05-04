@@ -62,7 +62,11 @@ public sealed class PaSettingsStore : IDisposable
     // Fills missing bands with per-board defaults from PaDefaults. When board
     // is Unknown (no radio connected yet) the fallback is 0 dB, which keeps the
     // drive math pinned to legacy behavior until connect resolves the board.
-    public PaSettingsDto GetAll(HpsdrBoardKind board = HpsdrBoardKind.Unknown)
+    // The variant parameter resolves the 0x0A wire-byte alias collision per
+    // issue #218; G2 default preserves pre-#218 behaviour for every other board.
+    public PaSettingsDto GetAll(
+        HpsdrBoardKind board = HpsdrBoardKind.Unknown,
+        OrionMkIIVariant variant = OrionMkIIVariant.G2)
     {
         lock (_sync)
         {
@@ -73,7 +77,7 @@ public sealed class PaSettingsStore : IDisposable
             var global = g is null
                 ? new PaGlobalSettingsDto(
                     PaEnabled: true,
-                    PaMaxPowerWatts: PaDefaults.GetMaxPowerWatts(board))
+                    PaMaxPowerWatts: PaDefaults.GetMaxPowerWatts(board, variant))
                 : new PaGlobalSettingsDto(g.PaEnabled, g.PaMaxPowerWatts);
 
             var existing = _bands.FindAll().ToDictionary(e => e.Band, e => e);
@@ -85,7 +89,7 @@ public sealed class PaSettingsStore : IDisposable
                     {
                         return new PaBandSettingsDto(e.Band, e.PaGainDb, e.DisablePa, e.OcTx, e.OcRx, auto);
                     }
-                    return new PaBandSettingsDto(b, PaGainDb: PaDefaults.GetPaGainDb(board, b), AutoOcMask: auto);
+                    return new PaBandSettingsDto(b, PaGainDb: PaDefaults.GetPaGainDb(board, b, variant), AutoOcMask: auto);
                 })
                 .ToArray();
 
@@ -98,28 +102,33 @@ public sealed class PaSettingsStore : IDisposable
     // piHPSDR/Thetis-published seed values for the selected radio. Does NOT
     // consult the pa_bands / pa_globals collections; OC masks and DisablePa
     // stay out of this because they're wiring decisions, not per-board data.
-    public PaSettingsDto GetDefaults(HpsdrBoardKind board)
+    public PaSettingsDto GetDefaults(
+        HpsdrBoardKind board,
+        OrionMkIIVariant variant = OrionMkIIVariant.G2)
     {
         var global = new PaGlobalSettingsDto(
             PaEnabled: true,
-            PaMaxPowerWatts: PaDefaults.GetMaxPowerWatts(board));
+            PaMaxPowerWatts: PaDefaults.GetMaxPowerWatts(board, variant));
         var bands = BandUtils.HfBands
             .Select(b => new PaBandSettingsDto(
                 b,
-                PaGainDb: PaDefaults.GetPaGainDb(board, b),
+                PaGainDb: PaDefaults.GetPaGainDb(board, b, variant),
                 AutoOcMask: AutoOcMaskFor(board, b)))
             .ToArray();
         return new PaSettingsDto(global, bands);
     }
 
-    public PaBandSettingsDto GetBand(string band, HpsdrBoardKind board = HpsdrBoardKind.Unknown)
+    public PaBandSettingsDto GetBand(
+        string band,
+        HpsdrBoardKind board = HpsdrBoardKind.Unknown,
+        OrionMkIIVariant variant = OrionMkIIVariant.G2)
     {
         lock (_sync)
         {
             var auto = AutoOcMaskFor(board, band);
             var e = _bands.FindOne(x => x.Band == band);
             return e is null
-                ? new PaBandSettingsDto(band, PaGainDb: PaDefaults.GetPaGainDb(board, band), AutoOcMask: auto)
+                ? new PaBandSettingsDto(band, PaGainDb: PaDefaults.GetPaGainDb(board, band, variant), AutoOcMask: auto)
                 : new PaBandSettingsDto(e.Band, e.PaGainDb, e.DisablePa, e.OcTx, e.OcRx, auto);
         }
     }
@@ -136,7 +145,9 @@ public sealed class PaSettingsStore : IDisposable
             ? N2adrBands.RxOcMaskForBand(band)
             : (byte)0;
 
-    public PaGlobalSettingsDto GetGlobal(HpsdrBoardKind board = HpsdrBoardKind.Unknown)
+    public PaGlobalSettingsDto GetGlobal(
+        HpsdrBoardKind board = HpsdrBoardKind.Unknown,
+        OrionMkIIVariant variant = OrionMkIIVariant.G2)
     {
         lock (_sync)
         {
@@ -144,7 +155,7 @@ public sealed class PaSettingsStore : IDisposable
             return g is null
                 ? new PaGlobalSettingsDto(
                     PaEnabled: true,
-                    PaMaxPowerWatts: PaDefaults.GetMaxPowerWatts(board))
+                    PaMaxPowerWatts: PaDefaults.GetMaxPowerWatts(board, variant))
                 : new PaGlobalSettingsDto(g.PaEnabled, g.PaMaxPowerWatts);
         }
     }

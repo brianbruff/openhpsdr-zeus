@@ -44,6 +44,7 @@
 
 using System.Net;
 using System.Net.NetworkInformation;
+using Zeus.Contracts;
 using Zeus.Protocol2.Discovery;
 
 namespace Zeus.Protocol2.Tests;
@@ -102,6 +103,53 @@ public class DiscoveryTests
         Assert.True(ReplyParser.TryParse(reply, FromIp, out var radio));
         Assert.Equal(HpsdrBoardKind.Hermes, radio.Board);
         Assert.Equal("3.1", radio.FirmwareString);
+    }
+
+    [Theory]
+    [InlineData((byte)0x00, HpsdrBoardKind.Metis)]
+    [InlineData((byte)0x01, HpsdrBoardKind.Hermes)]
+    [InlineData((byte)0x02, HpsdrBoardKind.HermesII)]
+    [InlineData((byte)0x04, HpsdrBoardKind.Angelia)]
+    [InlineData((byte)0x05, HpsdrBoardKind.Orion)]
+    [InlineData((byte)0x06, HpsdrBoardKind.HermesLite2)]
+    [InlineData((byte)0x0A, HpsdrBoardKind.OrionMkII)]
+    [InlineData((byte)0x14, HpsdrBoardKind.HermesC10)]
+    public void Maps_Every_Recognised_WireByte_To_BoardKind(byte boardId, HpsdrBoardKind expected)
+    {
+        // P2 counterpart to the P1 exhaustive-mapping test. Note 0x00
+        // names "Atlas" on P2 vs "Metis" on P1 — same wire byte, different
+        // historical labelling. Issue #218's enum unification will pick a
+        // canonical name; this test pins the current dispatch.
+        var reply = BuildReply(new ReplyFields(
+            Status: 0x02,
+            Mac: new byte[] { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55 },
+            BoardId: boardId,
+            ProtocolSupported: 38,
+            CodeVersion: 21));
+
+        Assert.True(ReplyParser.TryParse(reply, FromIp, out var radio));
+        Assert.Equal(expected, radio.Board);
+        Assert.Equal(boardId, radio.Details.RawBoardId);
+    }
+
+    [Fact]
+    public void Parses_HermesC10_Reply_AnanG2E()
+    {
+        // Apache Labs ANAN-G2E reports board id 0x14 on P2 discovery
+        // (Thetis HPSDRHW.HermesC10 = 20). Before this mapping landed, G2E
+        // fell through to HpsdrBoardKind.Unknown.
+        var reply = BuildReply(new ReplyFields(
+            Status: 0x02,
+            Mac: new byte[] { 0x00, 0x55, 0x66, 0x77, 0x88, 0x99 },
+            BoardId: 0x14,
+            ProtocolSupported: 38,
+            CodeVersion: 71,
+            NumReceivers: 1));
+
+        Assert.True(ReplyParser.TryParse(reply, FromIp, out var radio));
+        Assert.Equal(HpsdrBoardKind.HermesC10, radio.Board);
+        Assert.Equal((byte)0x14, radio.Details.RawBoardId);
+        Assert.Equal("7.1", radio.FirmwareString);
     }
 
     [Fact]

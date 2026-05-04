@@ -17,7 +17,7 @@
 //   - "+ Add Panel" is a single workspace-level button at the top-right,
 //     opening the categorized AddPanelModal.
 
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import {
   ResponsiveGridLayout,
   useContainerWidth,
@@ -44,27 +44,20 @@ import {
 
 export function FlexWorkspace() {
   const { terminatorActive } = useWorkspace();
+  // Loading is driven by App.tsx via loadForRadio(boardKey) — no local
+  // first-load effect here. The active layout's parsed WorkspaceLayout
+  // arrives via `workspace` once that resolves.
   const workspace = useLayoutStore((s) => s.workspace);
   const isLoaded = useLayoutStore((s) => s.isLoaded);
-  const loadFromServer = useLayoutStore((s) => s.loadFromServer);
   const syncToServerBeforeUnload = useLayoutStore((s) => s.syncToServerBeforeUnload);
   const addTile = useLayoutStore((s) => s.addTile);
   const removeTile = useLayoutStore((s) => s.removeTile);
   const updateTilePlacement = useLayoutStore((s) => s.updateTilePlacement);
-  // Modal visibility lifted into the store so the trigger button lives in
-  // the App.tsx control row (after AF gain) — the workspace just renders
-  // the modal when the store says open.
+  // Modal visibility lifted into the store so the trigger button can live
+  // in the LeftLayoutBar — the workspace just renders the modal when the
+  // store says open.
   const addPanelOpen = useLayoutStore((s) => s.addPanelOpen);
   const setAddPanelOpen = useLayoutStore((s) => s.setAddPanelOpen);
-
-  const loadedRef = useRef(false);
-
-  useEffect(() => {
-    if (!loadedRef.current) {
-      loadedRef.current = true;
-      void loadFromServer();
-    }
-  }, [loadFromServer]);
 
   // Best-effort persist on page-unload (sendBeacon → fetch keepalive fallback).
   useEffect(() => {

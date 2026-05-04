@@ -44,6 +44,7 @@
 
 using System.Buffers.Binary;
 using System.Net;
+using Zeus.Contracts;
 using Zeus.Protocol1.Discovery;
 
 namespace Zeus.Protocol1;

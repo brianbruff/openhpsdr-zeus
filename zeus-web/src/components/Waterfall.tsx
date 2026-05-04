@@ -47,6 +47,7 @@ import { COLORMAPS, type ColormapId } from '../gl/colormap';
 import { createWfRenderer } from '../gl/waterfall';
 import { useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
+import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
 import { WfDbScale } from './WfDbScale';
 
@@ -95,8 +96,14 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
 
     const redraw = () => {
       rafHandle = 0;
-      const { wfDbMin, wfDbMax } = useDisplaySettingsStore.getState();
-      renderer.draw(wfDbMin, wfDbMax);
+      const { wfDbMin, wfDbMax, wfTxDbMin, wfTxDbMax } = useDisplaySettingsStore.getState();
+      const { moxOn, tunOn } = useTxStore.getState();
+      const keyed = moxOn || tunOn;
+      // Mirror DbScale.tsx — keyed (MOX/TUN) renders the TX waterfall
+      // window so the operator's RX noise-floor view stays put.
+      const dbMin = keyed ? wfTxDbMin : wfDbMin;
+      const dbMax = keyed ? wfTxDbMax : wfDbMax;
+      renderer.draw(dbMin, dbMax);
     };
     const requestRedraw = () => {
       if (rafHandle === 0) rafHandle = requestAnimationFrame(redraw);
@@ -143,9 +150,16 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       requestRedraw();
     });
 
+    // Repaint when MOX/TUN flips so the RX↔TX waterfall window swap lands
+    // immediately instead of waiting for the next server frame or scale drag.
+    const unsubTx = useTxStore.subscribe(() => {
+      requestRedraw();
+    });
+
     return () => {
       unsub();
       unsubSettings();
+      unsubTx();
       ro.disconnect();
       if (rafHandle !== 0) cancelAnimationFrame(rafHandle);
       renderer.dispose();

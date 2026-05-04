@@ -19,6 +19,7 @@
 // (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
 // Both are GPL-2.0-or-later.
 
+using Zeus.Contracts;
 using Zeus.Protocol1.Discovery;
 using Zeus.Server;
 using Xunit;
@@ -63,4 +64,52 @@ public class PsHwPeakResolutionTests
         Assert.Equal(0.233, RadioService.ResolvePsHwPeak(false, HpsdrBoardKind.HermesLite2));
         Assert.Equal(0.233, RadioService.ResolvePsHwPeak(true, HpsdrBoardKind.HermesLite2));
     }
+
+    [Theory]
+    [InlineData(OrionMkIIVariant.G2,            0.6121)]
+    [InlineData(OrionMkIIVariant.G2_1K,         0.6121)]
+    [InlineData(OrionMkIIVariant.Anan7000DLE,   0.2899)]
+    [InlineData(OrionMkIIVariant.Anan8000DLE,   0.2899)]
+    [InlineData(OrionMkIIVariant.OrionMkII,     0.2899)]
+    [InlineData(OrionMkIIVariant.AnvelinaPro3,  0.2899)]
+    [InlineData(OrionMkIIVariant.RedPitaya,     0.2899)]
+    public void Protocol2_OrionMkII_Variant_Disambiguates_Saturn_From_OrionClass(
+        OrionMkIIVariant variant, double expectedPeak)
+    {
+        // Phase 6 of issue #218: only the Saturn-FPGA variants (G2 / G2-1K)
+        // get the 0.6121 peak per Thetis clsHardwareSpecific.cs:313. Every
+        // other 0x0A variant inherits the OrionMkII-class default 0.2899.
+        Assert.Equal(expectedPeak,
+            RadioService.ResolvePsHwPeak(true, HpsdrBoardKind.OrionMkII, variant));
+    }
+
+    [Fact]
+    public void Default_Variant_Overload_Matches_Variant_G2()
+    {
+        // Backward-compat: the no-variant overload defaults to G2, so
+        // pre-#218 callers continue to see the Saturn peak for OrionMkII.
+        Assert.Equal(
+            RadioService.ResolvePsHwPeak(true, HpsdrBoardKind.OrionMkII, OrionMkIIVariant.G2),
+            RadioService.ResolvePsHwPeak(true, HpsdrBoardKind.OrionMkII));
+    }
+
+    [Theory]
+    [MemberData(nameof(EveryNonOrionMkIIBoard))]
+    public void Variant_Ignored_For_NonOrionMkII_Boards(HpsdrBoardKind board)
+    {
+        foreach (var variant in Enum.GetValues<OrionMkIIVariant>())
+        {
+            Assert.Equal(
+                RadioService.ResolvePsHwPeak(true, board, OrionMkIIVariant.G2),
+                RadioService.ResolvePsHwPeak(true, board, variant));
+            Assert.Equal(
+                RadioService.ResolvePsHwPeak(false, board, OrionMkIIVariant.G2),
+                RadioService.ResolvePsHwPeak(false, board, variant));
+        }
+    }
+
+    public static IEnumerable<object[]> EveryNonOrionMkIIBoard() =>
+        Enum.GetValues<HpsdrBoardKind>()
+            .Where(b => b != HpsdrBoardKind.OrionMkII)
+            .Select(b => new object[] { b });
 }

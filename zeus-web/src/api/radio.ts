@@ -4,19 +4,21 @@
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 
-// String-valued board kinds are mirrored from Zeus.Protocol1.Discovery.
-// HpsdrBoardKind; we intentionally use strings over the wire (not numeric
-// bytes) so the JSON is legible when debugging with curl and resilient
-// to new boards being added on the backend without a frontend recompile.
+// String-valued board kinds are mirrored from Zeus.Contracts.HpsdrBoardKind
+// (post-#218 Phase 4 unification); we intentionally use strings over the
+// wire (not numeric bytes) so the JSON is legible when debugging with curl
+// and resilient to new boards being added on the backend without a frontend
+// recompile.
 export type BoardKind =
   | 'Auto'
   | 'Metis'
   | 'Hermes'
-  | 'Griffin'
+  | 'HermesII'
   | 'Angelia'
   | 'Orion'
   | 'HermesLite2'
   | 'OrionMkII'
+  | 'HermesC10'
   | 'Unknown';
 
 export interface RadioSelection {
@@ -30,13 +32,14 @@ export interface RadioSelection {
 // RadioSelector.tsx.
 export const BOARD_LABELS: Record<BoardKind, string> = {
   Auto: 'Auto-detect',
-  Metis: 'Metis',
-  Hermes: 'Hermes / ANAN-10/10E',
-  Griffin: 'Griffin',
-  Angelia: 'ANAN-100 / 100B / 8000D',
-  Orion: 'ANAN-100D / 200D',
+  Metis: 'HPSDR Metis',
+  Hermes: 'Hermes / ANAN-10 / ANAN-100',
+  HermesII: 'Hermes-II / ANAN-10E / 100B',
+  Angelia: 'ANAN-100D',
+  Orion: 'ANAN-200D',
   HermesLite2: 'Hermes Lite 2',
-  OrionMkII: 'ANAN G2 / 7000D / G1',
+  OrionMkII: 'ANAN G2 / 7000D / 8000D / variant',
+  HermesC10: 'ANAN-G2E',
   Unknown: 'Unknown',
 };
 
@@ -46,11 +49,21 @@ function normalizeBoard(v: unknown): BoardKind {
     case 'Auto':
     case 'Metis':
     case 'Hermes':
-    case 'Griffin':
+    case 'HermesII':
     case 'Angelia':
     case 'Orion':
     case 'HermesLite2':
     case 'OrionMkII':
+    case 'HermesC10':
+      return v;
+    // Pre-#218 Phase 4 backward compatibility — the unification renamed
+    // Griffin to HermesII (P1 collapse) and Atlas to Metis (P2 collapse).
+    // Old persisted preferences or legacy clients sending the old names
+    // get coerced to the new canonical values.
+    case 'Griffin':
+      return 'HermesII';
+    case 'Atlas':
+      return 'Metis';
     case 'Unknown':
       return v;
     default:

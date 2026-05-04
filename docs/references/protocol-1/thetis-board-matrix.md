@@ -273,17 +273,15 @@ loaded settings.
   (1 RX ADC / no MKII BPF / 33 mV / LR-swap-on) is the safe default,
   matching what the original HPSDR Mercury/Penelope/Metis stack expects.
 
-## Cross-reference: Zeus seams to extend
+## Cross-reference: Zeus seams (post-#218 status)
 
-(Audit pending in `docs/designs/radio-support-audit.md`.)
-
-| Thetis surface | Zeus seam | New work for non-HL2 boards |
+| Thetis surface | Zeus seam | Status |
 |---|---|---|
-| `HardwareSpecific.Hardware` setter side-effects | `HpsdrBoardKind` + `RadioService.ConnectedBoardKind` | Ensure every `HPSDRHW` value has a `HpsdrBoardKind` and a discovery byte mapping |
-| `DefaultPAGainsForBands` | `Zeus.Server.Hosting/PaDefaults.cs` | Add per-board PA-gain tables for every model above |
-| `RXMeterCalbrationOffsetDefaults` / `RXDisplayCalbrationOffsetDefauls` | `Zeus.Server.Hosting/RadioCalibrations.cs` | Add per-board RX-cal offsets |
-| `GetDefaultVoltCalibration` | `RadioCalibrations` (extend) | Add per-board volt-cal `(voff, sens)` |
-| `PSDefaultPeak` | PS hw_peak default | Per-`HpsdrBoardKind` lookup; HL2 keeps its existing 0.233 |
-| `HasVolts` / `HasAmps` / `HasAudioAmplifier` | new `BoardCapabilities` projection | Surface to web UI for conditional panels |
-| `HasSteppedAttenuation(rx)` | new helper on `HpsdrBoardKind` | Drives RX2 attenuator UI |
-| `SupportsPathIllustrator` | board capabilities | UI gating |
+| `HardwareSpecific.Hardware` setter side-effects | `Zeus.Contracts.HpsdrBoardKind` + `RadioService.ConnectedBoardKind` | ✅ unified across P1/P2 in Phase 4 (`932c040`); every documented wire byte parsed and dispatched |
+| `DefaultPAGainsForBands` | `Zeus.Server.Hosting/PaDefaults.cs` | ✅ HermesGains / Anan100Gains / Anan200Gains / OrionG2Gains tables; variant-aware overload routes 0x0A sub-variants per Phase 3 |
+| `RXMeterCalbrationOffsetDefaults` / `RXDisplayCalbrationOffsetDefauls` | `Zeus.Server.Hosting/RadioCalibrations.cs` (TX-side) | ✅ Hermes / Anan100 / Anan200 / OrionMkII / OrionMkIIAnan8000 / OrionMkIIOriginal / AnanG21K buckets |
+| `GetDefaultVoltCalibration` | not yet wired in Zeus | ⏳ deferred; Zeus has no operator volts/amps panel today, so no consumer for the per-board `(voff, sens)` constants |
+| `PSDefaultPeak` | `RadioService.ResolvePsHwPeak` | ✅ Phase 6 (`59456d1`); variant-aware (G2 / G2_1K → 0.6121, others → 0.2899); HL2 0.233 preserved |
+| `HasVolts` / `HasAmps` / `HasAudioAmplifier` / `HasSteppedAttenuationRx2` / `SupportsPathIllustrator` | `Zeus.Contracts.BoardCapabilities` + `BoardCapabilitiesTable.For` | ✅ Phase 2 (`b0afe62`); fetched by frontend via `/api/radio/capabilities` (Phase 5) — UI panel gating is for future panels to consume |
+| `HPSDRModel.ANAN_G2E` (HermesC10) | `HpsdrBoardKind.HermesC10` | ✅ recognised on discovery (`83364ec`) and dispatched (`1bcbd7d`) |
+| 0x0A wire-byte alias family disambiguation | `Zeus.Contracts.OrionMkIIVariant` | ✅ Phase 3 (`d807611`); operator-selectable per-radio, persisted in `PreferredRadioStore`, surfaced via `/api/radio/variant` and the `RadioSelector` dropdown |

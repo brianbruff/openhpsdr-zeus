@@ -52,14 +52,25 @@
   overflow: hidden;
 }
 
-/* Subtle blue brand accent overlay. Two layers:
-   - ::before is the deep-blue wash (matches the VFO frequency-display blue).
-     Solid 0–50%, fades out across 50–70%, fully transparent below 70%.
+/* Subtle tint overlay. Two layers:
+   - ::before is the top-half wash (matches the VFO frequency-display blue at
+     the default). Solid 0–50%, fades out across 50–70%, fully transparent
+     below 70%.
    - ::after is the diffused dot matrix. Invisible above 50%, fades in across
      50–70%, gone by 70%.
-   Both layers use raw VFO-tab colors (#14243e ≈ rgba(20,36,62,…)) +
-   var(--accent) for the dots; the bar's panel chrome shows through cleanly
-   below 70%. */
+   The hue is sourced from --lb-wash-{r,g,b} (a darkened 0.25× variant of
+   the operator's panadapter trace colour) and --lb-tint-{r,g,b} (the trace
+   colour itself). Defaults preserve the original VFO-blue + accent-blue
+   look when the JS hasn't injected the operator's choice yet. The 70% mark
+   keeps the bar's lower half clean so action buttons stay readable. */
+.left-layout-bar {
+  --lb-wash-r: 20;
+  --lb-wash-g: 36;
+  --lb-wash-b: 62;
+  --lb-tint-r: 74;
+  --lb-tint-g: 158;
+  --lb-tint-b: 255;
+}
 .left-layout-bar::before {
   content: '';
   position: absolute;
@@ -68,10 +79,10 @@
   z-index: 0;
   background: linear-gradient(
     to bottom,
-    rgba(20, 36, 62, 0.55) 0%,
-    rgba(20, 36, 62, 0.55) 50%,
-    rgba(20, 36, 62, 0.00) 70%,
-    rgba(20, 36, 62, 0.00) 100%
+    rgba(var(--lb-wash-r), var(--lb-wash-g), var(--lb-wash-b), 0.55) 0%,
+    rgba(var(--lb-wash-r), var(--lb-wash-g), var(--lb-wash-b), 0.55) 50%,
+    rgba(var(--lb-wash-r), var(--lb-wash-g), var(--lb-wash-b), 0.00) 70%,
+    rgba(var(--lb-wash-r), var(--lb-wash-g), var(--lb-wash-b), 0.00) 100%
   );
 }
 .left-layout-bar::after {
@@ -81,7 +92,9 @@
   pointer-events: none;
   z-index: 0;
   background:
-    radial-gradient(circle, rgba(74, 158, 255, 0.22) 1px, transparent 1.5px)
+    radial-gradient(circle,
+      rgba(var(--lb-tint-r), var(--lb-tint-g), var(--lb-tint-b), 0.22) 1px,
+      transparent 1.5px)
     0 0 / 8px 8px;
   /* Dots only paint in the 50–70% band: fully transparent above 50%, fade
      in to ~60% peak, fully transparent again by 70% so the bar's bottom
@@ -130,13 +143,11 @@
 .left-layout-bar .lb-tab {
   flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 6px 4px;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  gap: 3px;
+  padding: 6px 4px 5px;
   color: var(--fg-1);
   background: linear-gradient(180deg, var(--btn-top), var(--btn-bot));
   border: 1px solid var(--btn-edge);
@@ -144,9 +155,7 @@
   box-shadow: inset 0 1px 0 var(--btn-hl);
   cursor: pointer;
   text-align: center;
-  min-height: 36px;
-  word-break: break-word;
-  hyphens: auto;
+  min-height: 50px;
   transition: background var(--dur-fast), border-color var(--dur-fast),
     color var(--dur-fast), box-shadow var(--dur-fast);
 }
@@ -156,25 +165,77 @@
   color: var(--accent);
   box-shadow: inset 0 1px 0 var(--btn-hl), 0 0 8px var(--accent-soft);
 }
-.left-layout-bar .lb-tab-name {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  line-clamp: 3;
-  overflow: hidden;
+.left-layout-bar .lb-tab-icon {
+  font-size: 18px;
+  line-height: 1;
+  /* Force the OS colour-emoji palette so the chosen glyph stays vivid even
+     when the active state recolours the surrounding text. */
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji',
+    sans-serif;
+  filter: none;
 }
-.left-layout-bar .lb-rename {
-  flex: 1;
-  width: 100%;
-  background: #0a1220;
-  border: 1px solid var(--accent);
-  border-radius: var(--r-sm);
-  color: var(--fg-0);
-  font-size: 10px;
+.left-layout-bar .lb-tab-icon.lb-tab-icon-fallback {
+  /* Letter fallback for layouts without an icon — render in the tab's
+     current colour so it picks up the active state. */
+  font-family: var(--font-sans);
   font-weight: 700;
-  text-align: center;
+  font-size: 16px;
+  letter-spacing: 0;
   text-transform: uppercase;
-  padding: 6px 4px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  opacity: 0.85;
+}
+.left-layout-bar .lb-tab-name {
+  font-family: var(--font-sans);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.1;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+  overflow: hidden;
+  word-break: break-word;
+  hyphens: auto;
+  max-width: 100%;
+}
+.left-layout-bar .lb-gear {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  background: linear-gradient(180deg, #2e2f33, #1c1d20);
+  border: 1px solid var(--btn-edge);
+  border-radius: 50%;
+  color: var(--fg-2);
+  cursor: pointer;
+  line-height: 1;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  transition: opacity var(--dur-fast), color var(--dur-fast),
+    border-color var(--dur-fast);
+}
+.left-layout-bar .lb-item:hover .lb-gear,
+.left-layout-bar .lb-item.active .lb-gear,
+.left-layout-bar .lb-gear:focus-visible {
+  opacity: 1;
+}
+.left-layout-bar .lb-gear:hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 .left-layout-bar .lb-x {
   position: absolute;

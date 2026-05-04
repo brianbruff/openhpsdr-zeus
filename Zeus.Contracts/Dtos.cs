@@ -359,11 +359,28 @@ public sealed record UiLayoutSetRequest(string LayoutJson);
 // Multi-layout shape (issue #241). Layouts are keyed per radio (board kind /
 // "default" while disconnected). Each radio holds a list of named layouts and
 // remembers which one was active.
-public sealed record NamedLayoutDto(string Id, string Name, string LayoutJson, long UpdatedUtc);
+//
+// `Icon` is a short string (typically a single emoji) shown above the layout
+// label in the LeftLayoutBar; `Description` is a longer free-form string used
+// as the hover tooltip. Both are optional — older layouts without these
+// fields render with a letter fallback and the layout name as tooltip.
+public sealed record NamedLayoutDto(
+    string Id,
+    string Name,
+    string LayoutJson,
+    long UpdatedUtc,
+    string? Icon = null,
+    string? Description = null);
 
 public sealed record RadioLayoutsDto(string RadioKey, IReadOnlyList<NamedLayoutDto> Layouts, string ActiveLayoutId);
 
-public sealed record SaveNamedLayoutRequest(string RadioKey, string LayoutId, string Name, string LayoutJson);
+public sealed record SaveNamedLayoutRequest(
+    string RadioKey,
+    string LayoutId,
+    string Name,
+    string LayoutJson,
+    string? Icon = null,
+    string? Description = null);
 
 public sealed record SetActiveLayoutRequest(string RadioKey, string LayoutId);
 

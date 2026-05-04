@@ -872,7 +872,13 @@ public static class ZeusEndpoints
                 if (named?.LayoutJson is { } njson && !string.IsNullOrWhiteSpace(njson)
                     && !string.IsNullOrWhiteSpace(named.LayoutId))
                 {
-                    store.UpsertNamed(named.RadioKey ?? "default", named.LayoutId, named.Name ?? named.LayoutId, njson);
+                    store.UpsertNamed(
+                        named.RadioKey ?? "default",
+                        named.LayoutId,
+                        named.Name ?? named.LayoutId,
+                        njson,
+                        named.Icon,
+                        named.Description);
                 }
                 else
                 {
@@ -898,7 +904,13 @@ public static class ZeusEndpoints
                 return Results.BadRequest(new { error = "layoutJson required" });
             if (string.IsNullOrWhiteSpace(req.LayoutId))
                 return Results.BadRequest(new { error = "layoutId required" });
-            return Results.Ok(store.UpsertNamed(req.RadioKey ?? "default", req.LayoutId, req.Name ?? req.LayoutId, req.LayoutJson));
+            return Results.Ok(store.UpsertNamed(
+                req.RadioKey ?? "default",
+                req.LayoutId,
+                req.Name ?? req.LayoutId,
+                req.LayoutJson,
+                req.Icon,
+                req.Description));
         });
 
         app.MapPost("/api/ui/layouts/active", (SetActiveLayoutRequest req, LayoutStore store) =>

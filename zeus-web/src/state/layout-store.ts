@@ -32,12 +32,30 @@ export interface NamedLayout {
   name: string;
   /** Serialized WorkspaceLayout (parseWorkspaceLayout-ready). */
   layoutJson: string;
+  /** Optional emoji or short glyph rendered above the label in the
+   *  LeftLayoutBar. Empty/undefined → letter-fallback badge. */
+  icon?: string;
+  /** Optional longer description shown as the hover tooltip. */
+  description?: string;
 }
 
 interface RadioLayoutsResponse {
   radioKey: string;
-  layouts: Array<{ id: string; name: string; layoutJson: string; updatedUtc: number }>;
+  layouts: Array<{
+    id: string;
+    name: string;
+    layoutJson: string;
+    updatedUtc: number;
+    icon?: string | null;
+    description?: string | null;
+  }>;
   activeLayoutId: string;
+}
+
+export interface LayoutMetaUpdate {
+  name?: string;
+  icon?: string;
+  description?: string;
 }
 
 interface LayoutState {
@@ -71,13 +89,16 @@ interface LayoutState {
   // Layout-level mutators (LeftLayoutBar API):
   /** Create a new layout for the current radio, seeded from
    *  DEFAULT_WORKSPACE_LAYOUT, and switch to it. Returns the new id. */
-  addLayout: (name: string) => string;
+  addLayout: (name: string, meta?: { icon?: string; description?: string }) => string;
   /** Delete a layout. If it was active, the server promotes the first
    *  remaining layout to active; if there are zero remaining the client
    *  re-seeds Default. */
   removeLayout: (id: string) => void;
-  /** Rename an existing layout. */
+  /** Rename an existing layout. Shim over updateLayoutMeta. */
   renameLayout: (id: string, name: string) => void;
+  /** Update presentation metadata (name / icon / description) for a layout.
+   *  Pass undefined for fields you do not want to change. Persists via PUT. */
+  updateLayoutMeta: (id: string, patch: LayoutMetaUpdate) => void;
   /** Switch the active layout. Re-parses the layout's JSON into `workspace`
    *  and POSTs the new active id to the server. */
   setActiveLayout: (id: string) => void;
@@ -154,6 +175,8 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
         id: l.id,
         name: l.name,
         layoutJson: l.layoutJson,
+        ...(l.icon ? { icon: l.icon } : {}),
+        ...(l.description ? { description: l.description } : {}),
       }));
       let activeId = dto.activeLayoutId || layouts[0]?.id || DEFAULT_LAYOUT_ID;
       // Empty radio → seed a Default and persist.
@@ -203,6 +226,8 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       layoutId: active.id,
       name: active.name,
       layoutJson: serializeWorkspace(workspace),
+      icon: active.icon ?? '',
+      description: active.description ?? '',
     });
     const blob = new Blob([body], { type: 'application/json' });
     if (!navigator.sendBeacon('/api/ui/layout-beacon', blob)) {
@@ -215,10 +240,16 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
     }
   },
 
-  addLayout: (name) => {
+  addLayout: (name, meta) => {
     const id = `layout-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const json = serializeWorkspace(DEFAULT_WORKSPACE_LAYOUT);
-    const next: NamedLayout = { id, name: name || 'Untitled', layoutJson: json };
+    const next: NamedLayout = {
+      id,
+      name: name || 'Untitled',
+      layoutJson: json,
+      ...(meta?.icon ? { icon: meta.icon } : {}),
+      ...(meta?.description ? { description: meta.description } : {}),
+    };
     const layouts = [...get().layouts, next];
     set({
       layouts,
@@ -251,10 +282,29 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   },
 
   renameLayout: (id, name) => {
-    const layouts = get().layouts.map((l) => (l.id === id ? { ...l, name } : l));
+    get().updateLayoutMeta(id, { name });
+  },
+
+  updateLayoutMeta: (id, patch) => {
+    const layouts = get().layouts.map((l) => {
+      if (l.id !== id) return l;
+      const next: NamedLayout = { ...l };
+      if (patch.name !== undefined) next.name = patch.name || l.name;
+      if (patch.icon !== undefined) {
+        const trimmed = patch.icon.trim();
+        if (trimmed.length === 0) delete next.icon;
+        else next.icon = trimmed;
+      }
+      if (patch.description !== undefined) {
+        const trimmed = patch.description.trim();
+        if (trimmed.length === 0) delete next.description;
+        else next.description = trimmed;
+      }
+      return next;
+    });
     set({ layouts });
-    const renamed = findActive(layouts, id);
-    if (renamed) void putNamedLayout(get().radioKey, renamed);
+    const updated = findActive(layouts, id);
+    if (updated) void putNamedLayout(get().radioKey, updated);
   },
 
   setActiveLayout: (id) => {
@@ -386,6 +436,8 @@ function putNamedLayout(radioKey: string, layout: NamedLayout): Promise<unknown>
       layoutId: layout.id,
       name: layout.name,
       layoutJson: layout.layoutJson,
+      icon: layout.icon ?? '',
+      description: layout.description ?? '',
     }),
   });
 }

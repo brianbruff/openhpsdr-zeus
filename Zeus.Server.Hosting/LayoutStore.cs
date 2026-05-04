@@ -177,12 +177,22 @@ public sealed class LayoutStore : IDisposable
     /// <summary>
     /// Upsert one named layout. Creates the radio's row on first call.
     /// If there is no active layout yet, the new layout becomes active.
+    /// `icon` and `description` are optional; null means "leave as-is on
+    /// existing rows / empty on insert".
     /// </summary>
-    public RadioLayoutsDto UpsertNamed(string radioKey, string layoutId, string name, string layoutJson)
+    public RadioLayoutsDto UpsertNamed(
+        string radioKey,
+        string layoutId,
+        string name,
+        string layoutJson,
+        string? icon = null,
+        string? description = null)
     {
         radioKey = NormalizeRadioKey(radioKey);
         layoutId = NormalizeLayoutId(layoutId);
         if (string.IsNullOrWhiteSpace(name)) name = layoutId;
+        var normalisedIcon = NormalizeIcon(icon);
+        var normalisedDescription = NormalizeDescription(description);
 
         lock (_lock)
         {
@@ -202,6 +212,8 @@ public sealed class LayoutStore : IDisposable
                     Name = name,
                     LayoutJson = layoutJson,
                     UpdatedUtc = DateTime.UtcNow,
+                    Icon = normalisedIcon ?? string.Empty,
+                    Description = normalisedDescription ?? string.Empty,
                 });
             }
             else
@@ -209,6 +221,8 @@ public sealed class LayoutStore : IDisposable
                 existing.Name = name;
                 existing.LayoutJson = layoutJson;
                 existing.UpdatedUtc = DateTime.UtcNow;
+                if (icon is not null) existing.Icon = normalisedIcon ?? string.Empty;
+                if (description is not null) existing.Description = normalisedDescription ?? string.Empty;
             }
 
             if (string.IsNullOrEmpty(entry.ActiveLayoutId))
@@ -271,7 +285,9 @@ public sealed class LayoutStore : IDisposable
                 l.LayoutId,
                 l.Name,
                 l.LayoutJson,
-                new DateTimeOffset(l.UpdatedUtc).ToUnixTimeMilliseconds()))
+                new DateTimeOffset(l.UpdatedUtc).ToUnixTimeMilliseconds(),
+                string.IsNullOrEmpty(l.Icon) ? null : l.Icon,
+                string.IsNullOrEmpty(l.Description) ? null : l.Description))
             .ToList(),
         e.ActiveLayoutId);
 
@@ -295,6 +311,26 @@ public sealed class LayoutStore : IDisposable
         var safe = new string(trimmed.Where(c =>
             char.IsLetterOrDigit(c) || c == '-' || c == '_').ToArray());
         return string.IsNullOrEmpty(safe) ? "default" : safe;
+    }
+
+    // Icons are typically a single emoji. We don't restrict the codepoint set
+    // (emoji + variation selectors + ZWJ sequences would be hostile to enumerate)
+    // but we do cap the length so a misbehaving client can't park an essay in
+    // the icon field.
+    private static string? NormalizeIcon(string? raw)
+    {
+        if (raw is null) return null;
+        var trimmed = raw.Trim();
+        if (trimmed.Length == 0) return string.Empty;
+        return trimmed.Length > 16 ? trimmed[..16] : trimmed;
+    }
+
+    private static string? NormalizeDescription(string? raw)
+    {
+        if (raw is null) return null;
+        var trimmed = raw.Trim();
+        if (trimmed.Length == 0) return string.Empty;
+        return trimmed.Length > 256 ? trimmed[..256] : trimmed;
     }
 
     public void Dispose() => _db.Dispose();
@@ -330,4 +366,8 @@ public sealed class NamedLayoutEntry
     public string Name { get; set; } = string.Empty;
     public string LayoutJson { get; set; } = string.Empty;
     public DateTime UpdatedUtc { get; set; }
+    // Optional presentation fields (issue #241 follow-up). Older rows that
+    // predate these columns deserialise as empty strings under LiteDB.
+    public string Icon { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
 }

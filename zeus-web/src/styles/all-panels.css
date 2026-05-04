@@ -386,3 +386,162 @@
   font-size: 11px;
   color: var(--fg-2);
 }
+
+/* Layout settings modal — edit a NamedLayout's label, icon, and tooltip
+ * description. Reuses the modal-backdrop scrim from AddPanelModal. */
+.layout-settings-modal {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-md);
+  width: 90%;
+  max-width: 460px;
+  max-height: 85vh;
+  overflow: hidden;
+}
+.layout-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--panel-border);
+  background: linear-gradient(180deg,
+    var(--panel-head-top, var(--panel-top)),
+    var(--panel-head-bot, var(--panel-bot)));
+}
+.layout-settings-header h2 {
+  margin: 0;
+  font-size: 13px;
+  font-family: var(--font-sans);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-1);
+}
+.layout-settings-body {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+}
+.layout-settings-preview {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 4px;
+}
+.layout-settings-preview-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  min-width: 64px;
+  background: linear-gradient(180deg, var(--btn-top), var(--btn-bot));
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 1px 0 var(--btn-hl), 0 0 8px var(--accent-soft);
+  color: var(--accent);
+}
+.layout-settings-preview-icon {
+  font-size: 22px;
+  line-height: 1;
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji',
+    var(--font-sans);
+}
+.layout-settings-preview-label {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.layout-settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.layout-settings-field-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+  font-family: var(--font-sans);
+}
+.layout-settings-field-hint {
+  font-size: 10px;
+  color: var(--fg-3);
+}
+.layout-settings-input,
+.layout-settings-textarea,
+.layout-settings-icon-input {
+  width: 100%;
+  padding: 6px 10px;
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm);
+  color: var(--fg-0);
+  font-size: 12px;
+  font-family: var(--font-sans);
+}
+.layout-settings-textarea {
+  resize: vertical;
+  min-height: 44px;
+  font-family: var(--font-sans);
+}
+.layout-settings-input:focus,
+.layout-settings-textarea:focus,
+.layout-settings-icon-input:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: 0;
+  border-color: var(--accent);
+}
+.layout-settings-icon-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.layout-settings-icon-input {
+  width: 80px;
+  text-align: center;
+  font-size: 18px;
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji',
+    var(--font-sans);
+}
+.layout-settings-icon-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+  margin-top: 6px;
+}
+.layout-settings-icon-chip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  font-size: 18px;
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji',
+    var(--font-sans);
+  transition: background var(--dur-fast), border-color var(--dur-fast);
+}
+.layout-settings-icon-chip:hover {
+  background: var(--bg-2);
+  border-color: var(--accent);
+}
+.layout-settings-icon-chip.selected {
+  background: var(--bg-2);
+  border-color: var(--accent);
+  box-shadow: 0 0 6px var(--accent-soft);
+}
+.layout-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--panel-border);
+  background: var(--bg-0);
+}

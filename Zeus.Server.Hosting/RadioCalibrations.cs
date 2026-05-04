@@ -33,11 +33,12 @@ namespace Zeus.Server;
 ///
 /// Constants come from Thetis <c>console.cs:25053-25118</c>
 /// (<c>computeAlexFwdPower</c>). Where Thetis distinguishes flavours that
-/// Zeus' single-byte board id collapses (e.g. ANAN_G2 vs ORIONMKII vs
-/// ANAN-8000D, all id 0x0A), we pick the bucket the test rig uses and
-/// document the caveat. Operators on the alternate hardware will see a
-/// meter offset that needs maintainer review — flagged TODO in the
-/// per-record summaries.
+/// Zeus' single-byte board id collapses (the 0x0A wire-byte family —
+/// ANAN-G2 vs Apache OrionMkII vs ANAN-8000D etc.), the operator selects
+/// the variant via <see cref="OrionMkIIVariant"/> and the dispatch routes
+/// to the right bucket. Default <see cref="OrionMkIIVariant.G2"/> matches
+/// pre-#218 dispatch for every operator who never touches the variant
+/// setting.
 /// </summary>
 internal static class RadioCalibrations
 {
@@ -47,24 +48,44 @@ internal static class RadioCalibrations
     /// fresh / disconnected client doesn't divide-by-zero — operator-visible
     /// only on TX, which is gated on a live radio anyway.
     /// </summary>
-    public static RadioCalibration For(HpsdrBoardKind board) => board switch
+    public static RadioCalibration For(HpsdrBoardKind board) =>
+        For(board, OrionMkIIVariant.G2);
+
+    /// <summary>
+    /// Variant-aware overload — when <paramref name="board"/> is
+    /// <see cref="HpsdrBoardKind.OrionMkII"/>, the variant routes to the
+    /// matching calibration bucket (G2 / 7000DLE / 8000D / OrionMkII-original /
+    /// G2-1K / ANVELINA-PRO3 / Red Pitaya). For every other board the
+    /// variant is ignored.
+    /// </summary>
+    public static RadioCalibration For(HpsdrBoardKind board, OrionMkIIVariant variant) => board switch
     {
         HpsdrBoardKind.HermesLite2 => RadioCalibration.HermesLite2,
         HpsdrBoardKind.Hermes      => RadioCalibration.Hermes,
         HpsdrBoardKind.Metis       => RadioCalibration.Hermes,
-        HpsdrBoardKind.Griffin     => RadioCalibration.Hermes,
+        HpsdrBoardKind.HermesII     => RadioCalibration.Hermes,
         HpsdrBoardKind.Angelia     => RadioCalibration.Anan100,
         HpsdrBoardKind.Orion       => RadioCalibration.Anan200,
-        // Board id 0x0A in HpsdrBoardKind covers both ANAN-7000DLE / G1 / G2
-        // / G2-1K (Thetis ANAN_G2 enum: bridge 0.12 / ref 5.0 / offset 32)
-        // AND ANAN-8000D (Thetis ORIONMKII enum: bridge 0.08 / ref 5.0 /
-        // offset 18). KB2UKA's test rig is a G2 MkII, so the default
-        // dispatch picks the G2 bucket. ANAN-8000D operators may see a
-        // ~30 % low FWD reading until the dispatch grows a discriminator.
-        // TODO(p2-cal): expose discovery byte / firmware string so the
-        // ANAN-8000D bucket can be chosen automatically — see
-        // RadioCalibration.OrionMkIIAnan8000.
-        HpsdrBoardKind.OrionMkII   => RadioCalibration.OrionMkII,
+        // Board id 0x0A aliases six radios. Operator selects the variant
+        // via PreferredRadioStore.GetOrionMkIIVariant(); default G2
+        // preserves Zeus' pre-#218 behaviour. Sources:
+        //  - G2 / 7000DLE / G2-1K / ANVELINA / RedPitaya: bridge 0.12 /
+        //    ref 5.0 / offset 32 (Thetis console.cs:25079-25088).
+        //  - 8000DLE / Apache OrionMkII original: bridge 0.08 / ref 5.0 /
+        //    offset 18 (Thetis console.cs:25089-25093).
+        HpsdrBoardKind.OrionMkII   => variant switch
+        {
+            OrionMkIIVariant.Anan8000DLE       => RadioCalibration.OrionMkIIAnan8000,
+            OrionMkIIVariant.OrionMkII         => RadioCalibration.OrionMkIIOriginal,
+            OrionMkIIVariant.G2_1K             => RadioCalibration.AnanG21K,
+            _                                  => RadioCalibration.OrionMkII,
+        },
+        // ANAN-G2E (HpsdrBoardKind.HermesC10) shares the OrionMkII / G2
+        // forward-power calibration constants per Thetis console.cs:25079-
+        // 25088 (computeAlexFwdPower lumps ANAN_G2E with ANAN_G2 /
+        // ANAN_G2_1K / ANAN7000D / ANVELINAPRO3 / REDPITAYA in the same
+        // bridge_volt = 0.12, refvoltage = 5.0, adc_cal_offset = 32 case).
+        HpsdrBoardKind.HermesC10   => RadioCalibration.OrionMkII,
         _                          => RadioCalibration.HermesLite2,
     };
 }

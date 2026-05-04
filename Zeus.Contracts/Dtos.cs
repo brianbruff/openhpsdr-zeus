@@ -417,6 +417,11 @@ public sealed record RadioSelectionSetRequest(
     string Preferred,
     bool? OverrideDetection);
 
+// Operator-selected variant for the 0x0A wire-byte alias family
+// (issue #218). String-typed for forward compatibility — server parses
+// against the OrionMkIIVariant enum. Empty / unknown rejected with 400.
+public sealed record RadioVariantSetRequest(string Variant);
+
 // Panadapter background settings — Mode is one of "basic" | "beam-map" |
 // "image"; Fit is one of "fit" | "fill" | "stretch". Image bytes are NOT
 // shipped in this DTO; HasImage signals whether GET /api/display-settings/image

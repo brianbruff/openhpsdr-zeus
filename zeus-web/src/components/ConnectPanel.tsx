@@ -81,15 +81,17 @@ const SAMPLE_RATES: SampleRate[] = [48_000, 96_000, 192_000, 384_000];
 
 // Same set as the Settings RadioSelector, in the same order. Auto first so
 // the default Manual-mode connect behaviour is "let discovery decide".
+// Post-#218 Phase 4: Griffin renamed → HermesII, HermesC10 (G2E) added.
 const MANUAL_BOARD_OPTIONS: ReadonlyArray<BoardKind> = [
   'Auto',
   'HermesLite2',
   'OrionMkII',
+  'HermesC10',
   'Orion',
   'Angelia',
   'Hermes',
+  'HermesII',
   'Metis',
-  'Griffin',
 ];
 
 function endpointFor(r: RadioInfoDto): string {

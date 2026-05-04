@@ -49,6 +49,7 @@ using System.Net.Sockets;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Zeus.Contracts;
 using Zeus.Protocol1.Discovery;
 
 namespace Zeus.Protocol1;

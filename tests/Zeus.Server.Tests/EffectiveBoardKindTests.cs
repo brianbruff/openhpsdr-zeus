@@ -5,6 +5,7 @@
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 
 using Microsoft.Extensions.Logging.Abstractions;
+using Zeus.Contracts;
 using Zeus.Protocol1.Discovery;
 using Zeus.Server;
 

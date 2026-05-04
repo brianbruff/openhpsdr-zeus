@@ -744,6 +744,38 @@ public static class ZeusEndpoints
                 OverrideDetection: overrideDetection));
         });
 
+        // Board capability fingerprint for the effective board — what the
+        // web UI gates feature panels on (volts/amps meter, audio-amp
+        // controls, RX2 attenuator mode, Path Illustrator visibility, etc.).
+        // Read once at connect; static facts that depend only on the board
+        // class. Cross-references docs/references/protocol-1/thetis-board-matrix.md.
+        app.MapGet("/api/radio/capabilities", (RadioService radio) =>
+        {
+            return Results.Ok(BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant));
+        });
+
+        // Operator-selected variant for the 0x0A wire-byte alias family
+        // (issue #218). Routes calibration / PA gain / rated-watts dispatch
+        // when the connected board is OrionMkII. Default G2 preserves
+        // pre-#218 behaviour; operators with a non-G2 board select the
+        // variant once and the dispatch picks up the right bridge constants.
+        app.MapGet("/api/radio/variant", (PreferredRadioStore prefs) =>
+        {
+            return Results.Ok(new { Variant = prefs.GetOrionMkIIVariant().ToString() });
+        });
+
+        app.MapPut("/api/radio/variant", (RadioVariantSetRequest req, PreferredRadioStore prefs) =>
+        {
+            if (req is null || string.IsNullOrWhiteSpace(req.Variant))
+                return Results.BadRequest(new { error = "variant required" });
+
+            if (!Enum.TryParse<OrionMkIIVariant>(req.Variant, ignoreCase: true, out var variant))
+                return Results.BadRequest(new { error = $"unknown variant '{req.Variant}'" });
+
+            prefs.SetOrionMkIIVariant(variant);
+            return Results.Ok(new { Variant = variant.ToString() });
+        });
+
         // UI layout: flexlayout-react panel arrangement, persisted per operator profile.
         // GET returns 404 when no layout has been saved yet (frontend falls back to
         // DEFAULT_LAYOUT). PUT replaces; DELETE resets to default on next load.

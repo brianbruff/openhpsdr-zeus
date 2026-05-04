@@ -19,6 +19,7 @@
 // (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
 // Both are GPL-2.0-or-later.
 
+using Zeus.Contracts;
 using Zeus.Protocol1.Discovery;
 
 namespace Zeus.Server;
@@ -92,14 +93,31 @@ internal static class PaDefaults
         ["12m"] = 100.0, ["10m"] = 100.0, ["6m"] = 38.8,
     };
 
-    private static IReadOnlyDictionary<string, double> TableFor(HpsdrBoardKind board) => board switch
+    private static IReadOnlyDictionary<string, double> TableFor(HpsdrBoardKind board) =>
+        TableFor(board, OrionMkIIVariant.G2);
+
+    private static IReadOnlyDictionary<string, double> TableFor(HpsdrBoardKind board, OrionMkIIVariant variant) => board switch
     {
         HpsdrBoardKind.Hermes      => HermesGains,
         HpsdrBoardKind.Metis       => HermesGains,
-        HpsdrBoardKind.Griffin     => HermesGains,
+        HpsdrBoardKind.HermesII     => HermesGains,
         HpsdrBoardKind.Angelia     => Anan100Gains,
         HpsdrBoardKind.Orion       => Anan200Gains,
-        HpsdrBoardKind.OrionMkII   => OrionG2Gains,
+        // 0x0A wire alias — variant selects the per-board PA bucket:
+        //  - 8000DLE → Anan100Gains (Thetis clsHardwareSpecific.cs:668-694).
+        //  - Apache OrionMkII original → HermesGains (line 484).
+        //  - G2 / G2-1K / 7000DLE / ANVELINA-PRO3 / RedPitaya → OrionG2Gains
+        //    (Saturn-class HF bracket, lines 698-730).
+        HpsdrBoardKind.OrionMkII   => variant switch
+        {
+            OrionMkIIVariant.Anan8000DLE => Anan100Gains,
+            OrionMkIIVariant.OrionMkII   => HermesGains,
+            _                            => OrionG2Gains,
+        },
+        // ANAN-G2E (Thetis HPSDRHW.HermesC10) shares the Saturn / G2 PA gain
+        // bracket per Thetis clsHardwareSpecific.cs:698-730 — bundled with
+        // ANAN-7000D / ANAN-G2 / ANAN-G2-1K / ANVELINA-PRO3 / Red Pitaya.
+        HpsdrBoardKind.HermesC10   => OrionG2Gains,
         _                          => new Dictionary<string, double>(),
     };
 
@@ -109,11 +127,20 @@ internal static class PaDefaults
     // The method name is retained across the board split because the storage
     // field on the DTO is also shared (`PaGainDb`). Semantics are resolved
     // inside the per-board IRadioDriveProfile implementation.
-    public static double GetPaGainDb(HpsdrBoardKind board, string band)
+    public static double GetPaGainDb(HpsdrBoardKind board, string band) =>
+        GetPaGainDb(board, band, OrionMkIIVariant.G2);
+
+    /// <summary>
+    /// Variant-aware overload — when <paramref name="board"/> is
+    /// <see cref="HpsdrBoardKind.OrionMkII"/>, the variant routes to the
+    /// per-variant PA-gain bucket. For every other board the variant is
+    /// ignored. See issue #218 for the variant rationale.
+    /// </summary>
+    public static double GetPaGainDb(HpsdrBoardKind board, string band, OrionMkIIVariant variant)
     {
         if (board == HpsdrBoardKind.HermesLite2)
             return Hl2OutputPct.TryGetValue(band, out var pct) ? pct : 100.0;
-        return TableFor(board).TryGetValue(band, out var v) ? v : 0.0;
+        return TableFor(board, variant).TryGetValue(band, out var v) ? v : 0.0;
     }
 
     // Rated PA output in watts per board class. Used as the default for
@@ -125,15 +152,30 @@ internal static class PaDefaults
     // Values match the Thetis factory labels per board class. Operators can
     // override at any time via the PA Settings panel and the stored value
     // wins over this default on subsequent reads.
-    public static int GetMaxPowerWatts(HpsdrBoardKind board) => board switch
+    public static int GetMaxPowerWatts(HpsdrBoardKind board) =>
+        GetMaxPowerWatts(board, OrionMkIIVariant.G2);
+
+    /// <summary>
+    /// Variant-aware rated PA-output watts. <see cref="HpsdrBoardKind.OrionMkII"/>
+    /// fans out to per-variant ratings (G2 100 W / G2-1K 1000 W / 8000DLE 200 W /
+    /// 7000DLE 100 W / Apache OrionMkII 100 W / ANVELINA-PRO3 100 W /
+    /// RedPitaya 100 W); other boards ignore the variant.
+    /// </summary>
+    public static int GetMaxPowerWatts(HpsdrBoardKind board, OrionMkIIVariant variant) => board switch
     {
         HpsdrBoardKind.HermesLite2 => 5,      // HL2: class-A 5 W stock
         HpsdrBoardKind.Hermes      => 10,     // Hermes / ANAN-10 / ANAN-10E: 10 W
         HpsdrBoardKind.Metis       => 10,     // Metis boards paired with 10 W PA
-        HpsdrBoardKind.Griffin     => 10,
+        HpsdrBoardKind.HermesII     => 10,
         HpsdrBoardKind.Angelia     => 100,    // ANAN-100 / ANAN-100B / ANAN-8000D: 100 W
         HpsdrBoardKind.Orion       => 100,    // ANAN-100D / ANAN-200D: 100 W
-        HpsdrBoardKind.OrionMkII   => 100,    // ANAN-7000D / G1 / G2 / G2-1K driven: 100 W
+        HpsdrBoardKind.OrionMkII   => variant switch
+        {
+            OrionMkIIVariant.Anan8000DLE => 200,
+            OrionMkIIVariant.G2_1K       => 1000,
+            _                            => 100,
+        },
+        HpsdrBoardKind.HermesC10   => 100,    // ANAN-G2E: 100 W
         _                          => 0,      // Unknown board — keep legacy mode, no surprises
     };
 }

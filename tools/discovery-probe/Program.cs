@@ -48,6 +48,7 @@
 // Usage: dotnet run --project tools/discovery-probe [-- <timeout-seconds>]
 
 using Microsoft.Extensions.Logging.Abstractions;
+using Zeus.Contracts;
 using Zeus.Protocol1.Discovery;
 
 var timeout = TimeSpan.FromSeconds(args.Length > 0 && double.TryParse(args[0], out var s) ? s : 3.0);

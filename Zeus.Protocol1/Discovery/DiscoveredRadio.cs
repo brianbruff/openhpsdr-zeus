@@ -44,6 +44,7 @@
 
 using System.Net;
 using System.Net.NetworkInformation;
+using Zeus.Contracts;
 
 namespace Zeus.Protocol1.Discovery;
 

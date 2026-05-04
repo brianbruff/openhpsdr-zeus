@@ -902,7 +902,7 @@ public sealed class RadioService : IDisposable
         // PA config uses the effective board so the operator can pre-stage
         // PA Settings for a radio not yet connected; once a radio IS on the
         // wire, EffectiveBoardKind == ConnectedBoardKind (discovery wins).
-        var cfg = _paStore.GetAll(EffectiveBoardKind);
+        var cfg = _paStore.GetAll(EffectiveBoardKind, EffectiveOrionMkIIVariant);
         var bandName = BandUtils.FreqToBand(stateSnap.VfoHz);
         var bandCfg = bandName is not null
             ? cfg.Bands.FirstOrDefault(b => b.Band == bandName) ?? new PaBandSettingsDto(bandName)
@@ -1181,17 +1181,37 @@ public sealed class RadioService : IDisposable
     /// pihpsdr transmitter.c:1166-1179 NEW_DEVICE_SATURN.
     /// </summary>
     public static double ResolvePsHwPeak(bool isProtocol2, HpsdrBoardKind board) =>
-        // Per-protocol switch shaped so the P1 follow-up (TODO(ps-p1)) can
-        // wire HW-peak per-board too. P1 today is gated off in the frontend
-        // but the engine still receives the right number on connect — keeps
-        // Synthetic + tests deterministic.
+        ResolvePsHwPeak(isProtocol2, board, OrionMkIIVariant.G2);
+
+    /// <summary>
+    /// Variant-aware overload (issue #218 Phase 6). When
+    /// <paramref name="board"/> is <see cref="HpsdrBoardKind.OrionMkII"/>
+    /// on Protocol 2, the variant disambiguates the Saturn-FPGA family
+    /// (G2 / G2-1K → 0.6121) from the OrionMkII-class family (7000DLE /
+    /// 8000DLE / Apache OrionMkII original / ANVELINA-PRO3 / Red Pitaya
+    /// → 0.2899). Pre-#218 the dispatch returned 0.6121 for every 0x0A
+    /// board, which over-scaled the PS curve on non-Saturn variants.
+    /// </summary>
+    public static double ResolvePsHwPeak(bool isProtocol2, HpsdrBoardKind board, OrionMkIIVariant variant) =>
+        // Per-protocol switch shaped so the P1 follow-up (separately
+        // tracked) can wire HW-peak per-board too. P1 today is gated off
+        // in the frontend but the engine still receives the right number
+        // on connect — keeps Synthetic + tests deterministic.
         (isProtocol2, board) switch
         {
-            // TODO(ps-p1): P1 path is deferred — only P2 is wired through to
-            // Protocol2Client.SetPsFeedbackEnabled and the feedback pump.
             (false, HpsdrBoardKind.HermesLite2)              => 0.233,
             (false, _)                                        => 0.4072,
-            (true,  HpsdrBoardKind.OrionMkII)                 => 0.6121,
+            // 0x0A wire byte: Saturn FPGA (G2 / G2-1K) reports the high
+            // peak per Thetis clsHardwareSpecific.cs:313; everything else
+            // sharing the byte (7000DLE / 8000DLE / Apache OrionMkII /
+            // ANVELINA-PRO3 / Red Pitaya) takes the default. Default
+            // variant G2 preserves Zeus' pre-#218 P2 behaviour.
+            (true,  HpsdrBoardKind.OrionMkII)                 => variant switch
+            {
+                OrionMkIIVariant.G2     => 0.6121,
+                OrionMkIIVariant.G2_1K  => 0.6121,
+                _                        => 0.2899,
+            },
             (true,  HpsdrBoardKind.HermesLite2)               => 0.233,
             (true,  _)                                        => 0.2899,
         };
@@ -1204,7 +1224,7 @@ public sealed class RadioService : IDisposable
     /// </summary>
     public void ApplyPsHwPeakForConnection(bool isProtocol2, HpsdrBoardKind board)
     {
-        double peak = ResolvePsHwPeak(isProtocol2, board);
+        double peak = ResolvePsHwPeak(isProtocol2, board, EffectiveOrionMkIIVariant);
         // Snap PsHwPeakDefault to the resolved per-board value alongside
         // PsHwPeak so the UI can compare them for a "differs from default"
         // hint. mi0bot ref: PSForm.cs:830 reads HardwareSpecific.PSDefaultPeak
@@ -1335,6 +1355,14 @@ public sealed class RadioService : IDisposable
             return _preferredRadioStore?.Get() ?? HpsdrBoardKind.Unknown;
         }
     }
+
+    // Variant override for the 0x0A wire-byte alias family (issue #218).
+    // Read by dispatch helpers (RadioCalibrations.For / PaDefaults.* /
+    // BoardCapabilitiesTable.For) when EffectiveBoardKind == OrionMkII;
+    // ignored for every other board. Default OrionMkIIVariant.G2 preserves
+    // Zeus' pre-#218 behaviour for operators who never touch this setting.
+    public OrionMkIIVariant EffectiveOrionMkIIVariant =>
+        _preferredRadioStore?.GetOrionMkIIVariant() ?? OrionMkIIVariant.G2;
 
     // Protocol1 → RadioService bridge. Runs on the RX thread at ~1.2 kHz;
     // hands off to HandleAdcOverload for the logic the tests can drive.

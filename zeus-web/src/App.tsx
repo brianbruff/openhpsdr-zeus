@@ -55,44 +55,25 @@ import { AudioToggle } from './components/AudioToggle';
 import { BandButtons } from './components/BandButtons';
 import { ConnectPanel } from './components/ConnectPanel';
 import { MicMeter } from './components/MicMeter';
-import { MobilePttButton } from './components/MobilePttButton';
-import { MobileZoomSlider } from './components/MobileZoomSlider';
-import { ZoomControl } from './components/ZoomControl';
 import { ModeBandwidth } from './components/ModeBandwidth';
 import { ModeFavorites } from './components/toolbar/ModeFavorites';
 import { BandFavorites } from './components/toolbar/BandFavorites';
 import { StepFavorites } from './components/toolbar/StepFavorites';
 import { FilterPanel } from './components/filter/FilterPanel';
-import { FilterRibbon, useFilterRibbonOpenSync } from './components/filter/FilterRibbon';
 import { MoxButton } from './components/MoxButton';
 import { PsToggleButton } from './components/PsToggleButton';
-import { Panadapter } from './components/Panadapter';
 import { PaTempChip } from './components/PaTempChip';
 import { PreampButton } from './components/PreampButton';
-import { QrzStatusPill } from './components/QrzStatusPill';
-import { RotatorStatusPill } from './components/RotatorStatusPill';
 import { SettingsMenu } from './components/SettingsMenu';
-import { SMeterLive } from './components/SMeterLive';
-import { OverdriveIndicator, TxStageMeters } from './components/TxStageMeters';
 import { TunButton } from './components/TunButton';
-import { VfoDisplay } from './components/VfoDisplay';
-import { Waterfall } from './components/Waterfall';
 import { useSwUpdatePrompt } from './pwa/useSwUpdatePrompt';
 import { CONTACTS, bandOf } from './components/design/data';
-import { Dockable } from './components/design/Dockable';
-import { DspPanel } from './components/DspPanel';
-import { TxFilterPanel } from './components/TxFilterPanel';
-import { QrzCard } from './components/design/QrzCard';
-import { TerminatorLines } from './components/design/TerminatorLines';
 import { bearingDeg, distanceKm } from './components/design/geo';
-import { LeafletWorldMap } from './components/design/LeafletWorldMap';
-import { LeafletMapErrorBoundary } from './components/design/LeafletMapErrorBoundary';
 import { startRealtime } from './realtime/ws-client';
 import { getServerBaseUrl, isCapacitorRuntime } from './serverUrl';
 import { getAudioClient } from './audio/audio-client';
 import { useMicUplink } from './audio/use-mic-uplink';
 import { fetchState } from './api/client';
-import { BOARD_LABELS } from './api/radio';
 import { useConnectionStore } from './state/connection-store';
 import { useRadioStore } from './state/radio-store';
 import { useQrzStore } from './state/qrz-store';
@@ -124,33 +105,16 @@ export default function App() {
   const status = useConnectionStore((s) => s.status);
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   const mode = useConnectionStore((s) => s.mode);
-  const agcTop = useConnectionStore((s) => s.agcTopDb);
-  const filterLow = useConnectionStore((s) => s.filterLowHz);
-  const filterHigh = useConnectionStore((s) => s.filterHighHz);
   const preampOn = useConnectionStore((s) => s.preampOn);
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
-  const filterRibbonOpen = useConnectionStore((s) => s.filterAdvancedPaneOpen);
   const connected = status === 'Connected';
-  // Brand sub label in the topbar reflects what discovery actually saw on
-  // the wire (selection.connected), not the operator's preferred override —
-  // showing "ANAN G2" when an HL2 is plugged in would just confuse anyone
-  // reading the topbar to confirm what they're talking to. Falls back to
-  // a neutral "NOT CONNECTED" when nothing is on the wire yet.
-  const radioConnected = useRadioStore((s) => s.selection.connected);
   const radioLoad = useRadioStore((s) => s.load);
   // Reload on mount AND every time the wire connection flips to Connected.
-  // Clicking Connect on a discovered radio doesn't refresh radio-store on
-  // its own (only the manual-connect path does), so without this the
-  // brand-sub label keeps showing "NOT CONNECTED" until the next page load.
   useEffect(() => { radioLoad(); }, [radioLoad, connected]);
-  const brandSub = radioConnected !== 'Unknown'
-    ? BOARD_LABELS[radioConnected].toUpperCase()
-    : 'NOT CONNECTED';
 
   useKeyboardShortcuts();
   useMicUplink();
-  useFilterRibbonOpenSync();
 
   // Register service worker and handle updates
   useEffect(() => {
@@ -489,9 +453,6 @@ export default function App() {
 
   const bandLabel = bandOf(vfoHz);
 
-  // --- Tx status chip
-  const txChip = moxOn || tunOn ? 'TX' : 'RX';
-
   // Effective home for the map + bearing math. Null until QRZ supplies a real
   // station — the map just omits the home marker and great-circle until then.
   const effectiveHome = qrzHome && qrzHome.lat != null && qrzHome.lon != null
@@ -759,23 +720,6 @@ export default function App() {
     </div>
     </SpectrumWheelActionsContext.Provider>
     </WorkspaceContext.Provider>
-  );
-}
-
-// Isolated child component so the hzPerPixel store subscription is scoped to
-// this chip rather than the whole App tree — bin-width changes re-render only
-// the chip, not the panadapter / waterfall / VFO siblings.
-import { useDisplayStore } from './state/display-store';
-function HzPerPixelChip() {
-  const v = useDisplayStore((s) => s.hzPerPixel);
-  const text = !Number.isFinite(v) || v <= 0
-    ? '—'
-    : v >= 1 ? `${v.toFixed(1)} Hz` : `${(v * 1000).toFixed(0)} mHz`;
-  return (
-    <span className="chip mono">
-      <span className="k">HZ/PX</span>
-      <span className="v">{text}</span>
-    </span>
   );
 }
 

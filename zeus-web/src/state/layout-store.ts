@@ -51,7 +51,7 @@ interface LayoutState {
   setAddPanelOpen: (open: boolean) => void;
 }
 
-export const useLayoutStore = create<LayoutState>((set, get) => ({
+export const useLayoutStore = create<LayoutState>((set) => ({
   get workspace() {
     return useLayoutCollectionStore.getState().getActiveWorkspace();
   },

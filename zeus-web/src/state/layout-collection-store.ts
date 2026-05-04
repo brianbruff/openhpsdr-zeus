@@ -112,7 +112,7 @@ export const useLayoutCollectionStore = create<LayoutCollectionState>((set, get)
       // Validate activeLayoutId exists in the collection
       const activeId = layouts.some((l) => l.id === dto.activeLayoutId)
         ? dto.activeLayoutId
-        : layouts[0].id;
+        : (layouts[0]?.id ?? DEFAULT_LAYOUT_ID);
 
       set({ layouts, activeLayoutId: activeId, isLoaded: true });
     } catch {
@@ -130,7 +130,7 @@ export const useLayoutCollectionStore = create<LayoutCollectionState>((set, get)
   getActiveWorkspace: () => {
     const { layouts, activeLayoutId } = get();
     const active = layouts.find((l) => l.id === activeLayoutId);
-    return active ? active.workspace : DEFAULT_WORKSPACE_LAYOUT;
+    return active?.workspace ?? DEFAULT_WORKSPACE_LAYOUT;
   },
 
   updateActiveWorkspace: (workspace) => {
@@ -163,7 +163,7 @@ export const useLayoutCollectionStore = create<LayoutCollectionState>((set, get)
     }
     const filtered = layouts.filter((l) => l.id !== id);
     // If we deleted the active layout, switch to the first remaining one
-    const newActiveId = activeLayoutId === id ? filtered[0].id : activeLayoutId;
+    const newActiveId = activeLayoutId === id ? (filtered[0]?.id ?? DEFAULT_LAYOUT_ID) : activeLayoutId;
     set({ layouts: filtered, activeLayoutId: newActiveId });
     get().syncToServer();
   },

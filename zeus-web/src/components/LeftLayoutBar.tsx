@@ -4,14 +4,25 @@
 // Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
 //
 // LeftLayoutBar — vertical bar listing the current radio's named layouts.
-// Click to switch active, "+" creates a new one (seeded from the default
-// workspace), "✕" deletes the focused layout, "⟳" resets the active layout
-// to its default tile arrangement.
+// Each item shows a large emoji icon with a small label beneath. Clicking
+// switches to that layout; the gear opens LayoutSettingsModal to edit the
+// label, icon, and tooltip description. The "+" button opens the same modal
+// in create mode; "✕" deletes the active layout; "⟳" resets it to the
+// default tile arrangement.
 //
 // Issue #241: visual chrome reuses tokens.css; no new colors are introduced.
 
 import { useState } from 'react';
 import { useLayoutStore } from '../state/layout-store';
+import {
+  LayoutSettingsModal,
+  type LayoutSettingsValue,
+} from '../layout/LayoutSettingsModal';
+
+type ModalState =
+  | { kind: 'closed' }
+  | { kind: 'create' }
+  | { kind: 'edit'; id: string };
 
 export function LeftLayoutBar() {
   const layouts = useLayoutStore((s) => s.layouts);
@@ -19,19 +30,13 @@ export function LeftLayoutBar() {
   const setActiveLayout = useLayoutStore((s) => s.setActiveLayout);
   const addLayout = useLayoutStore((s) => s.addLayout);
   const removeLayout = useLayoutStore((s) => s.removeLayout);
-  const renameLayout = useLayoutStore((s) => s.renameLayout);
+  const updateLayoutMeta = useLayoutStore((s) => s.updateLayoutMeta);
   const resetActiveLayout = useLayoutStore((s) => s.resetActiveLayout);
   const isLoaded = useLayoutStore((s) => s.isLoaded);
 
-  const [renamingId, setRenamingId] = useState<string | null>(null);
-  const [renameText, setRenameText] = useState('');
+  const [modal, setModal] = useState<ModalState>({ kind: 'closed' });
 
-  const handleAdd = () => {
-    const proposed = `Layout ${layouts.length + 1}`;
-    const name = window.prompt('Name for the new layout', proposed)?.trim();
-    if (!name) return;
-    addLayout(name);
-  };
+  const handleAdd = () => setModal({ kind: 'create' });
 
   const handleDelete = (id: string, name: string) => {
     if (layouts.length <= 1) return;
@@ -46,18 +51,26 @@ export function LeftLayoutBar() {
     resetActiveLayout();
   };
 
-  const startRename = (id: string, currentName: string) => {
-    setRenamingId(id);
-    setRenameText(currentName);
+  const openEdit = (id: string) => setModal({ kind: 'edit', id });
+
+  const handleModalSave = (value: LayoutSettingsValue) => {
+    if (modal.kind === 'create') {
+      addLayout(value.name, {
+        icon: value.icon || undefined,
+        description: value.description || undefined,
+      });
+    } else if (modal.kind === 'edit') {
+      updateLayoutMeta(modal.id, {
+        name: value.name,
+        icon: value.icon,
+        description: value.description,
+      });
+    }
+    setModal({ kind: 'closed' });
   };
 
-  const commitRename = () => {
-    if (!renamingId) return;
-    const name = renameText.trim();
-    if (name) renameLayout(renamingId, name);
-    setRenamingId(null);
-    setRenameText('');
-  };
+  const editingLayout =
+    modal.kind === 'edit' ? layouts.find((l) => l.id === modal.id) : undefined;
 
   return (
     <aside className="left-layout-bar" aria-label="Layouts">
@@ -67,38 +80,37 @@ export function LeftLayoutBar() {
         ) : (
           layouts.map((l) => {
             const active = l.id === activeLayoutId;
-            const renaming = renamingId === l.id;
+            const tooltip = l.description?.trim()
+              ? `${l.name} — ${l.description}`
+              : `${l.name} (gear to edit)`;
             return (
               <div key={l.id} className={`lb-item ${active ? 'active' : ''}`}>
-                {renaming ? (
-                  <input
-                    autoFocus
-                    className="lb-rename"
-                    value={renameText}
-                    onChange={(e) => setRenameText(e.target.value)}
-                    onBlur={commitRename}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') commitRename();
-                      else if (e.key === 'Escape') {
-                        setRenamingId(null);
-                        setRenameText('');
-                      }
-                    }}
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    className="lb-tab"
-                    role="tab"
-                    aria-selected={active}
-                    onClick={() => setActiveLayout(l.id)}
-                    onDoubleClick={() => startRename(l.id, l.name)}
-                    title={`${l.name} (double-click to rename)`}
+                <button
+                  type="button"
+                  className="lb-tab"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setActiveLayout(l.id)}
+                  title={tooltip}
+                >
+                  <span
+                    className={`lb-tab-icon ${l.icon ? '' : 'lb-tab-icon-fallback'}`}
+                    aria-hidden
                   >
-                    <span className="lb-tab-name">{l.name}</span>
-                  </button>
-                )}
-                {active && layouts.length > 1 && !renaming && (
+                    {l.icon || initialLetter(l.name)}
+                  </span>
+                  <span className="lb-tab-name">{l.name}</span>
+                </button>
+                <button
+                  type="button"
+                  className="lb-gear"
+                  onClick={() => openEdit(l.id)}
+                  title={`Edit ${l.name}`}
+                  aria-label={`Edit ${l.name}`}
+                >
+                  ⚙
+                </button>
+                {active && layouts.length > 1 && (
                   <button
                     type="button"
                     className="lb-x"
@@ -136,6 +148,36 @@ export function LeftLayoutBar() {
           ⟳
         </button>
       </div>
+
+      {modal.kind === 'create' && (
+        <LayoutSettingsModal
+          title="New layout"
+          initial={{
+            name: `Layout ${layouts.length + 1}`,
+            icon: '',
+            description: '',
+          }}
+          onSave={handleModalSave}
+          onClose={() => setModal({ kind: 'closed' })}
+        />
+      )}
+      {modal.kind === 'edit' && editingLayout && (
+        <LayoutSettingsModal
+          title="Layout settings"
+          initial={{
+            name: editingLayout.name,
+            icon: editingLayout.icon ?? '',
+            description: editingLayout.description ?? '',
+          }}
+          onSave={handleModalSave}
+          onClose={() => setModal({ kind: 'closed' })}
+        />
+      )}
     </aside>
   );
+}
+
+function initialLetter(name: string): string {
+  const ch = name.trim().charAt(0);
+  return ch ? ch.toUpperCase() : '·';
 }

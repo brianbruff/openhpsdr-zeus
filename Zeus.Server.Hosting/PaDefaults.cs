@@ -100,6 +100,10 @@ internal static class PaDefaults
         HpsdrBoardKind.Angelia     => Anan100Gains,
         HpsdrBoardKind.Orion       => Anan200Gains,
         HpsdrBoardKind.OrionMkII   => OrionG2Gains,
+        // ANAN-G2E (Thetis HPSDRHW.HermesC10) shares the Saturn / G2 PA gain
+        // bracket per Thetis clsHardwareSpecific.cs:698-730 — bundled with
+        // ANAN-7000D / ANAN-G2 / ANAN-G2-1K / ANVELINA-PRO3 / Red Pitaya.
+        HpsdrBoardKind.HermesC10   => OrionG2Gains,
         _                          => new Dictionary<string, double>(),
     };
 
@@ -134,6 +138,7 @@ internal static class PaDefaults
         HpsdrBoardKind.Angelia     => 100,    // ANAN-100 / ANAN-100B / ANAN-8000D: 100 W
         HpsdrBoardKind.Orion       => 100,    // ANAN-100D / ANAN-200D: 100 W
         HpsdrBoardKind.OrionMkII   => 100,    // ANAN-7000D / G1 / G2 / G2-1K driven: 100 W
+        HpsdrBoardKind.HermesC10   => 100,    // ANAN-G2E: 100 W
         _                          => 0,      // Unknown board — keep legacy mode, no surprises
     };
 }

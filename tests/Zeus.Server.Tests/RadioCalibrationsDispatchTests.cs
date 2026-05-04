@@ -75,6 +75,21 @@ public class RadioCalibrationsDispatchTests
     }
 
     [Fact]
+    public void HermesC10_GetsG2Bridge()
+    {
+        // ANAN-G2E (Thetis HPSDRHW.HermesC10) shares the OrionMkII / G2
+        // forward-power calibration constants per Thetis console.cs:25079-25088
+        // (computeAlexFwdPower groups ANAN_G2E with ANAN_G2 / ANAN_G2_1K /
+        // ANAN7000D / ANVELINAPRO3 / REDPITAYA at bridge 0.12 / ref 5.0 /
+        // offset 32).
+        var cal = RadioCalibrations.For(HpsdrBoardKind.HermesC10);
+        Assert.Same(RadioCalibration.OrionMkII, cal);
+        Assert.Equal(0.12, cal.BridgeVolt);
+        Assert.Equal(5.0, cal.RefVoltage);
+        Assert.Equal(32, cal.AdcCalOffset);
+    }
+
+    [Fact]
     public void Unknown_FallsBackToHl2_NotZero()
     {
         // A divide-by-zero in ComputeMeters would surface as Infinity / NaN

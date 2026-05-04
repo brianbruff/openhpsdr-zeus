@@ -65,6 +65,12 @@ internal static class RadioCalibrations
         // ANAN-8000D bucket can be chosen automatically — see
         // RadioCalibration.OrionMkIIAnan8000.
         HpsdrBoardKind.OrionMkII   => RadioCalibration.OrionMkII,
+        // ANAN-G2E (HpsdrBoardKind.HermesC10) shares the OrionMkII / G2
+        // forward-power calibration constants per Thetis console.cs:25079-
+        // 25088 (computeAlexFwdPower lumps ANAN_G2E with ANAN_G2 /
+        // ANAN_G2_1K / ANAN7000D / ANVELINAPRO3 / REDPITAYA in the same
+        // bridge_volt = 0.12, refvoltage = 5.0, adc_cal_offset = 32 case).
+        HpsdrBoardKind.HermesC10   => RadioCalibration.OrionMkII,
         _                          => RadioCalibration.HermesLite2,
     };
 }

@@ -79,6 +79,30 @@ public class PaSettingsStoreDefaultsTests : IDisposable
     }
 
     [Fact]
+    public void HermesC10_Uses_G2_Class_Defaults()
+    {
+        // ANAN-G2E (Thetis HPSDRHW.HermesC10) shares the Saturn / G2 PA-gain
+        // bracket per clsHardwareSpecific.cs:698-730 — bundled with
+        // ANAN-7000D / ANAN-G2 / ANVELINAPRO3 / Red Pitaya. Same constants as
+        // OrionMkII_Uses_G2_Class_Defaults; this test pins the dispatch.
+        using var store = NewStore();
+        var s = store.GetAll(HpsdrBoardKind.HermesC10);
+        Assert.Equal(47.9, FindGain(s, "160m"));
+        Assert.Equal(50.9, FindGain(s, "20m"));
+        Assert.Equal(44.6, FindGain(s, "6m"));
+    }
+
+    [Fact]
+    public void GetDefaults_HermesC10_Uses_G2_Table_And_100W()
+    {
+        using var store = NewStore();
+        var d = store.GetDefaults(HpsdrBoardKind.HermesC10);
+        Assert.Equal(100, d.Global.PaMaxPowerWatts);
+        Assert.Equal(47.9, FindGain(d, "160m"));
+        Assert.Equal(50.9, FindGain(d, "20m"));
+    }
+
+    [Fact]
     public void Unknown_Board_Returns_Zero_Gain_For_Legacy_Path()
     {
         using var store = NewStore();

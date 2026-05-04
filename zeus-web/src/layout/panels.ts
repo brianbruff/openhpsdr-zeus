@@ -59,6 +59,7 @@ import { BandPanel } from './panels/BandPanel';
 import { ModePanel } from './panels/ModePanel';
 import { StepPanel } from './panels/StepPanel';
 import { MetersPanel } from './panels/MetersPanel';
+import { AnalogMeterPanel } from './panels/AnalogMeterPanel';
 
 export type PanelCategory = 'spectrum' | 'vfo' | 'meters' | 'dsp' | 'log' | 'tools' | 'controls';
 
@@ -87,8 +88,9 @@ export const PANEL_CATEGORY_LABELS: Record<PanelCategory, string> = {
 /** Most panels render with no props — the workspace tile renders them as
  *  `<def.component />`. Multi-instance panels with per-instance config
  *  (just `meters` today) take a typed prop pair instead; `PanelTile` knows
- *  to switch on `def.id === 'meters'` for that wiring. */
-export type PanelComponentProps = Record<string, never>;
+ *  to switch on `def.id === 'meters'` for that wiring. Headerless panels
+ *  receive `onRemove` so the close button they own can drop the tile. */
+export type PanelComponentProps = { onRemove?: () => void };
 
 export interface PanelDef {
   id: string;
@@ -228,6 +230,14 @@ export const PANELS: Record<string, PanelDef> = {
     tags: ['meters', 'rx', 'tx', 'signal', 'power', 'agc', 'alc', 'configurable'],
     component: MetersPanel,
     multiInstance: true,
+    headerless: true,
+  },
+  analogmeter: {
+    id: 'analogmeter',
+    name: 'Analog S-Meter',
+    category: 'meters',
+    tags: ['analog', 'meter', 'smeter', 's-meter', 'signal', 'rx', 'tx', 'power', 'swr', 'needle'],
+    component: AnalogMeterPanel,
     headerless: true,
   },
 };

@@ -236,6 +236,12 @@ function PanelBody({
   const def = PANELS[tile.panelId];
   if (!def) return null;
   const Component = def.component;
+  // Headerless single-instance panels that own their own header receive
+  // onRemove so their close button can drop the tile (matches the meters
+  // special-case above without pulling in MetersPanel's per-tile config).
+  if (def.headerless && onRemove) {
+    return <Component onRemove={onRemove} />;
+  }
   return <Component />;
 }
 

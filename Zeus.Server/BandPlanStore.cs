@@ -7,6 +7,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using LiteDB;
+using JsonSerializer = System.Text.Json.JsonSerializer;
 using Zeus.Contracts;
 
 namespace Zeus.Server;

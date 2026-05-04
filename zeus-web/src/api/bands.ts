@@ -98,6 +98,7 @@ export function binarySearchSegment(segments: BandSegment[], freqHz: number): Ba
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
     const s = segments[mid];
+    if (!s) break;
     if (freqHz < s.lowHz) hi = mid - 1;
     else if (freqHz > s.highHz) lo = mid + 1;
     else return s;

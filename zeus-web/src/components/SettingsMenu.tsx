@@ -21,6 +21,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { PaSettingsPanel } from './PaSettingsPanel';
+import { BandPlanEditor } from './bandplan/BandPlanEditor';
 import { AboutPanel } from './AboutPanel';
 import { DisplayPanel } from './DisplayPanel';
 import { QrzSettingsPanel } from './QrzSettingsPanel';
@@ -37,6 +38,7 @@ type TabId =
   | 'pa'
   | 'ps'
   | 'tx-audio'
+  | 'bandplan'
   | 'qrz'
   | 'rotator'
   | 'tci'
@@ -48,6 +50,7 @@ const ALL_TABS: ReadonlyArray<{ id: TabId; label: string }> = [
   { id: 'pa', label: 'PA SETTINGS' },
   { id: 'ps', label: 'PURESIGNAL' },
   { id: 'tx-audio', label: 'TX AUDIO TOOLS' },
+  { id: 'bandplan', label: 'BAND PLAN' },
   { id: 'qrz', label: 'QRZ' },
   { id: 'rotator', label: 'ROTATOR' },
   { id: 'tci', label: 'TCI' },
@@ -331,11 +334,14 @@ export function SettingsMenu({ open, onClose, initialTab }: Props) {
             background: 'var(--bg-1)',
             color: 'var(--fg-1)',
             fontSize: 12,
+            display: 'flex',
+            flexDirection: 'column',
           }}
         >
           {active === 'pa' && <PaSettingsPanel />}
           {active === 'ps' && <PsSettingsPanel />}
           {active === 'tx-audio' && <TxAudioToolsPanel />}
+          {active === 'bandplan' && <BandPlanEditor />}
           {active === 'qrz' && <QrzSettingsPanel />}
           {active === 'rotator' && <RotatorSettingsPanel />}
           {active === 'tci' && <TciSettingsPanel />}

@@ -86,6 +86,7 @@ import { useDisplaySettingsStore } from './state/display-settings-store';
 import { useCapabilitiesStore } from './state/capabilities-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
 import { SpectrumWheelActionsContext, type SpectrumWheelActions } from './util/use-pan-tune-gesture';
+import { BandPlanProvider } from './context/BandPlanContext';
 import { registerServiceWorker } from './service-worker/registerSW';
 import { UpdatePrompt } from './service-worker/UpdatePrompt';
 import { MobileApp, useIsMobileViewport } from './mobile/MobileApp';
@@ -636,6 +637,7 @@ export default function App() {
   }
 
   return (
+    <BandPlanProvider>
     <WorkspaceContext.Provider value={workspaceCtx}>
     <SpectrumWheelActionsContext.Provider value={spectrumWheelActions}>
     <div className="app" data-screen-label="01 Main Console" style={{ position: 'relative' }}>
@@ -763,6 +765,7 @@ export default function App() {
     </div>
     </SpectrumWheelActionsContext.Provider>
     </WorkspaceContext.Provider>
+    </BandPlanProvider>
   );
 }
 

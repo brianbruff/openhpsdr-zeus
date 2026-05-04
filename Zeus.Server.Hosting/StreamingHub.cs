@@ -336,7 +336,6 @@ public sealed class StreamingHub
         }
     }
 
-    /// <summary>
     /// Broadcast a small VST plugin-host event tag (utf-8 text). Used by
     /// <see cref="VstHostHostedService"/> to nudge connected clients to
     /// re-fetch <c>/api/plughost/state</c> or refresh a single slot. See
@@ -351,6 +350,20 @@ public sealed class StreamingHub
         var writer = new FixedBufferWriter(buf, total);
         frame.Serialize(writer);
         foreach (var client in _clients.Values) client.TryEnqueue(buf);
+    }
+
+    /// <summary>
+    /// Broadcasts a BandPlanChanged (0x1B) notification. Payload: type byte +
+    /// UTF-8 region ID. Clients refetch /api/bands/current on receipt.
+    /// </summary>
+    public void BroadcastBandPlanChanged(string regionId)
+    {
+        if (_clients.IsEmpty) return;
+        var regionBytes = System.Text.Encoding.UTF8.GetBytes(regionId);
+        var payload = new byte[1 + regionBytes.Length];
+        payload[0] = (byte)MsgType.BandPlanChanged;
+        regionBytes.CopyTo(payload, 1);
+        foreach (var client in _clients.Values) client.TryEnqueue(payload);
     }
 
     private sealed class ClientSession

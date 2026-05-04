@@ -51,6 +51,7 @@ public sealed class TxService
     private readonly RadioService _radio;
     private readonly DspPipelineService _pipeline;
     private readonly StreamingHub _hub;
+    private readonly IBandPlanService _bandPlan;
     private readonly ILogger<TxService> _log;
     private readonly object _sync = new();
     private bool _moxOn;
@@ -58,11 +59,12 @@ public sealed class TxService
     private DateTime? _moxStartedAt;
     private DateTime? _tunStartedAt;
 
-    public TxService(RadioService radio, DspPipelineService pipeline, StreamingHub hub, ILogger<TxService> log)
+    public TxService(RadioService radio, DspPipelineService pipeline, StreamingHub hub, IBandPlanService bandPlan, ILogger<TxService> log)
     {
         _radio = radio;
         _pipeline = pipeline;
         _hub = hub;
+        _bandPlan = bandPlan;
         _log = log;
     }
 
@@ -85,10 +87,30 @@ public sealed class TxService
     internal void SetMoxStartedAtForTest(DateTime? t) { lock (_sync) _moxStartedAt = t; }
     internal void SetTunStartedAtForTest(DateTime? t) { lock (_sync) _tunStartedAt = t; }
 
+    // Refuse to key TX when the current VFO / mode is out of band, unless the
+    // operator has set the TxGuardIgnore override. Shared by MOX, TUN, and
+    // TwoTone — all three are RF-emitting paths and must honour the same
+    // regulatory check.
+    private bool CheckBandGuard(out string? error)
+    {
+        if (_bandPlan.TxGuardIgnore) { error = null; return true; }
+        var state = _radio.Snapshot();
+        if (_bandPlan.InBand(state.VfoHz, state.Mode)) { error = null; return true; }
+        var seg = _bandPlan.GetSegment(state.VfoHz);
+        var segLabel = seg is not null
+            ? $"{seg.Label} ({seg.ModeRestriction})"
+            : "no amateur allocation";
+        error = $"TX blocked: {state.VfoHz / 1_000_000.0:F4} MHz is out of band for mode {state.Mode} in region {_bandPlan.CurrentRegion.DisplayName} ({segLabel})";
+        _log.LogWarning("tx.guard.blocked vfo={Vfo}Hz mode={Mode} region={Region}", state.VfoHz, state.Mode, _bandPlan.CurrentRegion.Id);
+        return false;
+    }
+
     public bool TrySetMox(bool on, out string? error)
     {
-        // FR-1 interlock: no TX unless connected. Band-legality check deferred to a follow-up.
+        // FR-1 interlock: no TX unless connected.
         if (on && !_radio.IsConnected) { error = "not connected"; return false; }
+
+        if (on && !CheckBandGuard(out error)) return false;
 
         bool wasTunOn;
         lock (_sync)
@@ -147,6 +169,8 @@ public sealed class TxService
         // Connect interlock — same as TrySetMox / TrySetTun. No TX of any kind
         // before the radio is up.
         if (req.Enabled && !_radio.IsConnected) { error = "not connected"; return false; }
+
+        if (req.Enabled && !CheckBandGuard(out error)) return false;
 
         bool wasMoxOn, wasTunOn;
         lock (_sync)
@@ -211,6 +235,8 @@ public sealed class TxService
         // (Protocol2Client owned by DspPipelineService); ActiveClient alone
         // would reject TUN on any G2 MkII.
         if (on && !_radio.IsConnected) { error = "not connected"; return false; }
+
+        if (on && !CheckBandGuard(out error)) return false;
 
         bool wasMoxOn;
         lock (_sync)

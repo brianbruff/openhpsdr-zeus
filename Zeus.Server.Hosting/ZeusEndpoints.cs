@@ -601,6 +601,62 @@ public static class ZeusEndpoints
             return Results.Ok(new BandMemoryDto(band, req.Hz, req.Mode));
         });
 
+        // Regional band plan (issue #65). Shipped JSON under BandPlans/ defines
+        // baseline regions (IARU R1/R2/R3) and country overrides (EI, G, US FCC
+        // General/Extra). Operator can edit per-region segments (PUT) and reset
+        // back to shipped defaults (DELETE). Active region is persisted in
+        // BandPrefsStore; switches fire BandPlanChanged (0x1B) so other tabs
+        // refetch.
+        app.MapGet("/api/bands/regions", (BandPlanStore store) =>
+            Results.Ok(store.Regions));
+
+        app.MapGet("/api/bands/plan", (string? region, BandPlanService svc) =>
+        {
+            var regionId = region ?? svc.CurrentRegion.Id;
+            var plan = svc.ResolvePlan(regionId);
+            return Results.Ok(new BandPlanDto(regionId, plan));
+        });
+
+        app.MapGet("/api/bands/current", (BandPlanService svc) =>
+            Results.Ok(new
+            {
+                regionId = svc.CurrentRegion.Id,
+                region = svc.CurrentRegion,
+                segments = svc.CurrentPlan,
+                txGuardIgnore = svc.TxGuardIgnore,
+            }));
+
+        app.MapPost("/api/bands/current", (BandPlanCurrentSetRequest req, BandPlanService svc) =>
+        {
+            svc.SetRegion(req.RegionId);
+            return Results.Ok(new { regionId = svc.CurrentRegion.Id });
+        });
+
+        app.MapPut("/api/bands/plan", (BandPlanSaveRequest req, BandPlanService svc) =>
+        {
+            try
+            {
+                svc.SavePlan(req.RegionId, req.Segments);
+                return Results.Ok(new { regionId = req.RegionId, saved = req.Segments.Count });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
+
+        app.MapDelete("/api/bands/plan/{regionId}", (string regionId, BandPlanService svc) =>
+        {
+            svc.ResetPlan(regionId);
+            return Results.Ok(new { regionId, reset = true });
+        });
+
+        app.MapPost("/api/bands/guard", (BandGuardSetRequest req, BandPlanService svc) =>
+        {
+            svc.SetTxGuardIgnore(req.Ignore);
+            return Results.Ok(new { txGuardIgnore = req.Ignore });
+        });
+
         // PA settings — per-band gain/OC masks + globals. Single PUT replaces the
         // whole snapshot because the UI edits rows as a table; incremental PATCHing
         // would deadlock with the RadioService recompute subscription fired on Save.

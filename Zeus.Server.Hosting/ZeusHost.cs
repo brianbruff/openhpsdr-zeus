@@ -187,6 +187,15 @@ public static class ZeusHost
         builder.Services.AddSingleton<QrzService>();
         builder.Services.AddSingleton<LogService>();
 
+        // Regional band planning (issue #65 PRD). BandPlanStore loads shipped
+        // JSON under BandPlans/ at startup and resolves parent→override chains;
+        // BandPlanService owns active region + GetSegment/InBand hot path;
+        // BandPrefsStore persists current region + TX-guard override.
+        builder.Services.AddSingleton<BandPlanStore>();
+        builder.Services.AddSingleton<BandPrefsStore>();
+        builder.Services.AddSingleton<BandPlanService>();
+        builder.Services.AddSingleton<IBandPlanService>(sp => sp.GetRequiredService<BandPlanService>());
+
         // rotctld (hamlib rotator daemon) client. BackgroundService with persistent
         // TCP and reconnect-on-failure. Singleton so config/state survive across
         // requests; hosted-service registration runs ExecuteAsync.
@@ -302,6 +311,13 @@ public static class ZeusHost
             hub.SetWisdomStatus(wisdom.Status);
             wisdom.PhaseChanged += phase => hub.Broadcast(new WisdomStatusFrame(phase, wisdom.Status));
             wisdom.StatusChanged += status => hub.Broadcast(new WisdomStatusFrame(wisdom.Phase, status));
+        }
+
+        // Band plan service → hub: every region change or plan edit fires 0x1B.
+        {
+            var bandPlan = app.Services.GetRequiredService<BandPlanService>();
+            var hub = app.Services.GetRequiredService<StreamingHub>();
+            bandPlan.PlanChanged += () => hub.BroadcastBandPlanChanged(bandPlan.CurrentRegion.Id);
         }
 
         app.MapZeusEndpoints();

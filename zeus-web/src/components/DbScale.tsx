@@ -79,6 +79,7 @@ export function DbScale() {
     startDbMax: number;
     pointerId: number;
     containerHeight: number;
+    lastShiftApplied: number;
   } | null>(null);
 
   const onPointerDown = useCallback(
@@ -90,6 +91,7 @@ export function DbScale() {
         startDbMax: dbMax,
         pointerId: e.pointerId,
         containerHeight: rect.height,
+        lastShiftApplied: 0,
       };
       e.currentTarget.setPointerCapture(e.pointerId);
     },
@@ -106,11 +108,16 @@ export function DbScale() {
       // then sits lower in the visible range). Adding deltaDb achieves this.
       const dbPerPixel = (d.startDbMax - d.startDbMin) / d.containerHeight;
       const deltaDb = dySig * dbPerPixel;
-      const nextMin = d.startDbMin + deltaDb;
-      const targetShift = nextMin - dbMin;
-      if (Math.abs(targetShift) > 0.5) shift(targetShift);
+      // Calculate the incremental shift since the last call, not the total
+      // shift since drag start. This avoids accumulating error when the
+      // component re-renders during the drag.
+      const incrementalShift = deltaDb - d.lastShiftApplied;
+      if (Math.abs(incrementalShift) > 0.5) {
+        shift(incrementalShift);
+        d.lastShiftApplied = deltaDb;
+      }
     },
-    [dbMin, shift],
+    [shift],
   );
 
   const onPointerUp = useCallback(

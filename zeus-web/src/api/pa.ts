@@ -25,6 +25,11 @@ export type PaBandSettings = {
   disablePa: boolean;
   ocTx: number;
   ocRx: number;
+  // Read-only firmware auto-mask (N2ADR LPF on HL2, 0 elsewhere). Server
+  // recomputes from the connected board on every GET; the PUT path ignores
+  // it. Used by PaSettingsPanel to surface which pins the firmware is
+  // already driving for each band.
+  autoOcMask: number;
 };
 
 export type PaGlobalSettings = {
@@ -43,6 +48,7 @@ type PaBandDtoRaw = {
   disablePa?: unknown;
   ocTx?: unknown;
   ocRx?: unknown;
+  autoOcMask?: unknown;
 };
 
 type PaGlobalDtoRaw = {
@@ -77,6 +83,7 @@ function normalizeBand(raw: PaBandDtoRaw): PaBandSettings {
     disablePa: toBool(raw.disablePa, false),
     ocTx: Math.max(0, Math.min(0x7f, Math.round(toNumber(raw.ocTx, 0)))),
     ocRx: Math.max(0, Math.min(0x7f, Math.round(toNumber(raw.ocRx, 0)))),
+    autoOcMask: Math.max(0, Math.min(0x7f, Math.round(toNumber(raw.autoOcMask, 0)))),
   };
 }
 

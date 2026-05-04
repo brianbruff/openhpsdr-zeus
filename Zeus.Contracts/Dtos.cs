@@ -373,12 +373,17 @@ public sealed record SetActiveLayoutRequest(string RadioKey, string LayoutId);
 // N2ADR filter board on HL2 and ALEX/OC outputs on Orion-class radios; they
 // are OR'd with the board's auto-filter logic so stock HL2 filter switching
 // keeps working when the user hasn't set anything.
+//
+// AutoOcMask is informational only — the read-only N2ADR board mask the
+// firmware will OR onto OcRx/OcTx when HasN2adr is on (HL2). PUT requests
+// ignore it; the server recomputes from the connected board on the next GET.
 public sealed record PaBandSettingsDto(
     string Band,
     double PaGainDb = 0.0,
     bool DisablePa = false,
     byte OcTx = 0,
-    byte OcRx = 0);
+    byte OcRx = 0,
+    byte AutoOcMask = 0);
 
 // Globals shared across bands. PaMaxPowerWatts=0 disables the watts
 // conversion path and falls back to the legacy "drive% = raw 0-255 byte"

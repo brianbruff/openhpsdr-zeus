@@ -21,6 +21,7 @@
 
 using LiteDB;
 using Zeus.Contracts;
+using Zeus.Protocol1;
 using Zeus.Protocol1.Discovery;
 
 namespace Zeus.Server;
@@ -83,11 +84,12 @@ public sealed class PaSettingsStore : IDisposable
             var bands = BandUtils.HfBands
                 .Select(b =>
                 {
+                    var auto = AutoOcMaskFor(board, b);
                     if (existing.TryGetValue(b, out var e))
                     {
-                        return new PaBandSettingsDto(e.Band, e.PaGainDb, e.DisablePa, e.OcTx, e.OcRx);
+                        return new PaBandSettingsDto(e.Band, e.PaGainDb, e.DisablePa, e.OcTx, e.OcRx, auto);
                     }
-                    return new PaBandSettingsDto(b, PaGainDb: PaDefaults.GetPaGainDb(board, b, variant));
+                    return new PaBandSettingsDto(b, PaGainDb: PaDefaults.GetPaGainDb(board, b, variant), AutoOcMask: auto);
                 })
                 .ToArray();
 
@@ -108,7 +110,10 @@ public sealed class PaSettingsStore : IDisposable
             PaEnabled: true,
             PaMaxPowerWatts: PaDefaults.GetMaxPowerWatts(board, variant));
         var bands = BandUtils.HfBands
-            .Select(b => new PaBandSettingsDto(b, PaGainDb: PaDefaults.GetPaGainDb(board, b, variant)))
+            .Select(b => new PaBandSettingsDto(
+                b,
+                PaGainDb: PaDefaults.GetPaGainDb(board, b, variant),
+                AutoOcMask: AutoOcMaskFor(board, b)))
             .ToArray();
         return new PaSettingsDto(global, bands);
     }
@@ -120,12 +125,25 @@ public sealed class PaSettingsStore : IDisposable
     {
         lock (_sync)
         {
+            var auto = AutoOcMaskFor(board, band);
             var e = _bands.FindOne(x => x.Band == band);
             return e is null
-                ? new PaBandSettingsDto(band, PaGainDb: PaDefaults.GetPaGainDb(board, band, variant))
-                : new PaBandSettingsDto(e.Band, e.PaGainDb, e.DisablePa, e.OcTx, e.OcRx);
+                ? new PaBandSettingsDto(band, PaGainDb: PaDefaults.GetPaGainDb(board, band, variant), AutoOcMask: auto)
+                : new PaBandSettingsDto(e.Band, e.PaGainDb, e.DisablePa, e.OcTx, e.OcRx, auto);
         }
     }
+
+    // Read-only mirror of the on-wire auto-filter mask for the connected
+    // board. Today only HL2 ships a board with an auto-mask path (N2ADR,
+    // forced-on in RadioService.ConnectAsync). The PA Settings panel uses
+    // this to show operators which OC pins are already being driven by the
+    // firmware before they layer their own OcTx/OcRx wiring on top — closes
+    // the perception gap from issue #217 where empty checkboxes implied no
+    // pins were active.
+    private static byte AutoOcMaskFor(HpsdrBoardKind board, string band) =>
+        board == HpsdrBoardKind.HermesLite2
+            ? N2adrBands.RxOcMaskForBand(band)
+            : (byte)0;
 
     public PaGlobalSettingsDto GetGlobal(
         HpsdrBoardKind board = HpsdrBoardKind.Unknown,

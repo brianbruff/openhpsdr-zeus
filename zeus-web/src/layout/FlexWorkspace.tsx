@@ -1,191 +1,271 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
-// Copyright (C) 2025-2026 Brian Keating (EI6LF),
-//                         Douglas J. Cerrato (KB2UKA), and contributors.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
 //
-// This program is free software: you can redistribute it and/or modify it
-// under the terms of the GNU General Public License as published by the
-// Free Software Foundation, either version 2 of the License, or (at your
-// option) any later version. See the LICENSE file at the root of this
-// repository for the full text, or https://www.gnu.org/licenses/.
+// FlexWorkspace — react-grid-layout (RGL) substrate for the desktop
+// workspace. Replaces the flexlayout-react implementation that lived here
+// before. The export name `FlexWorkspace` is preserved so App.tsx import
+// paths don't churn; a follow-up rename can land separately.
 //
-// Zeus is an independent reimplementation in .NET — not a fork. Its
-// Protocol-1 / Protocol-2 framing, WDSP integration, meter pipelines, and
-// TX behaviour were informed by studying the Thetis project
-// (https://github.com/ramdor/Thetis), the authoritative reference
-// implementation in the OpenHPSDR ecosystem. Zeus gratefully acknowledges
-// the Thetis contributors whose work made this possible:
-//
-//   Richard Samphire (MW0LGE), Warren Pratt (NR0V),
-//   Laurence Barker (G8NJJ),   Rick Koch (N1GP),
-//   Bryan Rambo (W4WMT),       Chris Codella (W2PA),
-//   Doug Wigley (W5WC),        FlexRadio Systems,
-//   Richard Allen (W5SD),      Joe Torrey (WD5Y),
-//   Andrew Mansfield (M0YGG),  Reid Campbell (MI0BOT),
-//   Sigi Jetzlsperger (DH1KLM).
-//
-// Thetis itself continues the GPL-governed lineage of FlexRadio PowerSDR
-// and the OpenHPSDR (TAPR/OpenHPSDR) ecosystem; that lineage is preserved
-// here. See ATTRIBUTIONS.md at the repository root for the full provenance
-// statement and per-component attribution.
-//
-// Protocol-2 / PureSignal / Saturn-class behaviour was additionally informed
-// by pihpsdr (https://github.com/dl1ycf/pihpsdr), maintained by Christoph
-// Wüllen (DL1YCF); and by DeskHPSDR
-// (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
-// Both are GPL-2.0-or-later.
-//
-// WDSP — loaded by Zeus via P/Invoke — is Copyright (C) Warren Pratt
-// (NR0V), distributed under GPL v2 or later.
-//
-// Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
-// License for details.
+// Layout semantics:
+//   - 12-column grid, WORKSPACE_ROW_HEIGHT_PX rows (see workspace.ts).
+//   - Tiles persist via the layout-store (debounced PUT to /api/ui/layout).
+//   - Drag handle is the small grip in each tile's chrome header — clicks
+//     inside the panel body do not initiate a drag (RGL's dragConfig.handle
+//     is scoped to .workspace-tile-drag-handle).
+//   - "+ Add Panel" is a single workspace-level button at the top-right,
+//     opening the categorized AddPanelModal.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import {
-  Actions,
-  BorderNode,
-  DockLocation,
-  Layout,
-  Model,
-  TabSetNode,
-  type IJsonModel,
-  type ITabSetRenderValues,
-  type TabNode,
-} from 'flexlayout-react';
-import { Plus } from 'lucide-react';
-import 'flexlayout-react/style/dark.css';
-import '../styles/flex-layout.css';
+  ResponsiveGridLayout,
+  useContainerWidth,
+  type Layout,
+} from 'react-grid-layout';
 import { useWorkspace } from './WorkspaceContext';
 import { useLayoutStore } from '../state/layout-store';
 import { PANELS } from './panels';
-import { DEFAULT_LAYOUT } from './defaultLayout';
-import { TerminatorLines } from '../components/design/TerminatorLines';
+import {
+  WORKSPACE_GRID_COLS,
+  WORKSPACE_ROW_HEIGHT_PX,
+  WORKSPACE_TILE_MIN_H,
+  WORKSPACE_TILE_MIN_W,
+  type WorkspaceTile,
+} from './workspace';
 import { AddPanelModal } from './AddPanelModal';
+import { TileChrome } from './TileChrome';
+import { TerminatorLines } from '../components/design/TerminatorLines';
+import { MetersPanel } from './panels/MetersPanel';
+import {
+  parseMetersPanelConfig,
+  type MetersPanelConfig,
+} from '../components/meters/metersConfig';
 
-function factory(node: TabNode) {
-  const id = node.getComponent();
-  const panel = id ? PANELS[id] : undefined;
-  if (!panel) return null;
-  const Component = panel.component;
-  return <Component />;
-}
-
-// FlexWorkspace: renders the movable/dockable panel layout when ?layout=flex
-// is active and the viewport is desktop (>900px). The mobile layout is
-// unchanged and does not use this component — see App.tsx feature flag.
 export function FlexWorkspace() {
   const { terminatorActive } = useWorkspace();
-  const { layout, isLoaded, setLayout, loadFromServer, syncToServerBeforeUnload } = useLayoutStore();
-  const [model, setModel] = useState<Model | null>(null);
-  const [targetTabSetId, setTargetTabSetId] = useState<string | null>(null);
-  const loadedRef = useRef(false);
+  // Loading is driven by App.tsx via loadForRadio(boardKey) — no local
+  // first-load effect here. The active layout's parsed WorkspaceLayout
+  // arrives via `workspace` once that resolves.
+  const workspace = useLayoutStore((s) => s.workspace);
+  const isLoaded = useLayoutStore((s) => s.isLoaded);
+  const syncToServerBeforeUnload = useLayoutStore((s) => s.syncToServerBeforeUnload);
+  const addTile = useLayoutStore((s) => s.addTile);
+  const removeTile = useLayoutStore((s) => s.removeTile);
+  const updateTilePlacement = useLayoutStore((s) => s.updateTilePlacement);
+  // Modal visibility lifted into the store so the trigger button can live
+  // in the LeftLayoutBar — the workspace just renders the modal when the
+  // store says open.
+  const addPanelOpen = useLayoutStore((s) => s.addPanelOpen);
+  const setAddPanelOpen = useLayoutStore((s) => s.setAddPanelOpen);
 
-  useEffect(() => {
-    if (!loadedRef.current) {
-      loadedRef.current = true;
-      void loadFromServer();
-    }
-  }, [loadFromServer]);
-
-  // (Re-)build the Model once the server response arrives.
-  useEffect(() => {
-    if (!isLoaded) return;
-    const json = (layout ?? DEFAULT_LAYOUT) as unknown as IJsonModel;
-    setModel(Model.fromJson(json));
-  }, [isLoaded, layout]);
-
-  // Sync layout to server on page unload (sendBeacon → XHR fallback).
+  // Best-effort persist on page-unload (sendBeacon → fetch keepalive fallback).
   useEffect(() => {
     const handler = () => syncToServerBeforeUnload();
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
   }, [syncToServerBeforeUnload]);
 
-  // Get list of existing panel IDs in the layout
-  const getExistingPanels = (): Set<string> => {
-    if (!model) return new Set();
-    const panelIds = new Set<string>();
-
-    model.visitNodes((node) => {
-      if (node.getType() === 'tab') {
-        const tabNode = node as TabNode;
-        const component = tabNode.getComponent();
-        if (component) panelIds.add(component);
-      }
-    });
-
-    return panelIds;
-  };
-
-  const addPanel = (panelId: string) => {
-    if (!model || !targetTabSetId) return;
-
-    const panel = PANELS[panelId];
-    if (!panel) return;
-
-    model.doAction(
-      Actions.addNode(
-        {
-          type: 'tab',
-          name: panel.name,
-          component: panelId,
-        },
-        targetTabSetId,
-        DockLocation.CENTER,
-        -1,
-        true,
-      ),
-    );
-  };
-
-  // Per-tabset "+" button — pushed into each tabset's sticky-button slot so it
-  // sits next to the maximise control. Mirrors Log4YM's pattern; uses the
-  // lucide-react Plus icon so the visual matches.
-  const onRenderTabSet = useCallback(
-    (node: TabSetNode | BorderNode, renderValues: ITabSetRenderValues) => {
-      if (!(node instanceof TabSetNode)) return;
-      const id = node.getId();
-      renderValues.stickyButtons.push(
-        <button
-          key="add-panel"
-          type="button"
-          title="Add panel to this tabset"
-          aria-label="Add panel"
-          className="flexlayout__tab_toolbar_button"
-          onClick={() => setTargetTabSetId(id)}
-        >
-          <Plus size={14} />
-        </button>,
-      );
-    },
-    [],
+  const existingPanels = useMemo(
+    () => new Set(workspace.tiles.map((t) => t.panelId)),
+    [workspace.tiles],
   );
 
-  if (!model) {
-    // Brief loading state while server layout fetch resolves.
-    return <div className="flex-workspace" />;
-  }
+  const onLayoutChange = useCallback(
+    (next: Layout) => {
+      // RGL fires onLayoutChange on every render with the current layout
+      // (including the very first paint). Diff each item against the store
+      // and only PUT through when something actually moved.
+      for (const item of next) {
+        updateTilePlacement(item.i, {
+          x: item.x,
+          y: item.y,
+          w: item.w,
+          h: item.h,
+        });
+      }
+    },
+    [updateTilePlacement],
+  );
 
+  const onAddPanel = useCallback(
+    (panelId: string) => {
+      addTile(panelId);
+    },
+    [addTile],
+  );
+
+  // Brief loading state while the server fetch resolves. We render the
+  // empty container so it has measurable width when the tiles arrive.
   return (
     <div className={`flex-workspace ${terminatorActive ? 'terminator' : ''}`}>
-      <Layout
-        model={model}
-        factory={factory}
-        onRenderTabSet={onRenderTabSet}
-        onModelChange={(updatedModel) => {
-          setLayout(updatedModel.toJson() as unknown as Record<string, unknown>);
-        }}
+      <WorkspaceCanvas
+        tiles={workspace.tiles}
+        isLoaded={isLoaded}
+        onLayoutChange={onLayoutChange}
+        onRemoveTile={removeTile}
       />
       <TerminatorLines active={terminatorActive} />
-      {targetTabSetId && (
+      {addPanelOpen && (
         <AddPanelModal
-          existingPanels={getExistingPanels()}
-          onAdd={addPanel}
-          onClose={() => setTargetTabSetId(null)}
+          existingPanels={existingPanels}
+          onAdd={onAddPanel}
+          onClose={() => setAddPanelOpen(false)}
         />
       )}
     </div>
+  );
+}
+
+interface WorkspaceCanvasProps {
+  tiles: WorkspaceTile[];
+  isLoaded: boolean;
+  onLayoutChange: (next: Layout) => void;
+  onRemoveTile: (uid: string) => void;
+}
+
+function WorkspaceCanvas({
+  tiles,
+  isLoaded,
+  onLayoutChange,
+  onRemoveTile,
+}: WorkspaceCanvasProps) {
+  // useContainerWidth from RGL's modern API: ResizeObserver-backed parent
+  // measurement. mounted=false on first paint to avoid the 1280-px width
+  // flash before the observer fires. Same pattern MetersCanvas uses.
+  const { width, containerRef, mounted } = useContainerWidth();
+
+  // RGL needs a stable per-render layouts.lg array. Memoise against the
+  // tile list identity so we don't push a new prop on every parent render.
+  const rglLayouts = useMemo(
+    () => ({
+      lg: tiles.map((t) => ({
+        i: t.uid,
+        x: t.x,
+        y: t.y,
+        w: t.w,
+        h: t.h,
+        minW: WORKSPACE_TILE_MIN_W,
+        minH: WORKSPACE_TILE_MIN_H,
+      })),
+    }),
+    [tiles],
+  );
+
+  return (
+    <div ref={containerRef} className="all-panels-workspace">
+      {!isLoaded || !mounted ? (
+        // Reserve space silently while server load + ResizeObserver settle.
+        <div style={{ minHeight: 80 }} aria-hidden />
+      ) : (
+        <ResponsiveGridLayout
+          className="all-panels-grid"
+          width={width}
+          breakpoints={{ lg: 0 }}
+          cols={{ lg: WORKSPACE_GRID_COLS }}
+          rowHeight={WORKSPACE_ROW_HEIGHT_PX}
+          margin={[6, 6]}
+          containerPadding={[6, 6]}
+          // Drag from anywhere in the tile header (the grip + title strip),
+          // EXCEPT the close button. A tiny grip-only handle is too small to
+          // grab — and panels that have their own pointer logic in the body
+          // (panadapter canvas's pan/tune gesture, sliders) also need a
+          // generous header target so the operator can reposition the tile
+          // without getting their input stolen by the body. dragConfig.cancel
+          // excludes the X so close clicks still register.
+          dragConfig={{
+            handle: '.workspace-tile-header',
+            cancel: '.workspace-tile-close',
+            bounded: false,
+          }}
+          onLayoutChange={onLayoutChange}
+          layouts={rglLayouts}
+        >
+          {tiles.map((tile) => (
+            <div key={tile.uid} data-tile-uid={tile.uid}>
+              <PanelTile tile={tile} onRemove={() => onRemoveTile(tile.uid)} />
+            </div>
+          ))}
+        </ResponsiveGridLayout>
+      )}
+    </div>
+  );
+}
+
+interface PanelTileProps {
+  tile: WorkspaceTile;
+  onRemove: () => void;
+}
+
+function PanelTile({ tile, onRemove }: PanelTileProps) {
+  const def = PANELS[tile.panelId];
+  if (!def) return null;
+  // Headerless panels own their entire tile surface and draw their own
+  // header (if any). They MUST include an element with class
+  // `.workspace-tile-header` so RGL drag picks up, and a
+  // `.workspace-tile-close` button bound to the injected onRemove.
+  if (def.headerless) {
+    return (
+      <div className="workspace-tile workspace-tile--headerless">
+        <PanelBody tile={tile} onRemove={onRemove} />
+      </div>
+    );
+  }
+  return (
+    <div className="workspace-tile">
+      <TileChrome title={def.name} onRemove={onRemove} />
+      <div className="workspace-tile-body">
+        <PanelBody tile={tile} />
+      </div>
+    </div>
+  );
+}
+
+function PanelBody({
+  tile,
+  onRemove,
+}: {
+  tile: WorkspaceTile;
+  onRemove?: () => void;
+}) {
+  // Per-tile config-bound rendering for multi-instance / configurable
+  // panels. Single-instance panels just render their component as-is.
+  if (tile.panelId === 'meters') {
+    return <MetersTileBody tile={tile} onRemove={onRemove} />;
+  }
+  const def = PANELS[tile.panelId];
+  if (!def) return null;
+  const Component = def.component;
+  // Headerless single-instance panels that own their own header receive
+  // onRemove so their close button can drop the tile (matches the meters
+  // special-case above without pulling in MetersPanel's per-tile config).
+  if (def.headerless && onRemove) {
+    return <Component onRemove={onRemove} />;
+  }
+  return <Component />;
+}
+
+function MetersTileBody({
+  tile,
+  onRemove,
+}: {
+  tile: WorkspaceTile;
+  onRemove?: () => void;
+}) {
+  const updateTileInstanceConfig = useLayoutStore(
+    (s) => s.updateTileInstanceConfig,
+  );
+  const config: MetersPanelConfig = useMemo(
+    () => parseMetersPanelConfig(tile.instanceConfig),
+    [tile.instanceConfig],
+  );
+  const setConfig = useCallback(
+    (next: MetersPanelConfig) => {
+      updateTileInstanceConfig(tile.uid, next);
+    },
+    [tile.uid, updateTileInstanceConfig],
+  );
+  return (
+    <MetersPanel config={config} setConfig={setConfig} onRemove={onRemove} />
   );
 }

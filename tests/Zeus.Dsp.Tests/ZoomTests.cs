@@ -63,7 +63,7 @@ public class ZoomTests
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
-    [InlineData(17)]
+    [InlineData(33)]
     [InlineData(100)]
     public void Synthetic_SetZoom_RejectsOutOfRange(int level)
     {
@@ -82,6 +82,8 @@ public class ZoomTests
     [InlineData(8)]
     [InlineData(11)]
     [InlineData(16)]
+    [InlineData(24)]
+    [InlineData(32)]
     public void Synthetic_SetZoom_AcceptsAllowedLevels(int level)
     {
         using var eng = new SyntheticDspEngine();
@@ -109,6 +111,7 @@ public class ZoomTests
             engine.SetZoom(channel, 7);
             engine.SetZoom(channel, 8);
             engine.SetZoom(channel, 16);
+            engine.SetZoom(channel, 32);
             engine.SetZoom(channel, 1);
 
             // Pixel drain should still succeed after the walk — proves the
@@ -148,7 +151,7 @@ public class ZoomTests
         {
             Assert.Throws<ArgumentException>(() => engine.SetZoom(channel, 0));
             Assert.Throws<ArgumentException>(() => engine.SetZoom(channel, -1));
-            Assert.Throws<ArgumentException>(() => engine.SetZoom(channel, 17));
+            Assert.Throws<ArgumentException>(() => engine.SetZoom(channel, 33));
         }
         finally
         {

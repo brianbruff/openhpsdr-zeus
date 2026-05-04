@@ -45,6 +45,7 @@
 import { useCallback } from 'react';
 import { setMode, type RxMode } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { toolbarFavDragMime } from './toolbar/ToolbarFavorites';
 
 type ModeEntry = { value: RxMode; label: string };
 
@@ -80,16 +81,23 @@ export function ModeBandwidth() {
 
   return (
     <>
-      {/* Desktop: horizontal row of mode buttons */}
-      <div className="ctrl-group hide-mobile">
-        <div className="label-xs ctrl-lbl">MODE</div>
-        <div className="btn-row wrap" style={{ width: 236 }}>
+      {/* Desktop: horizontal row of mode buttons. width:100% so the row
+          fills its container — single line at typical tile widths, wraps
+          to the next line as the tile narrows (flex-wrap from .btn-row.wrap). */}
+      <div className="ctrl-group hide-mobile" style={{ width: '100%' }}>
+        <div className="btn-row wrap" style={{ width: '100%' }}>
           {MODES.map((m) => (
             <button
               key={m.value}
               type="button"
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData(toolbarFavDragMime('mode'), m.value);
+                e.dataTransfer.effectAllowed = 'move';
+              }}
               onClick={() => selectMode(m.value)}
               className={`btn sm ${mode === m.value ? 'active' : ''}`}
+              title={`${m.label} — drag onto a toolbar favorite slot to pin`}
             >
               {m.label}
             </button>
@@ -99,7 +107,6 @@ export function ModeBandwidth() {
 
       {/* Mobile: dropdown for mode selection */}
       <div className="ctrl-group show-mobile" style={{ display: 'none' }}>
-        <div className="label-xs ctrl-lbl">MODE</div>
         <select
           value={mode}
           onChange={(e) => selectMode(e.target.value as RxMode)}

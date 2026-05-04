@@ -99,8 +99,8 @@ public class Nr4SettingsPersistenceTests : IDisposable
         var cfg = new NrConfig(
             NrMode: NrMode.Emnr,
             EmnrPost2Run: false,
-            EmnrPost2Factor: 0.22,
-            EmnrPost2Nlevel: 0.18,
+            EmnrPost2Factor: 22.0,
+            EmnrPost2Nlevel: 18.0,
             EmnrPost2Rate: 4.0,
             EmnrPost2Taper: 8);
 
@@ -111,10 +111,41 @@ public class Nr4SettingsPersistenceTests : IDisposable
         Assert.NotNull(back);
         Assert.Equal(NrMode.Emnr, back!.NrMode);
         Assert.Equal(false, back.EmnrPost2Run);
-        Assert.Equal(0.22, back.EmnrPost2Factor);
-        Assert.Equal(0.18, back.EmnrPost2Nlevel);
+        Assert.Equal(22.0, back.EmnrPost2Factor);
+        Assert.Equal(18.0, back.EmnrPost2Nlevel);
         Assert.Equal(4.0, back.EmnrPost2Rate);
         Assert.Equal(8, back.EmnrPost2Taper);
+    }
+
+    // Legacy-scale migration: a row written before the post2 /100 fix stored
+    // factor/nlevel on the WDSP post-divide 0..1 scale. Get() must promote
+    // values < 1.0 by ×100 (Thetis NUD scale) and rewrite the row so the
+    // migration only runs once per stored value.
+    [Fact]
+    public void SetNr2Post2Config_LegacyScaleIsMigrated()
+    {
+        var legacy = new NrConfig(
+            NrMode: NrMode.Emnr,
+            EmnrPost2Factor: 0.15,
+            EmnrPost2Nlevel: 0.30);
+
+        using (var store = BuildStore()) store.Upsert(legacy);
+
+        using (var firstRead = BuildStore())
+        {
+            var migrated = firstRead.Get();
+            Assert.NotNull(migrated);
+            Assert.Equal(15.0, migrated!.EmnrPost2Factor);
+            Assert.Equal(30.0, migrated.EmnrPost2Nlevel);
+        }
+
+        // Second read must NOT re-multiply — the migration should have written
+        // the new-scale value back to disk.
+        using var secondRead = BuildStore();
+        var stable = secondRead.Get();
+        Assert.NotNull(stable);
+        Assert.Equal(15.0, stable!.EmnrPost2Factor);
+        Assert.Equal(30.0, stable.EmnrPost2Nlevel);
     }
 
     // Upsert path — overwrite an existing row's NR4 fields. Catches a class
@@ -140,5 +171,82 @@ public class Nr4SettingsPersistenceTests : IDisposable
         Assert.NotNull(back);
         Assert.Equal(20.0, back!.Nr4ReductionAmount);
         Assert.Equal(0, back.Nr4Position);
+    }
+
+    [Fact]
+    public void SetNr2CoreConfig_PersistsAllFields()
+    {
+        // Trained method (3) with both T1/T2 set — exercises the full core
+        // surface. AeRun=false flips the default (which is true) so the round
+        // trip can't accidentally pass by re-reading the default.
+        var cfg = new NrConfig(
+            NrMode: NrMode.Emnr,
+            EmnrGainMethod: 3,
+            EmnrNpeMethod: 2,
+            EmnrAeRun: false,
+            EmnrTrainT1: -1.25,
+            EmnrTrainT2: 1.5);
+
+        using (var store = BuildStore()) store.Upsert(cfg);
+
+        using var fresh = BuildStore();
+        var back = fresh.Get();
+        Assert.NotNull(back);
+        Assert.Equal(NrMode.Emnr, back!.NrMode);
+        Assert.Equal(3, back.EmnrGainMethod);
+        Assert.Equal(2, back.EmnrNpeMethod);
+        Assert.Equal(false, back.EmnrAeRun);
+        Assert.Equal(-1.25, back.EmnrTrainT1);
+        Assert.Equal(1.5, back.EmnrTrainT2);
+    }
+
+    [Fact]
+    public void GetNr2CoreConfig_NullFields_ReturnNullToCallerForDefaultFallback()
+    {
+        // Same lazy-default contract as the post2 / NR4 fields: nulls round-
+        // trip as nulls so the engine seam can apply NrDefaults at write time.
+        var cfg = new NrConfig(NrMode: NrMode.Off);
+
+        using (var store = BuildStore()) store.Upsert(cfg);
+
+        using var fresh = BuildStore();
+        var back = fresh.Get();
+        Assert.NotNull(back);
+        Assert.Null(back!.EmnrGainMethod);
+        Assert.Null(back.EmnrNpeMethod);
+        Assert.Null(back.EmnrAeRun);
+        Assert.Null(back.EmnrTrainT1);
+        Assert.Null(back.EmnrTrainT2);
+    }
+
+    [Fact]
+    public void SetNr2CoreConfig_UpsertOverwritesExistingFields()
+    {
+        var first = new NrConfig(
+            NrMode: NrMode.Emnr,
+            EmnrGainMethod: 0,
+            EmnrNpeMethod: 0,
+            EmnrAeRun: true,
+            EmnrTrainT1: -0.5,
+            EmnrTrainT2: 2.0);
+        var second = new NrConfig(
+            NrMode: NrMode.Emnr,
+            EmnrGainMethod: 3,
+            EmnrNpeMethod: 1,
+            EmnrAeRun: false,
+            EmnrTrainT1: 1.0,
+            EmnrTrainT2: 0.5);
+
+        using var store = BuildStore();
+        store.Upsert(first);
+        store.Upsert(second);
+
+        var back = store.Get();
+        Assert.NotNull(back);
+        Assert.Equal(3, back!.EmnrGainMethod);
+        Assert.Equal(1, back.EmnrNpeMethod);
+        Assert.Equal(false, back.EmnrAeRun);
+        Assert.Equal(1.0, back.EmnrTrainT1);
+        Assert.Equal(0.5, back.EmnrTrainT2);
     }
 }

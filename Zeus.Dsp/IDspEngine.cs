@@ -54,6 +54,18 @@ public enum DisplayPixout : byte
 
 public readonly record struct IqFrame(ReadOnlyMemory<double> InterleavedIq, int SampleRateHz);
 
+/// <summary>Delegate invoked by the engine on the RX or TX-mic seam to pump
+/// an audio block through the optional VST plugin chain. Implementations
+/// route to <c>Zeus.PluginHost.PluginHostManager.TryProcess</c>; returning
+/// false means "bypass — caller uses the original buffer". Wire-up lives
+/// one layer up (Zeus.Server) so Zeus.Dsp stays free of any IPC dependency.
+/// </summary>
+/// <param name="audio">Mono float32 samples — modified in place when the
+/// handler returns true.</param>
+/// <param name="frames">Sample count (length of <paramref name="audio"/>).</param>
+/// <param name="sampleRateHz">48 kHz for both seams in current profiles.</param>
+public delegate bool VstChainHandler(Span<float> audio, int frames, int sampleRateHz);
+
 public interface IDspEngine : IDisposable
 {
     int OpenChannel(int sampleRateHz, int pixelWidth);
@@ -110,6 +122,15 @@ public interface IDspEngine : IDisposable
     /// Returns a frozen −140 dBm from the synthetic engine. Safe to call from the
     /// pipeline tick; WDSP's meter struct is lock-guarded internally.</summary>
     double GetRxaSignalDbm(int channelId);
+
+    /// <summary>RXA per-stage readings (signal peak/avg, ADC peak/avg, AGC
+    /// gain, AGC envelope peak/avg) sampled from the WDSP metering ring in a
+    /// single pass. Returns <see cref="RxStageMeters.Silent"/> on the
+    /// synthetic engine or when the channel is closed. Cal offset is NOT
+    /// applied here — caller (DspPipelineService) decides whether to add the
+    /// per-board offset before broadcasting, so unit tests can assert raw
+    /// WDSP output. Safe to call from the pipeline tick.</summary>
+    RxStageMeters GetRxStageMeters(int channelId);
 
     /// <summary>Set TXA modulator mode (USB/LSB/FM/AM/...). Calls
     /// SetTXAMode internally on WdspDspEngine; no-op for Synthetic and when no
@@ -247,4 +268,70 @@ public interface IDspEngine : IDisposable
     /// classic-mode shape; the panel layout depends on it). No-op when no TXA
     /// is open or on Synthetic.</summary>
     void SetCfcConfig(CfcConfig cfg);
+
+    // ----------------- VST plugin-host seam (Phase 1 — no chain wired) -----
+    // Hooks the optional out-of-process VST plugin chain into the RX and TX
+    // signal paths. Phase 1 ships the seam only: the chain is null/disabled,
+    // every call returns false immediately and the caller proceeds with the
+    // original buffer. Phase 2 will route audio to the Zeus.PluginHost
+    // sidecar; the wiring lives in Zeus.Server, not here. Keeping the engines
+    // free of any PluginHost dependency makes the seam safe to land before
+    // the host project builds.
+
+    /// <summary>Process an RX audio block through the optional plugin chain.
+    /// Phase 1: chain is null or bypassed; this returns immediately and the
+    /// caller proceeds with <paramref name="audio"/> unchanged. Future phases
+    /// route through the out-of-process VST sidecar.
+    ///
+    /// Returns <c>true</c> if the block was processed (caller should treat
+    /// <paramref name="audio"/> as the new buffer); <c>false</c> if bypassed
+    /// (caller can use the original buffer with zero overhead).
+    ///
+    /// <paramref name="frames"/> is the sample count (mono);
+    /// <paramref name="audio"/>.Length must equal <paramref name="frames"/>.
+    /// </summary>
+    bool ProcessRxVstChain(Span<float> audio, int frames, int sampleRateHz);
+
+    // ----------------- TX Monitor (audition path, issue #106 follow-up) ----
+    // Lets the operator hear the post-bandpass / post-CFIR TX audio on a local
+    // audio sink — with or without keying — so they can dial in the VST chain,
+    // EQ, leveler, and bandwidth profile pre-RF. Implemented in the WDSP
+    // engine as a private RXA channel that demodulates the on-air IQ back to
+    // 48 kHz mono audio. Synthetic no-ops; ReadTxMonitorAudio returns 0.
+
+    /// <summary>Operator toggle for the TX-monitor audition path. When true,
+    /// the engine starts demodulating the post-CFIR TX IQ and exposes the
+    /// resulting mono audio via <see cref="ReadTxMonitorAudio"/>. When false,
+    /// stops feeding the monitor channel; subsequent ReadTxMonitorAudio calls
+    /// return 0 once the ring drains. Idempotent and cheap to call repeatedly.
+    /// No-op on Synthetic.</summary>
+    void SetTxMonitorEnabled(bool enabled);
+
+    /// <summary>Drain demodulated TX-monitor audio. Same shape as
+    /// <see cref="ReadAudio"/> — returns the number of mono float32 samples
+    /// written into <paramref name="output"/>. Returns 0 when monitor is off,
+    /// when the channel hasn't been opened yet, or when no samples are queued.
+    /// Synthetic returns 0 unconditionally.</summary>
+    int ReadTxMonitorAudio(Span<float> output);
+
+    /// <summary>Volatile read of the operator's monitor request flag. Used by
+    /// the audio-broadcast pipeline to decide whether to substitute monitor
+    /// audio for the RX AudioFrame. Reflects the toggle, not whether the
+    /// monitor channel is fully spun up. Synthetic returns false.</summary>
+    bool IsTxMonitorOn { get; }
+
+    /// <summary>Process a TX mono mic block BEFORE the WDSP TXA chain.
+    /// Operates on the 48 kHz mono mic buffer (same audio the operator
+    /// just spoke into) before fexchange2 modulates / filters / compresses.
+    /// This placement keeps WDSP's CFC last (after the plugin chain) so
+    /// the operator's preferred final-stage compressor remains the gain-
+    /// limiting authority — see <c>docs/proposals/vst-host-phase2-wire.md</c>
+    /// "TX seam location" decision.
+    ///
+    /// Same contract as <see cref="ProcessRxVstChain"/>: returns true if the
+    /// chain mutated <paramref name="audio"/> in place; false if bypassed
+    /// (caller proceeds with original buffer). <paramref name="sampleRateHz"/>
+    /// is always 48000 here — both P1 and P2 profiles feed mic at 48 kHz; the
+    /// 192 kHz IQ output is downstream of fexchange2.</summary>
+    bool ProcessTxMicVstChain(Span<float> audio, int frames, int sampleRateHz);
 }

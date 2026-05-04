@@ -36,6 +36,38 @@ cat > "${PACKAGE_DIR}/zeus" << 'EOF'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
+# Pin the bundled libwdsp.so so an older system copy in /usr/lib or
+# /usr/local/lib (e.g. left by a piHPSDR build) cannot shadow it. Linux
+# does NOT search the executable's directory by default; without this
+# line, dlopen("libwdsp.so") goes straight to LD_LIBRARY_PATH +
+# /etc/ld.so.cache and may bind P/Invoke calls against a stale lib that
+# pre-dates symbols Zeus relies on (e.g. SetRXAEMNRpost2*).
+export LD_LIBRARY_PATH="${SCRIPT_DIR}/runtimes/linux-x64/native:${SCRIPT_DIR}/runtimes/linux-arm64/native:${LD_LIBRARY_PATH}"
+
+# Cleanup handler to terminate the server subprocess on script exit.
+# Ensures that Ctrl-C, kill, or terminal close properly stops Zeus.Server
+# and prevents orphaned processes.
+cleanup() {
+    if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
+        echo ""
+        echo "Stopping Zeus server..."
+        kill -TERM "$SERVER_PID" 2>/dev/null || true
+        # Wait up to 5 seconds for graceful shutdown
+        for i in $(seq 1 10); do
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+                break
+            fi
+            sleep 0.5
+        done
+        # Force kill if still running
+        if kill -0 "$SERVER_PID" 2>/dev/null; then
+            kill -KILL "$SERVER_PID" 2>/dev/null || true
+        fi
+        wait "$SERVER_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT INT TERM
+
 # Check if running in a display environment
 if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
     echo "Starting Zeus server on http://localhost:6060"
@@ -56,12 +88,16 @@ if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
         echo "Please open http://localhost:6060 in your web browser."
     fi
 
+    echo "Zeus is running. Press Ctrl-C to stop."
     wait $SERVER_PID
 else
     # No display, just run the server
     echo "Starting Zeus server on http://localhost:6060"
     echo "Open this URL in your web browser to access Zeus."
-    ./Zeus.Server
+    ./Zeus.Server &
+    SERVER_PID=$!
+    echo "Zeus is running. Press Ctrl-C to stop."
+    wait $SERVER_PID
 fi
 EOF
 chmod +x "${PACKAGE_DIR}/zeus"
@@ -80,8 +116,8 @@ Command line usage:
   ./Zeus.Server    # Start Zeus server only (manual browser access)
 
 Requirements:
-- Linux x64 system
-- libfftw3 (usually installed by default on most distributions)
+- Linux x64 system (glibc-based; no system packages required — FFTW3 is
+  statically linked into libwdsp.so and the .NET runtime is bundled)
 
 For more information:
 https://github.com/brianbruff/openhpsdr-zeus

@@ -46,6 +46,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 
+// Compact zoom slider styled as a panel-head chip. Lives in the hero
+// panel header (above the panadapter) so the operator always sees the
+// current zoom level alongside HZ/PX. Uses the same abort-inflight
+// pattern as use-keyboard-shortcuts so rapid drags don't queue POSTs.
 export function ZoomControl() {
   const serverZoom = useConnectionStore((s) => s.zoomLevel);
   const setLocalZoom = useConnectionStore((s) => s.setZoomLevel);
@@ -85,8 +89,8 @@ export function ZoomControl() {
   };
 
   return (
-    <label className="knob-group">
-      <span className="label-xs">ZOOM</span>
+    <label className="chip mono" style={{ gap: 6, alignItems: 'center' }}>
+      <span className="k">ZOOM</span>
       <input
         type="range"
         min={ZOOM_MIN}
@@ -98,9 +102,15 @@ export function ZoomControl() {
         onMouseUp={commit}
         onTouchEnd={commit}
         onKeyUp={commit}
-        style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--accent)' }}
+        aria-label="Zoom level"
+        style={{
+          width: 90,
+          cursor: 'pointer',
+          accentColor: 'var(--accent)',
+          margin: 0,
+        }}
       />
-      <span className="mono" style={{ width: 40, textAlign: 'right', color: 'var(--fg-1)', fontSize: 11 }}>
+      <span className="v" style={{ minWidth: 18, textAlign: 'right' }}>
         {value}×
       </span>
     </label>

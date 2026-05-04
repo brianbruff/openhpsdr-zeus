@@ -78,6 +78,15 @@ export type NrConfigDto = {
   emnrPost2Nlevel?: number | null;
   emnrPost2Rate?: number | null;
   emnrPost2Taper?: number | null;
+  // NR2 (EMNR) core algorithm selectors + Trained-method tuning.
+  //   gainMethod: 0=Linear 1=Log 2=Gamma 3=Trained
+  //   npeMethod : 0=OSMS   1=MMSE 2=NSTAT
+  // T1/T2 only consulted by WDSP when gainMethod=3.
+  emnrGainMethod?: number | null;
+  emnrNpeMethod?: number | null;
+  emnrAeRun?: boolean | null;
+  emnrTrainT1?: number | null;
+  emnrTrainT2?: number | null;
   // NR4 (SBNR / libspecbleach) tunables — null means "use engine default".
   nr4ReductionAmount?: number | null;
   nr4SmoothingFactor?: number | null;
@@ -98,32 +107,54 @@ export const NR_CONFIG_DEFAULT: NrConfigDto = {
 };
 
 // Engine-side defaults for the popover. Sourced from
-// WdspDspEngine.NrDefaults / Thetis radio.cs:2350-2462. The popover seeds
-// its initial form values from these when the persisted config has nulls.
+// WdspDspEngine.NrDefaults / Thetis radio.cs:2103/2122/2160. Factor/nlevel
+// are the Thetis NumericUpDown raw values (0..100); WDSP itself divides
+// by 100 internally at emnr.c:1035/1042. Rate has no /100 in WDSP.
 export const NR2_POST2_DEFAULTS = {
   run: true,
-  factor: 0.15,
-  nlevel: 0.15,
+  factor: 15,
+  nlevel: 15,
   rate: 5.0,
   taper: 12,
 } as const;
+
+// EMNR core defaults — Thetis Setup → DSP factory state. Mirrors
+// WdspDspEngine.NrDefaults so a "reset" reproduces what create_emnr() would
+// give on a fresh channel. T1/T2 only matter when gainMethod=3 but the
+// Defaults button still resets them so a Trained → revert → Trained cycle
+// returns to factory.
+export const NR2_CORE_DEFAULTS = {
+  gainMethod: 2 as 0 | 1 | 2 | 3,    // Gamma
+  npeMethod: 0 as 0 | 1 | 2,         // OSMS
+  aeRun: true,
+  trainT1: -0.5,
+  trainT2: 2.0,
+} as const;
+
+export const GAIN_METHOD_LABELS = ['Linear', 'Log', 'Gamma', 'Trained'] as const;
+export const NPE_METHOD_LABELS = ['OSMS', 'MMSE', 'NSTAT'] as const;
 
 export const NR4_DEFAULTS = {
   reductionAmount: 10.0,
   smoothingFactor: 0.0,
   whiteningFactor: 0.0,
   noiseRescale: 2.0,
-  postFilterThreshold: 0.0,
+  // -10 matches Thetis's UI default + WDSP's create_sbnr seed (sbnr.c:84) — see
+  // WdspDspEngine.NrDefaults.Nr4PostFilterThreshold for the full reasoning.
+  postFilterThreshold: -10.0,
   noiseScalingType: 0,
   position: 1,
 } as const;
 
-// Integer 1..8. Backend accepts up to 16 (SyntheticDspEngine.MaxZoomLevel)
-// but anything past 8 doesn't visibly narrow the span further at current
-// pan widths — capping the slider here keeps the control honest.
+export const NR4_ALGO_LABELS = ['Algo 1', 'Algo 2', 'Algo 3'] as const;
+
+// Integer 1..32. Matches the backend cap (SyntheticDspEngine.MaxZoomLevel).
+// At 32× the WDSP analyzer's centre-clipped bin count drops below typical
+// pan pixel widths, softening the trace — usable for narrow-signal (CW)
+// hunting even if not pixel-sharp.
 export type ZoomLevel = number;
 export const ZOOM_MIN: ZoomLevel = 1;
-export const ZOOM_MAX: ZoomLevel = 8;
+export const ZOOM_MAX: ZoomLevel = 32;
 
 export type RadioStateDto = {
   status: ConnectionStatus;
@@ -141,14 +172,15 @@ export type RadioStateDto = {
   txFilterHighHz: number;
   sampleRate: number;
   agcTopDb: number;
+  autoAgcEnabled: boolean;
+  agcOffsetDb: number;
+  rxAfGainDb: number;
   attenDb: number;
   autoAttEnabled: boolean;
   attOffsetDb: number;
   adcOverloadWarning: boolean;
   nr: NrConfigDto;
   zoomLevel: ZoomLevel;
-  // Master RX AF gain in dB — 0 = unity (WDSP SetRXAPanelGain1(1.0) default).
-  rxAfGainDb: number;
   // PureSignal persisted tunings — server is the source of truth, hydrated
   // into tx-store on connect so a fresh browser (no localStorage) sees the
   // operator's last dial-in. PsEnabled, PsSingle, TwoToneEnabled (master-arm
@@ -159,6 +191,13 @@ export type RadioStateDto = {
   psMoxDelaySec: number;
   psLoopDelaySec: number;
   psAmpDelayNs: number;
+  // psHwPeak is the live operator-tunable HW-peak; psHwPeakDefault is the
+  // per-board factory default frozen by RadioService at connect time. UI
+  // shows a "differs from default" hint when they don't match.
+  // mi0bot ref: PSForm.cs:830 `pbWarningSetPk.Visible = _PShwpeak !=
+  // HardwareSpecific.PSDefaultPeak;`.
+  psHwPeak: number;
+  psHwPeakDefault: number;
   psIntsSpiPreset: string;
   psFeedbackSource: 'internal' | 'external';
   twoToneFreq1: number;
@@ -338,6 +377,11 @@ export function normalizeNr(raw: unknown): NrConfigDto {
     emnrPost2Nlevel: nullableNumber(r.emnrPost2Nlevel),
     emnrPost2Rate: nullableNumber(r.emnrPost2Rate),
     emnrPost2Taper: nullableInt(r.emnrPost2Taper),
+    emnrGainMethod: nullableInt(r.emnrGainMethod),
+    emnrNpeMethod: nullableInt(r.emnrNpeMethod),
+    emnrAeRun: nullableBool(r.emnrAeRun),
+    emnrTrainT1: nullableNumber(r.emnrTrainT1),
+    emnrTrainT2: nullableNumber(r.emnrTrainT2),
     nr4ReductionAmount: nullableNumber(r.nr4ReductionAmount),
     nr4SmoothingFactor: nullableNumber(r.nr4SmoothingFactor),
     nr4WhiteningFactor: nullableNumber(r.nr4WhiteningFactor),
@@ -365,6 +409,9 @@ export function normalizeState(raw: unknown): RadioStateDto {
     // Default 80 matches WdspDspEngine.ApplyAgcDefaults and the Thetis
     // AGC_MEDIUM preset. Missing from older servers — tolerate absence.
     agcTopDb: typeof r.agcTopDb === 'number' ? r.agcTopDb : 80,
+    autoAgcEnabled: typeof r.autoAgcEnabled === 'boolean' ? r.autoAgcEnabled : false,
+    agcOffsetDb: typeof r.agcOffsetDb === 'number' ? r.agcOffsetDb : 0,
+    rxAfGainDb: typeof r.rxAfGainDb === 'number' ? r.rxAfGainDb : 0,
     // Attenuator value in dB, range 0..31 (HpsdrAtten.MaxDb). 4-button UI
     // sends 0/10/20/30 today; #23 will unlock the full fine-grained range.
     attenDb: typeof r.attenDb === 'number' ? r.attenDb : 0,
@@ -379,9 +426,6 @@ export function normalizeState(raw: unknown): RadioStateDto {
     // the engine's declared defaults so the UI has something to render.
     nr: normalizeNr(r.nr),
     zoomLevel: normalizeZoomLevel(r.zoomLevel),
-    // 0 dB matches the pre-#77 unity-gain default — older servers without
-    // the field behave identically to a fresh-install slider at centre.
-    rxAfGainDb: typeof r.rxAfGainDb === 'number' ? r.rxAfGainDb : 0,
     // PureSignal persisted tunings. Defaults match RadioService.cs init and
     // PsSettingsEntry — older servers without the fields fall back cleanly.
     psAuto: typeof r.psAuto === 'boolean' ? r.psAuto : true,
@@ -390,6 +434,12 @@ export function normalizeState(raw: unknown): RadioStateDto {
     psMoxDelaySec: typeof r.psMoxDelaySec === 'number' ? r.psMoxDelaySec : 0.2,
     psLoopDelaySec: typeof r.psLoopDelaySec === 'number' ? r.psLoopDelaySec : 0,
     psAmpDelayNs: typeof r.psAmpDelayNs === 'number' ? r.psAmpDelayNs : 150,
+    // mi0bot ref: PSForm.cs:830 / clsHardwareSpecific.cs:303-328 — server
+    // freezes psHwPeakDefault at connect via ResolvePsHwPeak; psHwPeak is the
+    // operator-tunable live value. UI compares them for the warning hint.
+    psHwPeak: typeof r.psHwPeak === 'number' ? r.psHwPeak : 0.4072,
+    psHwPeakDefault:
+      typeof r.psHwPeakDefault === 'number' ? r.psHwPeakDefault : 0.4072,
     psIntsSpiPreset: typeof r.psIntsSpiPreset === 'string' ? r.psIntsSpiPreset : '16/256',
     psFeedbackSource:
       r.psFeedbackSource === 'External' || r.psFeedbackSource === 'external' ? 'external' : 'internal',
@@ -861,6 +911,22 @@ export function setAutoAtt(
   );
 }
 
+export function setAutoAgc(
+  enabled: boolean,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/auto-agc',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
 export function setZoom(
   level: ZoomLevel,
   signal?: AbortSignal,
@@ -913,6 +979,32 @@ export function setNr2Post2(
 ): Promise<RadioStateDto> {
   return jsonFetch(
     '/api/rx/nr2/post2',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+// PATCH-style request for the NR2 core algorithm selectors + Trained-method
+// T1/T2. Server merges null-absent fields onto the persisted NrConfig.
+export type Nr2CorePatchBody = {
+  gainMethod?: number | null;
+  npeMethod?: number | null;
+  aeRun?: boolean | null;
+  trainT1?: number | null;
+  trainT2?: number | null;
+};
+
+export function setNr2Core(
+  body: Nr2CorePatchBody,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/rx/nr2/core',
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -1213,6 +1305,27 @@ export async function setPsMonitor(
 ): Promise<RadioStateDto> {
   return jsonFetch(
     '/api/tx/ps/monitor',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+      signal,
+    },
+    (raw) => raw as RadioStateDto,
+  );
+}
+
+// TX Monitor toggle — engages the engine's audition path. The server
+// demodulates the post-CFIR TX IQ back to mono baseband audio at the actual
+// TX bandwidth profile and substitutes it for RX audio in the AudioFrame
+// stream while monitor is on. Operator preference, not persisted across
+// sessions; defaults off on connect.
+export async function setTxMonitor(
+  enabled: boolean,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/monitor',
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

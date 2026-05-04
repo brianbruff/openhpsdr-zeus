@@ -14,11 +14,11 @@
     "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
-    "flexlayout-react": "^0.8.19",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.11.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-grid-layout": "^2.2.3",
     "react-leaflet": "^5.0.0",
     "zustand": "^5.0.2"
   },
@@ -29,6 +29,7 @@
     "@types/node": "^22.10.2",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@types/react-grid-layout": "^1.3.6",
     "@vitejs/plugin-react": "^4.3.4",
     "eslint": "^9.17.0",
     "eslint-plugin-react-hooks": "^5.1.0",

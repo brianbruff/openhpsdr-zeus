@@ -1,0 +1,426 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later
+   Zeus — analog S-meter tile.
+   All colors come from tokens.css; the tile is scoped under .am-tile so the
+   styles here can never bleed into other panels. The visual language matches
+   the Hermes Lite 2 hardware front panel — no accent fonts, no raw hex. */
+
+.am-tile {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-0);
+  color: var(--fg-0);
+  font-family: var(--font-sans);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+
+/* ── Header ───────────────────────────────────────────────── */
+.am-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
+  border-bottom: 1px solid var(--panel-edge);
+  flex-shrink: 0;
+}
+.am-h-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.am-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.am-h-title {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: var(--fg-0);
+}
+.am-h-mode {
+  margin-left: 8px;
+  display: flex;
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--bg-2);
+}
+.am-mode-tab {
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  padding: 4px 12px;
+  background: transparent;
+  border: 0;
+  color: var(--fg-2);
+  cursor: pointer;
+  transition: color var(--dur-fast), background var(--dur-fast);
+}
+.am-mode-tab:hover { color: var(--fg-0); }
+.am-mode-tab.on {
+  background: var(--accent);
+  color: var(--bg-0);
+}
+.am-h-gear,
+.am-h-close {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--panel-edge);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: color var(--dur-fast), border-color var(--dur-fast), background var(--dur-fast);
+  flex-shrink: 0;
+}
+.am-h-gear { margin-left: auto; }
+.am-h-gear:hover,
+.am-h-close:hover {
+  color: var(--fg-0);
+  border-color: var(--fg-3);
+}
+.am-h-gear.on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--fg-0);
+}
+.am-h-close {
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* ── Dial face ────────────────────────────────────────────── */
+.am-tile .am-face-stack {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.am-tile .am-meter-face-wrap,
+.am-tile .analog-meter-face-wrap {
+  position: relative;
+  background:
+    radial-gradient(120% 70% at 50% 110%, var(--accent-soft), transparent 60%),
+    var(--bg-0);
+  padding: 12px 14px 4px;
+  border-bottom: 1px solid var(--panel-edge);
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  overflow: hidden;
+}
+.am-tile .analog-meter-face {
+  display: block;
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 2px 0 rgba(0,0,0,0.3));
+}
+
+/* ── Zeus mode overlay ────────────────────────────────────── */
+.am-tile .am-zeus-overlay {
+  position: absolute;
+  inset: auto 0 0 0;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  pointer-events: none;
+  z-index: 5;
+  transition: opacity var(--dur-med) var(--ease-out);
+}
+.am-tile .am-zeus-img {
+  width: 38%;
+  min-width: 200px;
+  max-width: 420px;
+  max-height: 100%;
+  height: auto;
+  object-fit: contain;
+  transform-origin: 50% 100%;
+  will-change: transform, filter;
+  user-select: none;
+}
+
+/* ── Readout strip ────────────────────────────────────────── */
+.am-readout-strip {
+  display: flex;
+  gap: 1px;
+  background: var(--panel-edge);
+  border-top: 1px solid var(--panel-edge);
+  flex-shrink: 0;
+}
+.am-ro {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--bg-1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.am-ro.active { background: var(--accent-soft); }
+.am-ro.danger .am-ro-value { color: var(--tx); }
+.am-ro-label {
+  font-family: var(--font-sans);
+  font-size: 9.5px;
+  letter-spacing: 0.18em;
+  color: var(--fg-3);
+  text-transform: uppercase;
+}
+.am-ro.active .am-ro-label { color: var(--accent); }
+.am-ro-value {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg-0);
+  font-variant-numeric: tabular-nums;
+}
+.am-ro.empty {
+  color: var(--fg-3);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  justify-content: center;
+  align-items: center;
+  padding: 12px;
+}
+
+/* ── Config flyout ────────────────────────────────────────── */
+.am-config {
+  max-height: 0;
+  overflow: hidden;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--panel-edge);
+  transition: max-height var(--dur-med) var(--ease-out);
+  flex-shrink: 0;
+}
+.am-config.open { max-height: 600px; }
+.am-cf-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 1px;
+  background: var(--panel-edge);
+}
+.am-cf-sect {
+  background: var(--bg-1);
+  padding: 10px 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.am-cf-sect header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px dashed var(--panel-edge);
+}
+.am-cf-sect h4 {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  font-weight: 600;
+  color: var(--fg-1);
+  text-transform: uppercase;
+}
+.am-cf-pillrow { display: flex; gap: 4px; }
+.am-cf-body { display: flex; flex-direction: column; gap: 8px; }
+
+.am-cf-sublbl {
+  font-family: var(--font-sans);
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  margin-top: 2px;
+}
+
+.am-pill {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  border: 1px solid var(--panel-edge);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  transition: color var(--dur-fast), border-color var(--dur-fast), background var(--dur-fast);
+}
+.am-pill:hover { color: var(--fg-0); border-color: var(--fg-3); }
+.am-pill.on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--fg-0);
+}
+
+.am-tickgrid {
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 3px;
+}
+.am-tick {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 4px 0;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  border: 1px solid var(--panel-edge);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  transition: color var(--dur-fast), border-color var(--dur-fast), background var(--dur-fast);
+}
+.am-tick:disabled { opacity: 0.35; cursor: not-allowed; }
+.am-tick:not(:disabled):hover { color: var(--fg-0); border-color: var(--fg-3); }
+.am-tick.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-0);
+}
+
+.am-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 0;
+}
+.am-check input { display: none; }
+.am-check-box {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--r-sm);
+  border: 1.5px solid var(--fg-3);
+  background: var(--bg-2);
+  display: grid;
+  place-items: center;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
+  margin-top: 1px;
+}
+.am-check input:checked + .am-check-box {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.am-check input:checked + .am-check-box::after {
+  content: '';
+  width: 8px;
+  height: 5px;
+  border-left: 2px solid var(--bg-0);
+  border-bottom: 2px solid var(--bg-0);
+  transform: rotate(-45deg) translate(1px, -1px);
+}
+.am-check-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.3;
+}
+.am-check-lbl { font-size: 12.5px; color: var(--fg-1); }
+.am-check-sub { font-size: 10.5px; color: var(--fg-3); }
+
+.am-slider { display: flex; flex-direction: column; gap: 4px; }
+.am-slider-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.am-slider-lbl {
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  color: var(--fg-2);
+  text-transform: uppercase;
+}
+.am-slider-val {
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg-0);
+  font-variant-numeric: tabular-nums;
+}
+.am-slider-val em { font-style: normal; color: var(--fg-3); font-weight: 500; margin-left: 2px; }
+.am-slider-hint { font-size: 10.5px; color: var(--fg-3); line-height: 1.4; }
+
+.am-config input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  background: var(--bg-2);
+  border-radius: 2px;
+  outline: none;
+  border: 1px solid var(--panel-edge);
+}
+.am-config input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: ew-resize;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.am-config input[type='range']::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: ew-resize;
+  border: 0;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.am-reset {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  padding: 3px 8px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  border: 1px solid var(--panel-edge);
+  background: var(--bg-2);
+  color: var(--fg-2);
+}
+.am-reset:hover { color: var(--fg-0); border-color: var(--fg-3); }
+
+.am-cf-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-top: 1px solid var(--panel-edge);
+  background: var(--bg-1);
+}
+.am-cf-foot-hint { font-size: 11px; color: var(--fg-3); }
+.am-done {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 14px;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--bg-0);
+}
+.am-done:hover { filter: brightness(1.08); }

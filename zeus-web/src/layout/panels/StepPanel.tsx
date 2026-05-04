@@ -46,7 +46,18 @@ import { TuningStepWidget } from '../../components/TuningStepWidget';
 
 export function StepPanel() {
   return (
-    <div style={{ padding: '12px', overflow: 'auto' }}>
+    <div
+      style={{
+        padding: 6,
+        width: '100%',
+        // Top-align so the row of step buttons sits just under the tile
+        // header with a uniform 6 px gutter — was vertically centred,
+        // which left a wide empty band below the buttons whenever the
+        // operator's tile was taller than the row needed.
+        display: 'flex',
+        alignItems: 'flex-start',
+      }}
+    >
       <TuningStepWidget />
     </div>
   );

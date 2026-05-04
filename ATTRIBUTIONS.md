@@ -126,10 +126,54 @@ Five small shim / glue files under `native/wdsp/` and
 GPL-2.0-or-later under the Zeus copyright:
 
 - `native/wdsp/wdsp_export.h`
-- `native/wdsp/stubs/rnnoise.h`
-- `native/wdsp/stubs/rnnr_stub.c`
-- `native/wdsp/stubs/sbnr_stub.c`
-- `native/wdsp/stubs/specbleach_adenoiser.h`
+- `native/wdsp/stubs/nr3/rnnoise.h`
+- `native/wdsp/stubs/nr3/rnnr_stub.c`
+- `native/wdsp/stubs/nr4/sbnr_stub.c`
+- `native/wdsp/stubs/nr4/specbleach_adenoiser.h`
+
+## libspecbleach
+
+Zeus's NR4 (SBNR — Spectral Bleaching Noise Reduction) signal path links
+against **libspecbleach** (Luciano Dato), vendored in-tree under
+[`native/libspecbleach/`](native/libspecbleach/). The library is built as
+a static sub-target of `libwdsp` with hidden symbol visibility, so the
+SBNR exports surface from `libwdsp.{so,dll,dylib}` directly and end-users
+do not see a separate runtime dependency.
+
+libspecbleach is **Copyright (C) 2022 Luciano Dato
+&lt;lucianodato@gmail.com&gt;** and is distributed under the **GNU Lesser
+General Public License, version 2.1 or (at your option) any later
+version** (LGPL-2.1-or-later). The full licence text is preserved
+verbatim at
+[`native/libspecbleach/LICENSE`](native/libspecbleach/LICENSE);
+provenance and a re-vendor recipe are in
+[`native/libspecbleach/VENDORING.md`](native/libspecbleach/VENDORING.md).
+
+The vendored copy is the **MW0LGE-modified snapshot that ships with
+Thetis**, sourced from
+`Thetis/Project Files/lib/NR_Algorithms_x64/src/libspecbleach/`. This was
+chosen over upstream `lucianodato/libspecbleach` so that Zeus's
+`specbleach_adaptive_*` calls in `native/wdsp/sbnr.c` match Thetis's NR4
+reference behaviour bit-for-bit. The MW0LGE modifications are
+concentrated in `CMakeLists.txt` (FFTW3f path discovery for the Windows
+build, marked `# MW0LGE (c) 2025`); the algorithmic source under `src/`
+matches upstream as of the Thetis snapshot.
+
+Upstream:
+- Original library — <https://github.com/lucianodato/libspecbleach>
+- Thetis-modified snapshot — <https://github.com/ramdor/Thetis>
+
+LGPL-2.1-or-later → GPL-2.0-or-later is one-way licence-compatible, so
+linking libspecbleach into Zeus's GPL-2-or-later distribution is
+consistent with both the LGPL's permissive linking clause and Zeus's own
+licence terms. Zeus does not modify the vendored libspecbleach source;
+per-file headers in `native/libspecbleach/` are preserved as received
+from upstream and must remain so on re-vendor.
+
+libspecbleach also introduces a build-time dependency on **FFTW3f** (the
+single-precision build of FFTW3) on every host that rebuilds the native
+library. FFTW3f is a separately-distributed library and is not vendored
+into Zeus; see `native/README.md` for the per-platform install hint.
 
 ## Relationship to pihpsdr
 

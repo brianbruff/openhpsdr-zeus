@@ -52,16 +52,19 @@ import {
   type ZoomLevel,
 } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 import { useTxStore } from '../state/tx-store';
+import { ACTIVE_MAP_REF } from '../state/active-map-ref';
 
-// Matches the pan-drag gesture step in use-pan-tune-gesture.ts. If that
-// becomes user-settable, lift this into a shared setting.
-const TUNE_STEP_HZ = 500;
+// The arrow-key tune step follows the operator's TuningStepWidget choice
+// (toolbar-favorites-store.stepHz). Read at event time inside bumpTune so
+// it picks up changes without re-mounting the hook.
 const MAX_HZ = 60_000_000;
 
-function snapHz(hz: number): number {
+function snapHz(hz: number, step: number): number {
   if (!Number.isFinite(hz)) return 0;
-  const snapped = Math.round(hz / TUNE_STEP_HZ) * TUNE_STEP_HZ;
+  const s = Math.max(1, step);
+  const snapped = Math.round(hz / s) * s;
   return Math.min(MAX_HZ, Math.max(0, snapped));
 }
 
@@ -74,8 +77,9 @@ function isEditableTarget(el: EventTarget | null): boolean {
 
 /**
  * Window-scoped arrow-key shortcuts:
- *   ←/→ nudge the VFO down/up by TUNE_STEP_HZ
- *   ↑/↓ step zoom in/out by one level
+ *   ←/→             nudge the VFO down/up by the operator's selected tune step
+ *   ↑/↓             step zoom in/out by one level
+ *   Option+↑/↓      zoom in/out (Mac muscle-memory alias for plain ↑/↓)
  *   Space (press-and-hold) keys MOX; release drops back to RX.
  *
  * Skips editable targets so typing into an <input> still works, and requires
@@ -112,7 +116,8 @@ export function useKeyboardShortcuts() {
       // Accumulate from the queued value so held-down arrows step cleanly
       // rather than re-reading the (potentially stale) store each frame.
       const base = pendingHz ?? useConnectionStore.getState().vfoHz;
-      const next = snapHz(base + direction * TUNE_STEP_HZ);
+      const step = useToolbarFavoritesStore.getState().stepHz;
+      const next = snapHz(base + direction * step, step);
       useConnectionStore.setState({ vfoHz: next });
       pendingHz = next;
       if (pendingRaf === 0) pendingRaf = requestAnimationFrame(flushTune);
@@ -151,8 +156,29 @@ export function useKeyboardShortcuts() {
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (isEditableTarget(e.target)) return;
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (useConnectionStore.getState().status !== 'Connected') return;
+
+      // Option/Alt + Up/Down zooms the world map (background overlay), not
+      // the panadapter. Handled before the modifier early-return below so
+      // the alt path is the only modified shortcut we honour. If the map
+      // isn't mounted (mobile shell, no LeafletWorldMap), the shortcut is
+      // a no-op rather than falling back to panadapter zoom — keeping the
+      // binding's meaning consistent across layouts.
+      if (e.altKey && !e.ctrlKey && !e.metaKey) {
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          const m = ACTIVE_MAP_REF.current;
+          if (m) m.setZoom(m.getZoom() + 1, { animate: false });
+          return;
+        }
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          const m = ACTIVE_MAP_REF.current;
+          if (m) m.setZoom(m.getZoom() - 1, { animate: false });
+          return;
+        }
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
 
       switch (e.key) {
         case 'ArrowLeft':

@@ -44,6 +44,13 @@
 
 import { create } from 'zustand';
 import type { ColormapId } from '../gl/colormap';
+import {
+  deleteDisplayImage,
+  displayImageUrl,
+  fetchDisplaySettings,
+  updateDisplaySettings,
+  uploadDisplayImage,
+} from '../api/display';
 
 // Fixed defaults used when autoRange is off and no user-saved range is
 // present. -140..-50 dBFS sits the noise floor where operators expect to
@@ -63,35 +70,49 @@ export const TX_FIXED_DB_MAX = 20;
 
 const STORAGE_KEY = 'zeus.display.dbRange';
 const TX_STORAGE_KEY = 'zeus.display.txDbRange';
-const CONTRAST_STORAGE_KEY = 'zeus.display.contrast';
+const WF_STORAGE_KEY = 'zeus.display.wfDbRange';
+const WF_TX_STORAGE_KEY = 'zeus.display.wfTxDbRange';
+const RX_TRACE_COLOR_KEY = 'zeus.display.rxTraceColor';
 
-// Allowed range for the waterfall gamma. Outside this band the display
-// either flattens to a single colour (very low) or clips weak signal to
-// black (very high). Default 1.0 = identity.
-export const CONTRAST_MIN = 0.5;
-export const CONTRAST_MAX = 4.0;
-export const CONTRAST_DEFAULT = 1.0;
+// Legacy localStorage keys — pre-server-side storage. Read once on first
+// load to migrate the operator's existing image up to the backend, then
+// removed. New code should never read or write these.
+const LEGACY_PAN_BG_KEY = 'zeus.display.panBackground';
+const LEGACY_BG_IMAGE_KEY = 'zeus.display.backgroundImage';
+const LEGACY_BG_FIT_KEY = 'zeus.display.backgroundImageFit';
 
-function readSavedContrast(): number {
-  try {
-    if (typeof localStorage === 'undefined') return CONTRAST_DEFAULT;
-    const raw = localStorage.getItem(CONTRAST_STORAGE_KEY);
-    if (!raw) return CONTRAST_DEFAULT;
-    const v = Number(raw);
-    if (!Number.isFinite(v) || v < CONTRAST_MIN || v > CONTRAST_MAX) return CONTRAST_DEFAULT;
-    return v;
-  } catch {
-    return CONTRAST_DEFAULT;
-  }
+// Default RX panadapter trace colour — warm amber, matching the original
+// hardcoded constant in gl/panadapter.ts. Operators can pick another colour
+// from the Display tab; the choice is persisted to localStorage.
+export const DEFAULT_RX_TRACE_COLOR = '#FFA028';
+
+function isHexColor(v: unknown): v is string {
+  return typeof v === 'string' && /^#[0-9A-Fa-f]{6}$/.test(v);
 }
 
-function writeSavedContrast(v: number): void {
+// Panadapter background mode. 'basic' = no overlay (current QRZ-off
+// look). 'beam-map' = world-map overlay with terminator lines and beam
+// chrome (current QRZ-on look). 'image' = user-supplied still image
+// behind a transparent panadapter / waterfall.
+export type PanBackgroundMode = 'basic' | 'beam-map' | 'image';
+
+// CSS background-size mapping for the image background.
+// 'fit' → contain (entire image visible, may letterbox)
+// 'fill' → cover (fills the panel, may crop)
+// 'stretch' → 100% 100% (distorts to fit exactly)
+export type BackgroundImageFit = 'fit' | 'fill' | 'stretch';
+
+function readRxTraceColor(): string {
   try {
-    if (typeof localStorage === 'undefined') return;
-    localStorage.setItem(CONTRAST_STORAGE_KEY, String(v));
+    if (typeof localStorage === 'undefined') return DEFAULT_RX_TRACE_COLOR;
+    const raw = localStorage.getItem(RX_TRACE_COLOR_KEY);
+    return isHexColor(raw) ? raw.toUpperCase() : DEFAULT_RX_TRACE_COLOR;
   } catch {
-    // quota / private mode — silently accept
+    return DEFAULT_RX_TRACE_COLOR;
   }
+}
+function writeRxTraceColor(v: string): void {
+  try { if (typeof localStorage !== 'undefined') localStorage.setItem(RX_TRACE_COLOR_KEY, v); } catch { /* quota */ }
 }
 
 function readSavedRange(): { dbMin: number; dbMax: number } {
@@ -147,6 +168,58 @@ function writeSavedTxRange(txDbMin: number, txDbMax: number): void {
   }
 }
 
+function readSavedWfRange(): { wfDbMin: number; wfDbMax: number } {
+  try {
+    if (typeof localStorage === 'undefined') return { wfDbMin: FIXED_DB_MIN, wfDbMax: FIXED_DB_MAX };
+    const raw = localStorage.getItem(WF_STORAGE_KEY);
+    if (!raw) return { wfDbMin: FIXED_DB_MIN, wfDbMax: FIXED_DB_MAX };
+    const parsed = JSON.parse(raw);
+    const wfDbMin = typeof parsed?.wfDbMin === 'number' ? parsed.wfDbMin : FIXED_DB_MIN;
+    const wfDbMax = typeof parsed?.wfDbMax === 'number' ? parsed.wfDbMax : FIXED_DB_MAX;
+    if (!(wfDbMin < wfDbMax) || !Number.isFinite(wfDbMin) || !Number.isFinite(wfDbMax)) {
+      return { wfDbMin: FIXED_DB_MIN, wfDbMax: FIXED_DB_MAX };
+    }
+    return { wfDbMin, wfDbMax };
+  } catch {
+    return { wfDbMin: FIXED_DB_MIN, wfDbMax: FIXED_DB_MAX };
+  }
+}
+
+function writeSavedWfRange(wfDbMin: number, wfDbMax: number): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(WF_STORAGE_KEY, JSON.stringify({ wfDbMin, wfDbMax }));
+  } catch {
+    // quota exceeded / private mode — accept silently.
+  }
+}
+
+function readSavedWfTxRange(): { wfTxDbMin: number; wfTxDbMax: number } {
+  try {
+    if (typeof localStorage === 'undefined') return { wfTxDbMin: TX_FIXED_DB_MIN, wfTxDbMax: TX_FIXED_DB_MAX };
+    const raw = localStorage.getItem(WF_TX_STORAGE_KEY);
+    if (!raw) return { wfTxDbMin: TX_FIXED_DB_MIN, wfTxDbMax: TX_FIXED_DB_MAX };
+    const parsed = JSON.parse(raw);
+    const wfTxDbMin = typeof parsed?.wfTxDbMin === 'number' ? parsed.wfTxDbMin : TX_FIXED_DB_MIN;
+    const wfTxDbMax = typeof parsed?.wfTxDbMax === 'number' ? parsed.wfTxDbMax : TX_FIXED_DB_MAX;
+    if (!(wfTxDbMin < wfTxDbMax) || !Number.isFinite(wfTxDbMin) || !Number.isFinite(wfTxDbMax)) {
+      return { wfTxDbMin: TX_FIXED_DB_MIN, wfTxDbMax: TX_FIXED_DB_MAX };
+    }
+    return { wfTxDbMin, wfTxDbMax };
+  } catch {
+    return { wfTxDbMin: TX_FIXED_DB_MIN, wfTxDbMax: TX_FIXED_DB_MAX };
+  }
+}
+
+function writeSavedWfTxRange(wfTxDbMin: number, wfTxDbMax: number): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(WF_TX_STORAGE_KEY, JSON.stringify({ wfTxDbMin, wfTxDbMax }));
+  } catch {
+    // quota exceeded / private mode — accept silently.
+  }
+}
+
 // Exponential smoothing constant for the auto-range tracker. 0.1 trades
 // flicker resistance for responsiveness — band-change artifacts fade over
 // ~30 frames at 30 Hz (~1 s).
@@ -163,29 +236,45 @@ const MIN_SPAN_DB = 20;
 
 export type DisplaySettingsState = {
   autoRange: boolean;
-  // Panadapter dB window. Driven by the DbScale gesture (manual) and/or the
-  // AUTO toggle (EMA-tracked). The waterfall has its own window — see
-  // wfDbMin/wfDbMax below — so dragging the panadapter scale no longer
-  // affects waterfall brightness.
+  // Panadapter dB window. Driven by the DbScale gesture (manual) and/or
+  // the AUTO toggle (EMA-tracked).
   dbMin: number;
   dbMax: number;
-  // Waterfall dB window. Always EMA-tracks the wfDb percentiles so the
-  // colour mapping stays sensible across band-condition changes; the
-  // operator's only direct knob on the waterfall is the contrast (γ) slider.
+  // Waterfall dB window. Independent of the panadapter so the operator
+  // can darken/brighten the waterfall colour mapping without disturbing
+  // the panadapter's noise-floor view. Driven by its own DbScale slider.
   wfDbMin: number;
   wfDbMax: number;
+  // Separate dB range for TX waterfall (rendered during MOX/TUN). Mirrors
+  // the TX panadapter pair so the operator can darken/brighten the keyed
+  // waterfall window independently of their RX waterfall view.
+  wfTxDbMin: number;
+  wfTxDbMax: number;
   // Separate dB range for TX panadapter (rendered during MOX/TUN). Thetis
   // parity — see TX_FIXED_DB_MIN/MAX constants.
   txDbMin: number;
   txDbMax: number;
   colormap: ColormapId;
-  contrast: number;
+  // Panadapter background overlay mode + (optional) user image. See the
+  // PanBackgroundMode and BackgroundImageFit types above. Persisted on the
+  // backend (zeus-prefs.db) so a single setting follows the operator across
+  // every browser pointed at the Zeus instance — phones, tablets, multiple
+  // desktops. backgroundImage is a server URL with a cache-busting query
+  // string, not a data:URL. setBackgroundImage returns false on upload
+  // failure (network or server-side rejection).
+  panBackground: PanBackgroundMode;
+  backgroundImage: string | null;
+  backgroundImageFit: BackgroundImageFit;
+  // RX panadapter trace colour as #RRGGBB. Drives both the sharp trace line
+  // and the fill underneath in gl/panadapter.ts (kept in lockstep).
+  rxTraceColor: string;
+  setPanBackground: (v: PanBackgroundMode) => Promise<void>;
+  setBackgroundImage: (dataUrl: string | null) => Promise<boolean>;
+  setBackgroundImageFit: (v: BackgroundImageFit) => Promise<void>;
+  setRxTraceColor: (v: string) => void;
   setAutoRange: (v: boolean) => void;
   setColormap: (id: ColormapId) => void;
-  setContrast: (gamma: number) => void;
   updateAutoRange: (wfDb: Float32Array) => void;
-  // Always-on EMA tracker for the waterfall window.
-  updateWfRange: (wfDb: Float32Array) => void;
   // Shift dbMin and dbMax together by `deltaDb`. Used by the draggable dB
   // scale overlay on the panadapter with content-follows-finger semantics:
   // drag DOWN raises both limits so the trace slides DOWN on the canvas.
@@ -193,23 +282,94 @@ export type DisplaySettingsState = {
   shiftDbRange: (deltaDb: number) => void;
   // Same as shiftDbRange but for the TX-specific range.
   shiftTxDbRange: (deltaDb: number) => void;
+  // Same as shiftDbRange but for the waterfall's independent range.
+  shiftWfDbRange: (deltaDb: number) => void;
+  // Same as shiftWfDbRange but for the TX-specific waterfall range.
+  shiftWfTxDbRange: (deltaDb: number) => void;
 };
 
 const DB_ABS_LIMIT = 200;
 
 const initialRange = readSavedRange();
 const initialTxRange = readSavedTxRange();
+const initialWfRange = readSavedWfRange();
+const initialWfTxRange = readSavedWfTxRange();
 
 export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) => ({
   autoRange: false,
   dbMin: initialRange.dbMin,
   dbMax: initialRange.dbMax,
-  wfDbMin: FIXED_DB_MIN,
-  wfDbMax: FIXED_DB_MAX,
+  wfDbMin: initialWfRange.wfDbMin,
+  wfDbMax: initialWfRange.wfDbMax,
+  wfTxDbMin: initialWfTxRange.wfTxDbMin,
+  wfTxDbMax: initialWfTxRange.wfTxDbMax,
   txDbMin: initialTxRange.txDbMin,
   txDbMax: initialTxRange.txDbMax,
   colormap: 'blue',
-  contrast: readSavedContrast(),
+  // Defaults until the server-side fetch lands (see hydrateFromServer at the
+  // bottom of this file). The operator briefly sees a plain panadapter on
+  // first paint instead of their saved image — acceptable trade-off for not
+  // shipping the image on every page-load via localStorage.
+  panBackground: 'basic',
+  backgroundImage: null,
+  backgroundImageFit: 'fill',
+  rxTraceColor: readRxTraceColor(),
+  setPanBackground: async (panBackground) => {
+    const prev = get().panBackground;
+    set({ panBackground });
+    try {
+      const result = await updateDisplaySettings(panBackground, get().backgroundImageFit);
+      // If the server normalised the value (unknown input → 'basic'), reflect that.
+      if (result.mode !== panBackground) set({ panBackground: result.mode });
+    } catch {
+      set({ panBackground: prev });
+    }
+  },
+  setBackgroundImage: async (dataUrl) => {
+    if (dataUrl == null) {
+      try {
+        const result = await deleteDisplayImage();
+        set({
+          backgroundImage: null,
+          // Server may have transitioned mode if it had been 'image' — but we
+          // only update mode if the server says so explicitly via the result.
+          panBackground: result.mode,
+          backgroundImageFit: result.fit,
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    try {
+      const blob = await dataUrlToBlob(dataUrl);
+      const result = await uploadDisplayImage(blob);
+      set({
+        backgroundImage: result.hasImage ? displayImageUrl(Date.now()) : null,
+        panBackground: result.mode,
+        backgroundImageFit: result.fit,
+      });
+      return result.hasImage;
+    } catch {
+      return false;
+    }
+  },
+  setBackgroundImageFit: async (backgroundImageFit) => {
+    const prev = get().backgroundImageFit;
+    set({ backgroundImageFit });
+    try {
+      const result = await updateDisplaySettings(get().panBackground, backgroundImageFit);
+      if (result.fit !== backgroundImageFit) set({ backgroundImageFit: result.fit });
+    } catch {
+      set({ backgroundImageFit: prev });
+    }
+  },
+  setRxTraceColor: (v) => {
+    if (!isHexColor(v)) return;
+    const norm = v.toUpperCase();
+    writeRxTraceColor(norm);
+    set({ rxTraceColor: norm });
+  },
   setAutoRange: (autoRange) => {
     if (autoRange) {
       set({ autoRange: true });
@@ -222,11 +382,6 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
     }
   },
   setColormap: (colormap) => set({ colormap }),
-  setContrast: (gamma) => {
-    const clamped = Math.max(CONTRAST_MIN, Math.min(CONTRAST_MAX, gamma));
-    set({ contrast: clamped });
-    writeSavedContrast(clamped);
-  },
   shiftDbRange: (deltaDb) => {
     // While AUTO is on, the live dbMin/dbMax are EMA-smoothed band-tracking
     // outputs (often messy floats and a tighter span than the user's saved
@@ -248,6 +403,20 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
     set({ txDbMin: nextMin, txDbMax: nextMax });
     writeSavedTxRange(nextMin, nextMax);
   },
+  shiftWfDbRange: (deltaDb) => {
+    const { wfDbMin, wfDbMax } = get();
+    const nextMin = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, wfDbMin + deltaDb));
+    const nextMax = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, wfDbMax + deltaDb));
+    set({ wfDbMin: nextMin, wfDbMax: nextMax });
+    writeSavedWfRange(nextMin, nextMax);
+  },
+  shiftWfTxDbRange: (deltaDb) => {
+    const { wfTxDbMin, wfTxDbMax } = get();
+    const nextMin = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, wfTxDbMin + deltaDb));
+    const nextMax = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, wfTxDbMax + deltaDb));
+    set({ wfTxDbMin: nextMin, wfTxDbMax: nextMax });
+    writeSavedWfTxRange(nextMin, nextMax);
+  },
   updateAutoRange: (wfDb) => {
     if (!get().autoRange || wfDb.length === 0) return;
     const [p5, p95] = percentiles(wfDb);
@@ -264,22 +433,6 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
       dbMax: dbMax * (1 - SMOOTHING) + targetMax * SMOOTHING,
     });
   },
-  updateWfRange: (wfDb) => {
-    if (wfDb.length === 0) return;
-    const [p5, p95] = percentiles(wfDb);
-    let targetMin = p5 - AUTO_FLOOR_MARGIN_DB;
-    let targetMax = p95 + AUTO_CEIL_MARGIN_DB;
-    if (targetMax - targetMin < MIN_SPAN_DB) {
-      const mid = 0.5 * (targetMin + targetMax);
-      targetMin = mid - MIN_SPAN_DB / 2;
-      targetMax = mid + MIN_SPAN_DB / 2;
-    }
-    const { wfDbMin, wfDbMax } = get();
-    set({
-      wfDbMin: wfDbMin * (1 - SMOOTHING) + targetMin * SMOOTHING,
-      wfDbMax: wfDbMax * (1 - SMOOTHING) + targetMax * SMOOTHING,
-    });
-  },
 }));
 
 // p5/p95 via a sorted copy. For the ~1024-sample widths we see in
@@ -292,3 +445,88 @@ function percentiles(arr: Float32Array): [number, number] {
   const highIdx = Math.min(n - 1, Math.max(0, Math.floor(0.95 * n)));
   return [sorted[lowIdx] ?? FIXED_DB_MIN, sorted[highIdx] ?? FIXED_DB_MAX];
 }
+
+// Decode a data:URL produced by canvas.toDataURL() into a Blob the multipart
+// upload can carry. Used by setBackgroundImage to bridge the panel's
+// canvas-based compression pipeline to the backend's byte storage.
+async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
+  const res = await fetch(dataUrl);
+  return res.blob();
+}
+
+// One-shot hydration from the backend at module load. If the server has
+// nothing yet but this browser still holds a legacy localStorage image,
+// push it up once and clear local — that's the migration path for operators
+// who set a background before the server-side store existed. Either way the
+// three legacy keys are removed afterwards so the localStorage stays clean.
+async function hydrateFromServer(): Promise<void> {
+  let server: Awaited<ReturnType<typeof fetchDisplaySettings>>;
+  try {
+    server = await fetchDisplaySettings();
+  } catch {
+    // Backend unreachable; leave defaults in place. Next call to
+    // setPanBackground / setBackgroundImage will hit the server.
+    return;
+  }
+
+  const legacy = readLegacyLocalStorage();
+  const serverHasContent =
+    server.hasImage || server.mode !== 'basic' || server.fit !== 'fill';
+
+  if (!serverHasContent && legacy && (legacy.image || legacy.mode || legacy.fit)) {
+    try {
+      if (legacy.mode || legacy.fit) {
+        const next = await updateDisplaySettings(
+          legacy.mode ?? server.mode,
+          legacy.fit ?? server.fit,
+        );
+        server = next;
+      }
+      if (legacy.image) {
+        const blob = await dataUrlToBlob(legacy.image);
+        server = await uploadDisplayImage(blob);
+      }
+    } catch {
+      // Migration failed — leave legacy keys in place so we retry next load.
+      return;
+    }
+  }
+
+  clearLegacyLocalStorage();
+
+  useDisplaySettingsStore.setState({
+    panBackground: server.mode,
+    backgroundImage: server.hasImage ? displayImageUrl(Date.now()) : null,
+    backgroundImageFit: server.fit,
+  });
+}
+
+function readLegacyLocalStorage(): { mode: PanBackgroundMode | null; fit: BackgroundImageFit | null; image: string | null } | null {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const rawMode = localStorage.getItem(LEGACY_PAN_BG_KEY);
+    const rawFit = localStorage.getItem(LEGACY_BG_FIT_KEY);
+    const rawImg = localStorage.getItem(LEGACY_BG_IMAGE_KEY);
+    const mode =
+      rawMode === 'basic' || rawMode === 'beam-map' || rawMode === 'image' ? rawMode : null;
+    const fit =
+      rawFit === 'fit' || rawFit === 'fill' || rawFit === 'stretch' ? rawFit : null;
+    const image = rawImg && rawImg.startsWith('data:image/') ? rawImg : null;
+    return { mode, fit, image };
+  } catch {
+    return null;
+  }
+}
+
+function clearLegacyLocalStorage(): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.removeItem(LEGACY_PAN_BG_KEY);
+    localStorage.removeItem(LEGACY_BG_IMAGE_KEY);
+    localStorage.removeItem(LEGACY_BG_FIT_KEY);
+  } catch {
+    /* private mode — nothing to clean up */
+  }
+}
+
+void hydrateFromServer();

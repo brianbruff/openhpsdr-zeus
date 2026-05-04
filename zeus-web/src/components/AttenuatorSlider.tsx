@@ -137,7 +137,7 @@ export function AttenuatorSlider() {
         max={MAX}
         step={1}
         value={sliderValue}
-        disabled={!connected}
+        disabled={!connected || autoEnabled}
         onChange={(e) => setDragValue(Number(e.currentTarget.value))}
         onMouseUp={() => {
           if (dragValue !== null) sendValue(dragValue);

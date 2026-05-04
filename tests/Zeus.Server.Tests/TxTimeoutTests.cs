@@ -74,7 +74,7 @@ public class TxTimeoutTests : IDisposable
         var radio = new RadioService(loggerFactory, dspStore, paStore);
         var hub = new StreamingHub(new NullLogger<StreamingHub>());
         var pipeline = new DspPipelineService(radio, hub, loggerFactory);
-        tx = new TxService(radio, pipeline, hub, new NullLogger<TxService>());
+        tx = new TxService(radio, pipeline, hub, NullBandPlanService.Instance, new NullLogger<TxService>());
         return new TxMetersService(hub, radio, tx, pipeline, new NullLogger<TxMetersService>());
     }
 

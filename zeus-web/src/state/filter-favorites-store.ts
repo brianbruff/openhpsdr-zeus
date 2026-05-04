@@ -11,8 +11,7 @@ import {
   setFavoriteFilterSlots,
   type RxMode,
 } from '../api/client';
-
-const DEFAULT_FAVORITES: readonly string[] = ['F4', 'F5', 'F6'];
+import { defaultFavoritesForMode } from '../components/filter/filterPresets';
 
 type FilterFavoritesState = {
   byMode: Partial<Record<RxMode, string[]>>;
@@ -31,12 +30,12 @@ export const useFilterFavoritesStore = create<FilterFavoritesState>((set, get) =
     try {
       const slots = await getFavoriteFilterSlots(mode);
       set((s) => ({
-        byMode: { ...s.byMode, [mode]: slots.length === 3 ? slots : [...DEFAULT_FAVORITES] },
+        byMode: { ...s.byMode, [mode]: slots.length === 3 ? slots : [...defaultFavoritesForMode(mode)] },
         loading: { ...s.loading, [mode]: false },
       }));
     } catch {
       set((s) => ({
-        byMode: { ...s.byMode, [mode]: [...DEFAULT_FAVORITES] },
+        byMode: { ...s.byMode, [mode]: [...defaultFavoritesForMode(mode)] },
         loading: { ...s.loading, [mode]: false },
       }));
     }
@@ -57,5 +56,5 @@ export const useFilterFavoritesStore = create<FilterFavoritesState>((set, get) =
 
 export function useFavoritesForMode(mode: RxMode): string[] {
   const slots = useFilterFavoritesStore((s) => s.byMode[mode]);
-  return slots ?? [...DEFAULT_FAVORITES];
+  return slots ?? [...defaultFavoritesForMode(mode)];
 }

@@ -106,7 +106,17 @@ public sealed record NrConfig(
     double? Nr4NoiseRescale = null,
     double? Nr4PostFilterThreshold = null,
     int? Nr4NoiseScalingType = null,
-    int? Nr4Position = null);
+    int? Nr4Position = null,
+    // ---- NR2 (EMNR) core algorithm selectors + trained-method tuning ----
+    // Thetis Setup → DSP tab radio groups + AE checkbox + T1/T2 NUDs. Defaults
+    // match Thetis (Gamma=2, OSMS=0, AE on, T1=-0.5, T2=2.0). T1/T2 are only
+    // consulted by WDSP when EmnrGainMethod=3 (Trained); the engine still
+    // writes them through so the channel state is coherent on mode-cycle.
+    int? EmnrGainMethod = null,
+    int? EmnrNpeMethod = null,
+    bool? EmnrAeRun = null,
+    double? EmnrTrainT1 = null,
+    double? EmnrTrainT2 = null);
 
 public sealed record StateDto(
     ConnectionStatus Status,
@@ -152,6 +162,12 @@ public sealed record StateDto(
     // yet; when multi-RX lands this becomes the master and the per-RX
     // values layer on top.
     double RxAfGainDb = 0.0,
+    // Auto-AGC control loop. When on, the server automatically adjusts
+    // AgcTopDb based on signal conditions. Similar to Auto-ATT but for AGC.
+    // Default is OFF — operator must explicitly enable. The control loop
+    // adjusts AgcOffsetDb, which is added to the user baseline AgcTopDb.
+    bool AutoAgcEnabled = false,
+    double AgcOffsetDb = 0.0,
 
     // ---- PureSignal predistortion (TXA-side; WDSP calcc/iqc stages) ----
     // PsEnabled is the master arm bit. Deliberately NOT persisted server-side
@@ -170,6 +186,16 @@ public sealed record StateDto(
     // persisted server-side: this is an operator viewing preference,
     // resets to off each session same as PsEnabled.
     bool PsMonitorEnabled = false,
+    // TX Monitor — operator-facing audition toggle (issue #106 follow-up).
+    // When true, the engine demodulates the post-CFIR TX IQ back to mono
+    // baseband audio so the operator hears the chain output (mic → EQ →
+    // Leveler → VST → CFC → ALC → bandpass) at the actual TX bandwidth
+    // profile. Equivalent to Thetis MON, but also runs the chain when MOX
+    // is OFF so VST plugins receive samples and meters animate continuously.
+    // RX audio is suppressed in the broadcast while monitor is on so the
+    // operator hears only the TX audition. NOT persisted across sessions —
+    // resets to off each connect, matching MOX/TUN/PsEnabled discipline.
+    bool TxMonitorEnabled = false,
     bool PsAuto = true,             // continuous adapt by default once armed
     bool PsSingle = false,          // one-shot SetPSControl(1,1,0,0)
     bool PsPtol = false,            // false = strict 0.4; true = relax 0.8
@@ -183,6 +209,14 @@ public sealed record StateDto(
     // RadioService HW-peak switch overrides on the first ConnectAsync /
     // ConnectP2Async. See PLAN section 7 / hermes.md §7.1.
     double PsHwPeak = 0.4072,
+    // PS hardware-peak per-board default — frozen at connect time from
+    // ResolvePsHwPeak(isProtocol2, board) and surfaced for the UI to compare
+    // against the live PsHwPeak so the operator gets a "differs from default"
+    // hint when they've dialed away from the factory curve.
+    // mi0bot ref: PSForm.cs:830 `pbWarningSetPk.Visible = _PShwpeak !=
+    // HardwareSpecific.PSDefaultPeak;` + clsHardwareSpecific.cs:303-328
+    // PSDefaultPeak per-board switch.
+    double PsHwPeakDefault = 0.4072,
     PsFeedbackSource PsFeedbackSource = PsFeedbackSource.Internal,
     string PsIntsSpiPreset = "16/256",
     double PsFeedbackLevel = 0.0,   // info[4] read-back, 0..256
@@ -268,6 +302,19 @@ public sealed record Nr4ConfigSetRequest(
     int? NoiseScalingType = null,
     int? Position = null);
 
+// NR2 (EMNR) core algorithm selectors + trained-method tuning. Mirrors
+// Nr2Post2ConfigSetRequest's nullable-merge pattern: each field absent
+// from the PATCH leaves the persisted value untouched.
+//   GainMethod: 0=Linear, 1=Log, 2=Gamma (default), 3=Trained
+//   NpeMethod : 0=OSMS (default), 1=MMSE, 2=NSTAT
+//   TrainT1/T2 are only meaningful when GainMethod=3.
+public sealed record Nr2CoreConfigSetRequest(
+    int? GainMethod = null,
+    int? NpeMethod = null,
+    bool? AeRun = null,
+    double? TrainT1 = null,
+    double? TrainT2 = null);
+
 // Panadapter/waterfall zoom levels. Level=1 means the analyzer covers the full
 // sample-rate span; level=2 means VFO-centered half-span (×2 bins/Hz), and so
 // on. The span-centering math lives in the engine; this contract just carries
@@ -275,6 +322,8 @@ public sealed record Nr4ConfigSetRequest(
 public sealed record ZoomSetRequest(int Level);
 
 public sealed record AutoAttSetRequest(bool Enabled);
+
+public sealed record AutoAgcSetRequest(bool Enabled);
 
 public sealed record TunSetRequest(bool On);
 
@@ -295,13 +344,45 @@ public sealed record BandMemoryDto(string Band, long Hz, RxMode Mode);
 
 public sealed record BandMemorySetRequest(long Hz, RxMode Mode);
 
-// UI layout: opaque flexlayout-react JSON persisted server-side so the
-// operator's panel arrangement survives page reloads and reinstalls.
-// The JSON is stored as a string to avoid strongly-typing the flex-layout
-// tree on the wire — the frontend owns the schema.
+// UI layout: opaque workspace JSON persisted server-side so the operator's
+// panel arrangement survives page reloads and reinstalls. The JSON is stored
+// as a string to avoid strongly-typing the workspace tree on the wire — the
+// frontend owns the schema.
+//
+// `UiLayoutDto` / `UiLayoutSetRequest` are the legacy single-layout shape
+// (one workspace per server). Kept so older clients keep working and so the
+// new multi-layout system can migrate the legacy row on first read.
 public sealed record UiLayoutDto(string LayoutJson, long UpdatedUtc);
 
 public sealed record UiLayoutSetRequest(string LayoutJson);
+
+// Multi-layout shape (issue #241). Layouts are keyed per radio (board kind /
+// "default" while disconnected). Each radio holds a list of named layouts and
+// remembers which one was active.
+//
+// `Icon` is a short string (typically a single emoji) shown above the layout
+// label in the LeftLayoutBar; `Description` is a longer free-form string used
+// as the hover tooltip. Both are optional — older layouts without these
+// fields render with a letter fallback and the layout name as tooltip.
+public sealed record NamedLayoutDto(
+    string Id,
+    string Name,
+    string LayoutJson,
+    long UpdatedUtc,
+    string? Icon = null,
+    string? Description = null);
+
+public sealed record RadioLayoutsDto(string RadioKey, IReadOnlyList<NamedLayoutDto> Layouts, string ActiveLayoutId);
+
+public sealed record SaveNamedLayoutRequest(
+    string RadioKey,
+    string LayoutId,
+    string Name,
+    string LayoutJson,
+    string? Icon = null,
+    string? Description = null);
+
+public sealed record SetActiveLayoutRequest(string RadioKey, string LayoutId);
 
 // Per-band PA settings. Mirrors Thetis `PAProfile._gainValues[]` / piHPSDR
 // `band->pa_calibration` (single scalar dB per band — 9-point curve is a
@@ -309,12 +390,17 @@ public sealed record UiLayoutSetRequest(string LayoutJson);
 // N2ADR filter board on HL2 and ALEX/OC outputs on Orion-class radios; they
 // are OR'd with the board's auto-filter logic so stock HL2 filter switching
 // keeps working when the user hasn't set anything.
+//
+// AutoOcMask is informational only — the read-only N2ADR board mask the
+// firmware will OR onto OcRx/OcTx when HasN2adr is on (HL2). PUT requests
+// ignore it; the server recomputes from the connected board on the next GET.
 public sealed record PaBandSettingsDto(
     string Band,
     double PaGainDb = 0.0,
     bool DisablePa = false,
     byte OcTx = 0,
-    byte OcRx = 0);
+    byte OcRx = 0,
+    byte AutoOcMask = 0);
 
 // Globals shared across bands. PaMaxPowerWatts=0 disables the watts
 // conversion path and falls back to the legacy "drive% = raw 0-255 byte"
@@ -340,13 +426,51 @@ public sealed record PaSettingsSetRequest(
 // explicit pick ("Auto" = no override); `Connected` is what discovery found
 // on the wire ("Unknown" when nothing's connected); `Effective` is the board
 // whose defaults the PA / per-band tables seed from. Discovery wins whenever
-// a radio is actually connected — the preference is a before-connect hint.
+// a radio is actually connected **unless** `OverrideDetection` is true — the
+// preference is normally a before-connect hint, but with override it forces
+// specific board behavior even when a different board is detected.
 public sealed record RadioSelectionDto(
     string Preferred,
     string Connected,
-    string Effective);
+    string Effective,
+    bool OverrideDetection);
 
-public sealed record RadioSelectionSetRequest(string Preferred);
+public sealed record RadioSelectionSetRequest(
+    string Preferred,
+    bool? OverrideDetection);
+
+// Operator-selected variant for the 0x0A wire-byte alias family
+// (issue #218). String-typed for forward compatibility — server parses
+// against the OrionMkIIVariant enum. Empty / unknown rejected with 400.
+public sealed record RadioVariantSetRequest(string Variant);
+
+// Panadapter background settings — Mode is one of "basic" | "beam-map" |
+// "image"; Fit is one of "fit" | "fill" | "stretch". Image bytes are NOT
+// shipped in this DTO; HasImage signals whether GET /api/display-settings/image
+// will return content. Persisted server-side so the setting follows the
+// operator across browsers / devices.
+public sealed record DisplaySettingsDto(
+    string Mode,
+    string Fit,
+    bool HasImage,
+    string? ImageMime);
+
+public sealed record DisplaySettingsSetRequest(
+    string Mode,
+    string Fit);
+
+// Per-slot pin state for the classic-layout bottom row (Logbook + TX
+// Stage Meters). True = panel is pinned (full body visible). False =
+// collapsed to a chip strip below the pinned tier. Persisted server-side
+// so the layout choice follows the operator across browsers / devices,
+// same as DisplaySettings.
+public sealed record BottomPinDto(
+    bool Logbook,
+    bool TxMeters);
+
+public sealed record BottomPinSetRequest(
+    bool Logbook,
+    bool TxMeters);
 
 // ---- PureSignal request records ----
 // PsControlSetRequest = master arm (Enabled) + mode (Auto vs Single).
@@ -379,6 +503,13 @@ public sealed record PsFeedbackSourceSetRequest(PsFeedbackSource Source);
 // StateDto, DspPipelineService reads it on Tick to pick which analyzer
 // to drain. Default off; operator opt-in.
 public sealed record PsMonitorSetRequest(bool Enabled);
+
+// TX Monitor toggle (issue #106 follow-up). Engages a parallel demod of the
+// post-CFIR TX IQ so the operator hears the chain output at the actual TX
+// bandwidth profile, with or without keying. Implemented in WdspDspEngine via
+// a private RXA channel; pure operator toggle, no persistence. See StateDto
+// .TxMonitorEnabled for the discipline notes.
+public sealed record TxMonitorSetRequest(bool Enabled);
 
 // Two-tone test generator (used as PS calibration excitation but works
 // standalone too). Protocol-agnostic.

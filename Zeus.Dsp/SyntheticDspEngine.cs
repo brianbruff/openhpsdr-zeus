@@ -120,10 +120,11 @@ public sealed class SyntheticDspEngine : IDspEngine
     }
 
     public const int MinZoomLevel = 1;
-    // Cap at 16× — at AnalyzerFftSize=16384 that leaves 1024 bins after the
-    // centre clip, comfortably above typical pan widths. Beyond 16 the bin
-    // count starts crowding the pixel column count.
-    public const int MaxZoomLevel = 16;
+    // Cap at 32× — at AnalyzerFftSize=16384 that leaves 512 bins after the
+    // centre clip, below typical pan pixel widths so the trace softens at
+    // 32× but stays usable for narrow-signal hunting (CW). Bump
+    // AnalyzerFftSize to 32768 if 32× sharpness becomes a problem.
+    public const int MaxZoomLevel = 32;
 
     internal static void ValidateZoomLevel(int level)
     {
@@ -147,6 +148,11 @@ public sealed class SyntheticDspEngine : IDspEngine
     // No live radio behind the synthetic engine; a frozen −140 dBm reads as
     // "below noise floor" on the S-meter.
     public double GetRxaSignalDbm(int channelId) => -140.0;
+
+    // No WDSP RXA chain on synthetic — return the silent record so the
+    // 0x19 broadcast publishes a consistent (sentinel-shaped) frame even
+    // when the real engine isn't loaded.
+    public RxStageMeters GetRxStageMeters(int channelId) => RxStageMeters.Silent;
 
     // Synthetic has no TXA chain. SetTxMode stashes nothing, ProcessTxBlock
     // reports "no IQ produced" so TX-side callers skip ring writes. Block size
@@ -188,6 +194,19 @@ public sealed class SyntheticDspEngine : IDspEngine
         if (cfg.Bands.Length != 10)
             throw new ArgumentException($"Bands must have exactly 10 entries; got {cfg.Bands.Length}", nameof(cfg));
     }
+
+    // VST plugin-host seam — synthetic engine has no plugin chain wired and
+    // never will. Both methods return false unconditionally so callers take
+    // the bypass path and use the original buffer with zero overhead.
+    public bool ProcessRxVstChain(Span<float> audio, int frames, int sampleRateHz) => false;
+    public bool ProcessTxMicVstChain(Span<float> audio, int frames, int sampleRateHz) => false;
+
+    // TX Monitor — synthetic has no TXA / RXA, no IQ to demodulate. Toggle is
+    // a no-op; ReadTxMonitorAudio always returns 0 so the audio-broadcast
+    // path falls through to the regular RX AudioFrame.
+    public void SetTxMonitorEnabled(bool enabled) { }
+    public int ReadTxMonitorAudio(Span<float> output) => 0;
+    public bool IsTxMonitorOn => false;
 
     // Synthetic has no TX analyzer; the TX panadapter stays on the RX trace.
     // Returning false tells DspPipelineService.Tick to leave the display alone

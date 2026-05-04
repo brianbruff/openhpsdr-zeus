@@ -44,30 +44,17 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 import {
-  setLevelerMaxGain,
   setNr,
   type NbMode,
   type NrConfigDto,
   type NrMode,
 } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
-import { useTxStore } from '../state/tx-store';
 import { Slider } from './design/Slider';
 import { NrSettingsSection, type NrSettingsMode } from './nr/NrSettingsSection';
 
-// Leveler max-gain slider bounds — matches backend clamp and the HL2
-// community-recommended range. 0.5 dB steps give a useful resolution
-// without flooding the POST endpoint.
-const LVLR_MIN_DB = 0;
-const LVLR_MAX_DB = 15;
-const LVLR_STEP_DB = 0.5;
-const LVLR_DEBOUNCE_MS = 100;
-
-function quantizeLvlr(v: number): number {
-  const snapped = Math.round(v / LVLR_STEP_DB) * LVLR_STEP_DB;
-  // JS float artefacts: round to 1 decimal so "5.0" stays "5.0".
-  return Math.round(snapped * 10) / 10;
-}
+// Leveler max-gain moved to TxFilterPanel (alongside DRV/TUN/MIC) — it's
+// a TX-only stage and lives with the other TX controls now.
 
 // Mirrors NrControls.tsx — cycle order matches Thetis WDSP semantics. NR3
 // (RNNR) is intentionally skipped — see issue #79. The four modes are
@@ -89,16 +76,17 @@ function nrButtonTitle(mode: NrMode): string {
   }
 }
 
-// Only NR1 and NR2 have a tunables panel today (NR4 is silently inert
-// until the Phase 1 libwdsp rebuild ships, so its panel is suppressed).
+// NR1 / NR2 / NR4 each have a tunables panel. NR4 panel was suppressed
+// pre-#162 (libwdsp didn't export SetRXASBNR*); now that Phase 1 binaries
+// ship the symbols on linux-x64 + win-x64, the panel is reachable again.
 // Mirrors NrControls.tsx.
 function settingsModeFor(nrMode: NrMode): NrSettingsMode {
-  if (nrMode === 'Anr' || nrMode === 'Emnr') return nrMode;
+  if (nrMode === 'Anr' || nrMode === 'Emnr' || nrMode === 'Sbnr') return nrMode;
   return 'Emnr';
 }
 
 function hasNrSettings(nrMode: NrMode): boolean {
-  return nrMode === 'Anr' || nrMode === 'Emnr';
+  return nrMode === 'Anr' || nrMode === 'Emnr' || nrMode === 'Sbnr';
 }
 
 const NB_CYCLE: readonly NbMode[] = ['Off', 'Nb1', 'Nb2'];
@@ -114,59 +102,13 @@ export function DspPanel() {
   const applyState = useConnectionStore((s) => s.applyState);
   const connected = useConnectionStore((s) => s.status === 'Connected');
 
-  const levelerMaxGainDb = useTxStore((s) => s.levelerMaxGainDb);
-  const setLevelerMaxGainDb = useTxStore((s) => s.setLevelerMaxGainDb);
-
   const inflightAbort = useRef<AbortController | null>(null);
-  const lvlrInflight = useRef<AbortController | null>(null);
-  const lvlrDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lvlrLastSent = useRef<number>(levelerMaxGainDb);
-  const lvlrPrevOnError = useRef<number>(levelerMaxGainDb);
 
   useEffect(
     () => () => {
       inflightAbort.current?.abort();
-      lvlrInflight.current?.abort();
-      if (lvlrDebounce.current != null) clearTimeout(lvlrDebounce.current);
     },
     [],
-  );
-
-  const sendLvlrDebounced = useCallback(
-    (v: number) => {
-      if (lvlrDebounce.current != null) clearTimeout(lvlrDebounce.current);
-      lvlrDebounce.current = setTimeout(() => {
-        if (v === lvlrLastSent.current) return;
-        lvlrInflight.current?.abort();
-        const ac = new AbortController();
-        lvlrInflight.current = ac;
-        const prevValue = lvlrLastSent.current;
-        lvlrLastSent.current = v;
-        lvlrPrevOnError.current = prevValue;
-        setLevelerMaxGain(v, ac.signal)
-          .then((r) => {
-            if (ac.signal.aborted) return;
-            if (r.levelerMaxGainDb !== v) setLevelerMaxGainDb(r.levelerMaxGainDb);
-          })
-          .catch((err) => {
-            if (ac.signal.aborted) return;
-            if (err instanceof DOMException && err.name === 'AbortError') return;
-            // Roll back the optimistic store update on non-abort failures.
-            setLevelerMaxGainDb(lvlrPrevOnError.current);
-            lvlrLastSent.current = lvlrPrevOnError.current;
-          });
-      }, LVLR_DEBOUNCE_MS);
-    },
-    [setLevelerMaxGainDb],
-  );
-
-  const onLvlrChange = useCallback(
-    (v: number) => {
-      const q = quantizeLvlr(v);
-      setLevelerMaxGainDb(q);
-      sendLvlrDebounced(q);
-    },
-    [setLevelerMaxGainDb, sendLvlrDebounced],
   );
 
   const send = useCallback(
@@ -283,20 +225,6 @@ export function DspPanel() {
         >
           NBP
         </button>
-      </div>
-      <div
-        className="dsp-row"
-        title="How much the Leveler can boost quiet speech. +5 dB is the community-recommended starting point. Higher = more aggressive voice leveling, but can push ALC into limiting."
-      >
-        <Slider
-          label="Leveler Max Gain"
-          value={levelerMaxGainDb}
-          onChange={onLvlrChange}
-          min={LVLR_MIN_DB}
-          max={LVLR_MAX_DB}
-          formatValue={(v) => `+${v.toFixed(1)} dB`}
-          disabled={!connected}
-        />
       </div>
       {hasNrSettings(nr.nrMode) && (
         <NrSettingsSection mode={settingsModeFor(nr.nrMode)} />

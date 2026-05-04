@@ -46,15 +46,20 @@ import { useCallback, useEffect, useRef } from 'react';
 import { setMicGain } from '../api/client';
 import { useTxStore } from '../state/tx-store';
 
-// PRD FR-3 mic-gain range: 0..+20 dB. Server applies via WDSP
-// SetTXAPanelGain1(TXA, 10^(db/20)) — same linear dB curve Thetis uses in
-// audio.cs:218-224. Debounce matches DriveSlider so a drag doesn't flood
-// the endpoint; optimistic store update keeps the thumb responsive.
+// Mic-gain range: −40..+10 dB, default 0 dB (= unity, no behaviour change
+// for operators who never moved the slider). Matches Thetis's defaults at
+// console.cs:19151 / :19163 (mic_gain_min = -40, mic_gain_max = 10) so the
+// operator can attenuate a hot browser mic — getUserMedia routinely peaks
+// −10 to −15 dBFS, which over-drives WDSP TXA + ALC and prints as splatter
+// on the air. Server applies as SetTXAPanelGain1(10^(db/20)) — the same
+// linear-dB curve Thetis runs through setAudioMicGain → Audio.MicPreamp
+// (console.cs:28805-28815). Debounce matches DriveSlider so a drag doesn't
+// flood the endpoint; optimistic store update keeps the thumb responsive.
 //
 // Always enabled: the TXA panel gain persists across MOX off/on, so the
 // operator can dial in level against the live mic meter before keying.
-const MIN = 0;
-const MAX = 20;
+const MIN = -40;
+const MAX = 10;
 const DEBOUNCE_MS = 100;
 
 export function MicGainSlider() {
@@ -121,7 +126,7 @@ export function MicGainSlider() {
         style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--accent)' }}
       />
       <span className="mono" style={{ width: 52, textAlign: 'right', color: 'var(--fg-1)', fontSize: 11 }}>
-        +{Math.round(micGainDb)} dB
+        {micGainDb > 0 ? '+' : ''}{Math.round(micGainDb)} dB
       </span>
     </label>
   );

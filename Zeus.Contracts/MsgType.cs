@@ -94,4 +94,33 @@ public enum MsgType : byte
     // and the GetPSMaxTX envelope peak. Bare-payload like TxMetersV2 (no
     // 16-byte header) — same 10 Hz rate logic.
     PsMeters = 0x18,
+
+    // Server → client (RX telemetry v2). Compatible additive extension of
+    // RxMeter (0x14): carries the full set of RXA stage meters — signal
+    // peak/avg (calibrated dBm), ADC peak/avg (dBFS), AGC gain (signed dB,
+    // positive = boosting), and AGC envelope peak/avg (calibrated dBm).
+    // Bare-payload like TxMetersV2 (no 16-byte header), broadcast at the
+    // same 5 Hz cadence as RxMeter. The legacy 5-byte 0x14 frame stays in
+    // flight for older clients (e.g. SMeterLive) — 0x19 is purely additive.
+    RxMetersV2 = 0x19,
+
+    // VST plugin-host event. UTF-8 text payload carrying a small notification
+    // tag that the browser maps to a /api/plughost/state re-fetch (e.g.
+    // "snapshot", "slotEditorClosed:0", "slotStateChanged:2",
+    // "chainEnabledChanged:1", "parameterChanged:0:42:0.500000",
+    // "sidecarExited:1"). Plain string keeps the format flexible while
+    // Wave 6b figures out exactly what the UI wants to consume; the browser
+    // can split on ':' to extract slot index / value. Sent from
+    // VstHostHostedService via StreamingHub.BroadcastVstHostEvent.
+    // Originally assigned 0x19 on the VST-Experimental branch; renumbered to
+    // 0x1A on merge to release/0.6.0-alpha to resolve the collision with
+    // RxMetersV2 above.
+    VstHostEvent = 0x1A,
+
+    // Server → client (band plan changed). Broadcast when the active region
+    // changes or the operator edits the plan. Payload: [type:1][regionIdUtf8…].
+    // Frontend refetches GET /api/bands/current on receipt.
+    // Originally 0x18 on the issue-65 branch; renumbered to 0x1B on merge
+    // with develop to resolve the collision with PsMeters above.
+    BandPlanChanged = 0x1B,
 }

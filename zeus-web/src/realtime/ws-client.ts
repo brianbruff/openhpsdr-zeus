@@ -48,7 +48,11 @@ import { getAudioClient } from '../audio/audio-client';
 import { useConnectionStore, type WisdomPhase } from '../state/connection-store';
 import { useDisplayStore } from '../state/display-store';
 import { useTxStore } from '../state/tx-store';
+import { useBandPlanStore } from '../state/bandPlan';
+import { useRxMetersStore } from '../state/rx-meters-store';
+import { useVstHostStore } from '../state/vst-host-store';
 import { warnOnce } from '../util/logger';
+import { wsUrl as buildWsUrl } from '../serverUrl';
 
 const INITIAL_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 8000;
@@ -72,6 +76,15 @@ const TX_METERS_V2_BYTES = 1 + 4 * 20;
 export const MSG_TYPE_RX_METER = 0x14;
 const RX_METER_BYTES = 1 + 4;
 
+// RX meters v2 (RxMetersV2Frame, plan §1.3): 1 type byte + 7 × f32 LE = 29 B.
+// Broadcast at 5 Hz from DspPipelineService; carries SignalPk/SignalAv,
+// AdcPk/AdcAv, AgcGain (signed dB), AgcEnvPk/AgcEnvAv. Cal offset is
+// applied server-side to the dBm fields; ADC + AgcGain are board-independent.
+// 0x14 is kept on the wire in parallel for older clients and the simple
+// SMeterLive view.
+export const MSG_TYPE_RX_METERS_V2 = 0x19;
+const RX_METERS_V2_BYTES = 1 + 4 * 7;
+
 // Alert frame: 1 type byte + 1 kind byte + UTF-8 message (variable length).
 // Server emits when SWR > 2.5 sustained ≥500 ms (PRD FR-6). Kind 0 = SWR trip.
 export const MSG_TYPE_ALERT = 0x13;
@@ -89,12 +102,29 @@ const PA_TEMP_BYTES = 1 + 4;
 export const MSG_TYPE_PS_METERS = 0x18;
 const PS_METERS_BYTES = 1 + 4 + 4 + 1 + 1 + 4;
 
-// WDSP wisdom status: 1 type byte + 1 phase byte (0=idle, 1=building, 2=ready).
-// Pushed once on WS attach and again on every transition. The UI disables the
-// Connect button and pulses while phase=building so the user doesn't try to
-// talk to the radio while FFTW is still planning.
+// Band plan changed: 1 type byte + UTF-8 region ID. Server emits when region
+// changes or plan is edited. Client refetches /api/bands/current. Originally
+// 0x18 on the issue-65 branch; renumbered to 0x1B on merge with develop to
+// resolve the collision with PsMeters above.
+export const MSG_TYPE_BAND_PLAN_CHANGED = 0x1B;
+
+// WDSP wisdom status: 1 type byte + 1 phase byte (0=idle, 1=building, 2=ready)
+// + optional UTF-8 status text trailer (e.g. "Planning COMPLEX FORWARD FFT
+// size 1024"). Pushed once on WS attach and again on every transition AND
+// every per-step status change emitted by the server's wisdom_get_status()
+// poll. Splash uses the status text to show the live build sub-step.
 export const MSG_TYPE_WISDOM_STATUS = 0x15;
-const WISDOM_STATUS_BYTES = 1 + 1;
+const WISDOM_STATUS_MIN_BYTES = 1 + 1;
+
+// VST host event (issue #106 / Wave 6a). 1 type byte + UTF-8 colon-delimited
+// payload, max 256 event bytes (Zeus.Contracts/VstHostEventFrame.cs).
+// Payload tags emitted by VstHostHostedService:
+//   snapshot, slotEditorClosed:N, slotEditorResized:N:W:H,
+//   slotStateChanged:N, chainEnabledChanged:0|1,
+//   parameterChanged:N:ID:VAL, sidecarExited:CODE.
+// All routed into useVstHostStore.applyEvent which decides whether to
+// re-fetch state, patch a slot, or surface a notice.
+export const MSG_TYPE_VST_HOST_EVENT = 0x1a;
 
 // Mic uplink (client → server). Payload: 960 × f32le = 3840 bytes preceded by
 // the 1-byte type, total 3841 bytes. 960 samples = 20 ms @ 48 kHz mono.
@@ -108,9 +138,7 @@ const MIC_PCM_BYTES = 1 + MIC_PCM_SAMPLES * 4;
 let activeWs: WebSocket | null = null;
 
 function wsUrl(path: string): string {
-  if (typeof window === 'undefined') return path;
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${window.location.host}${path}`;
+  return buildWsUrl(path);
 }
 
 /**
@@ -271,8 +299,28 @@ export function startRealtime(path = '/ws'): () => void {
           useTxStore.getState().setRxDbm(dbm);
           return;
         }
+        if (peekType === MSG_TYPE_RX_METERS_V2) {
+          if (ev.data.byteLength < RX_METERS_V2_BYTES) {
+            warnOnce(
+              'ws-rx-meters-v2-short',
+              `rx meters v2 frame too short: ${ev.data.byteLength}`,
+            );
+            return;
+          }
+          const dv = new DataView(ev.data);
+          useRxMetersStore.getState().setMeters({
+            signalPk: dv.getFloat32(1, true),
+            signalAv: dv.getFloat32(5, true),
+            adcPk: dv.getFloat32(9, true),
+            adcAv: dv.getFloat32(13, true),
+            agcGain: dv.getFloat32(17, true),
+            agcEnvPk: dv.getFloat32(21, true),
+            agcEnvAv: dv.getFloat32(25, true),
+          });
+          return;
+        }
         if (peekType === MSG_TYPE_WISDOM_STATUS) {
-          if (ev.data.byteLength < WISDOM_STATUS_BYTES) {
+          if (ev.data.byteLength < WISDOM_STATUS_MIN_BYTES) {
             warnOnce(
               'ws-wisdom-short',
               `wisdom frame too short: ${ev.data.byteLength}`,
@@ -282,7 +330,27 @@ export function startRealtime(path = '/ws'): () => void {
           const raw = new DataView(ev.data).getUint8(1);
           const phase: WisdomPhase =
             raw === 1 ? 'building' : raw === 2 ? 'ready' : 'idle';
-          useConnectionStore.getState().setWisdomPhase(phase);
+          const status =
+            ev.data.byteLength > WISDOM_STATUS_MIN_BYTES
+              ? new TextDecoder('utf-8').decode(
+                  new Uint8Array(ev.data, WISDOM_STATUS_MIN_BYTES),
+                )
+              : '';
+          const store = useConnectionStore.getState();
+          store.setWisdomPhase(phase);
+          store.setWisdomStatus(status);
+          return;
+        }
+        if (peekType === MSG_TYPE_VST_HOST_EVENT) {
+          // Bytes 1..end are the UTF-8 event tag (e.g. "slotStateChanged:3").
+          // Frame may be just the type byte (empty tag); guard accordingly.
+          const tag =
+            ev.data.byteLength > 1
+              ? new TextDecoder('utf-8').decode(new Uint8Array(ev.data, 1))
+              : '';
+          if (tag.length > 0) {
+            useVstHostStore.getState().applyEvent(tag);
+          }
           return;
         }
         if (peekType === MSG_TYPE_ALERT) {
@@ -295,6 +363,10 @@ export function startRealtime(path = '/ws'): () => void {
           const msgBytes = new Uint8Array(ev.data, 2);
           const message = new TextDecoder('utf-8').decode(msgBytes);
           useTxStore.getState().setAlert({ kind, message });
+          return;
+        }
+        if (peekType === MSG_TYPE_BAND_PLAN_CHANGED) {
+          void useBandPlanStore.getState().refresh();
           return;
         }
         warnOnce(

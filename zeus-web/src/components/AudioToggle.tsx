@@ -79,10 +79,10 @@ export function AudioToggle() {
         type="button"
         onPointerUp={onClick}
         disabled={loading}
-        className={`btn tx-btn ${playing ? 'active' : ''}`}
+        className={`btn tx-btn ${!playing && !loading ? 'active' : ''}`}
         title={title}
       >
-        <span className={`led ${playing ? 'on' : ''}`} style={{ marginRight: 6 }} />
+        <span className={`led ${!playing && !loading ? 'on' : ''}`} style={{ marginRight: 6 }} />
         {label}
       </button>
       {state.kind === 'error' && (

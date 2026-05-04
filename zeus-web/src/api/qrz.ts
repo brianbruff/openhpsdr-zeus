@@ -66,6 +66,11 @@ export type QrzStatus = {
   home: QrzStation | null;
   error: string | null;
   hasApiKey: boolean;
+  // True when the backend has username+password persisted in its credential
+  // store. The backend uses these to silently re-login on startup, so this
+  // flag tells the frontend "if connected is false but I'm trying" — useful
+  // for the on-load retry probe in qrz-store.ts.
+  hasStoredCredentials: boolean;
 };
 
 function toNum(v: unknown): number | null {
@@ -103,6 +108,7 @@ function normalizeStatus(raw: unknown): QrzStatus {
     home: r.home ? normalizeStation(r.home) : null,
     error: toStr(r.error),
     hasApiKey: Boolean(r.hasApiKey),
+    hasStoredCredentials: Boolean(r.hasStoredCredentials),
   };
 }
 

@@ -267,6 +267,200 @@ internal static class PacketParser
     }
 
     /// <summary>
+    /// HL2 PureSignal-armed RX layout (nddc=2). When the host has set
+    /// <c>0x0a[22] = 1</c> and asked for 2 receivers, the gateware
+    /// interleaves DDC0 and DDC1 IQ inside the same EP6 packet:
+    /// each sample slot is 14 bytes (3I+3Q for DDC0, then 3I+3Q for DDC1,
+    /// then 2 mic bytes), giving <c>504 / 14 = 36</c> sample slots per
+    /// USB-frame and 72 paired samples per packet.
+    ///
+    /// During TX with PS armed both DDCs are programmed to the TX freq
+    /// (mi0bot networkproto1.c:990, 1005) — the operator's RX panadapter
+    /// won't update during a PS calibration window, which matches Thetis
+    /// behaviour. DDC1 carries the dedicated feedback ADC samples.
+    /// </summary>
+    public const int Hl2PsBytesPerPair = 14;          // 3I+3Q (DDC0) + 3I+3Q (DDC1) + 2 mic
+    public const int Hl2PsSamplesPerUsbFrame = UsbPayloadLength / Hl2PsBytesPerPair; // 36
+    public const int Hl2PsSamplesPerPacket = Hl2PsSamplesPerUsbFrame * 2;           // 72
+
+    /// <summary>
+    /// Decode the DDC1 (feedback) IQ samples from a PS-armed HL2 EP6 packet.
+    /// Returns true on a well-formed paired packet, false on bad magic /
+    /// length / sync.
+    ///
+    /// <paramref name="ddc0Out"/> / <paramref name="ddc1Out"/> must each
+    /// have room for at least <c>2 × <see cref="Hl2PsSamplesPerPacket"/></c>
+    /// doubles (interleaved I/Q). DDC0 is included so a future caller can
+    /// choose to feed the operator's RX panadapter from it during PS-armed
+    /// non-TX windows; today the DspPipelineService only consumes DDC1.
+    ///
+    /// Telemetry / overload extraction is omitted because PS-armed TX
+    /// windows are typically short (sub-second) and the standard
+    /// 1-DDC parse path already covers the operator's steady-state RX
+    /// telemetry. We don't want to duplicate the AIN3/AIN4 decode here
+    /// and risk drift from the canonical TryParsePacket implementation.
+    /// </summary>
+    public static bool TryParsePsPairedPacket(
+        ReadOnlySpan<byte> packet,
+        Span<double> ddc0Out,
+        Span<double> ddc1Out,
+        out uint sequence,
+        out int complexSamples)
+    {
+        sequence = 0;
+        complexSamples = 0;
+
+        if (packet.Length != PacketLength) return false;
+        if (packet[0] != MetisMagic0 || packet[1] != MetisMagic1) return false;
+        if (packet[2] != MetisTypeDataFrame) return false;
+        if (packet[3] != MetisEp6) return false;
+
+        sequence = BinaryPrimitives.ReadUInt32BigEndian(packet[4..8]);
+
+        int needed = 2 * Hl2PsSamplesPerPacket;
+        if (ddc0Out.Length < needed || ddc1Out.Length < needed) return false;
+
+        int wrote = 0;
+        for (int frame = 0; frame < 2; frame++)
+        {
+            int frameStart = MetisHeaderLength + frame * UsbFrameLength;
+            ReadOnlySpan<byte> usb = packet.Slice(frameStart, UsbFrameLength);
+            if (usb[0] != Sync || usb[1] != Sync || usb[2] != Sync) return false;
+
+            ReadOnlySpan<byte> payload = usb[UsbHeaderLength..];
+            for (int g = 0; g < Hl2PsSamplesPerUsbFrame; g++)
+            {
+                int off = g * Hl2PsBytesPerPair;
+                int i0 = ReadInt24BigEndian(payload.Slice(off,     3));
+                int q0 = ReadInt24BigEndian(payload.Slice(off + 3, 3));
+                int i1 = ReadInt24BigEndian(payload.Slice(off + 6, 3));
+                int q1 = ReadInt24BigEndian(payload.Slice(off + 9, 3));
+                // off+12, off+13 = 16-bit mic sample, ignored (HL2 has no codec).
+                ddc0Out[wrote]     = ScaleInt24(i0);
+                ddc0Out[wrote + 1] = ScaleInt24(q0);
+                ddc1Out[wrote]     = ScaleInt24(i1);
+                ddc1Out[wrote + 1] = ScaleInt24(q1);
+                wrote += 2;
+            }
+        }
+
+        complexSamples = Hl2PsSamplesPerPacket;
+        return true;
+    }
+
+    // ---- HL2 PureSignal 4-DDC layout (mi0bot canonical) -------------------
+    // mi0bot's HL2 path always uses nddc=4 during PS+MOX (console.cs:8186-
+    // 8265, networkproto1.c:WriteMainLoop_HL2 case 5/6). The EP6 packet
+    // sample-time-slot is then 26 bytes:
+    //   3I+3Q DDC0 (RX1 audio at RX freq, operator's listening)
+    //   3I+3Q DDC1 (RX2)
+    //   3I+3Q DDC2 (PS-RX feedback at TX freq, mapped to feedback ADC) → pscc rx
+    //   3I+3Q DDC3 (PS-TX reference at TX freq, mapped to feedback ADC) → pscc tx
+    //   2 bytes mic (HL2 has no codec, ignored)
+    // 504 / 26 = 19 sample slots per USB-frame; 38 paired samples per packet
+    // per DDC. cmaster.cs:8537-8538 wires psrx=2 / pstx=3 in the FOUR_DDC
+    // routing — DDC2 → pscc "rx" (Irxbuff/Qrxbuff), DDC3 → pscc "tx"
+    // (Itxbuff/Qtxbuff). DDC0 stays alive on the operator's RX freq the
+    // entire time, so the panadapter and audio don't drop during PS+TX.
+    public const int Hl2Ps4DdcBytesPerSlot = 26;        // 4 × (3I+3Q) + 2 mic
+    public const int Hl2Ps4DdcSamplesPerUsbFrame = UsbPayloadLength / Hl2Ps4DdcBytesPerSlot; // 19
+    public const int Hl2Ps4DdcSamplesPerPacket = Hl2Ps4DdcSamplesPerUsbFrame * 2;           // 38
+
+    /// <summary>
+    /// Decode the four interleaved DDC streams from an HL2 PS-armed 4-DDC
+    /// EP6 packet. Each output buffer must have room for at least
+    /// <c>2 × <see cref="Hl2Ps4DdcSamplesPerPacket"/></c> doubles
+    /// (interleaved I/Q). Returns false on bad framing.
+    ///
+    /// Telemetry (FWD/REF/PA-temp via the C&amp;C echo) and ADC-overload bits
+    /// are emitted on the same <c>usb[3..8]</c> bytes as the standard
+    /// single-DDC layout — only the payload below the 8-byte USB header
+    /// differs between the two parsers. Surfaced here because PS-armed
+    /// TUN windows are routinely held for many seconds during HL2
+    /// calibration; without this extraction the meter pipeline reads zero
+    /// throughout PS+TUN even though the radio is keying.
+    /// </summary>
+    public static bool TryParseHl2Ps4DdcPacket(
+        ReadOnlySpan<byte> packet,
+        Span<double> ddc0Out, Span<double> ddc1Out,
+        Span<double> ddc2Out, Span<double> ddc3Out,
+        out uint sequence,
+        out int complexSamples,
+        out TelemetryReading telemetry0,
+        out TelemetryReading telemetry1,
+        out byte adcOverloadBits)
+    {
+        sequence = 0;
+        complexSamples = 0;
+        telemetry0 = default;
+        telemetry1 = default;
+        adcOverloadBits = 0;
+
+        if (packet.Length != PacketLength) return false;
+        if (packet[0] != MetisMagic0 || packet[1] != MetisMagic1) return false;
+        if (packet[2] != MetisTypeDataFrame) return false;
+        if (packet[3] != MetisEp6) return false;
+
+        sequence = BinaryPrimitives.ReadUInt32BigEndian(packet[4..8]);
+
+        int needed = 2 * Hl2Ps4DdcSamplesPerPacket;
+        if (ddc0Out.Length < needed || ddc1Out.Length < needed) return false;
+        if (ddc2Out.Length < needed || ddc3Out.Length < needed) return false;
+
+        int wrote = 0;
+        for (int frame = 0; frame < 2; frame++)
+        {
+            int frameStart = MetisHeaderLength + frame * UsbFrameLength;
+            ReadOnlySpan<byte> usb = packet.Slice(frameStart, UsbFrameLength);
+            if (usb[0] != Sync || usb[1] != Sync || usb[2] != Sync) return false;
+
+            // Same C&C echo extraction as the standard 1-DDC parser
+            // (TryParsePacket, line ~219). usb[3..8] is identical wire
+            // format; only the payload below differs by layout.
+            byte c0 = usb[3];
+            int addr = (c0 >> 3) & 0x1F;
+            if (addr is 1 or 2 or 3)
+            {
+                var reading = new TelemetryReading(
+                    C0Address: c0,
+                    Ain0: BinaryPrimitives.ReadUInt16BigEndian(usb.Slice(4, 2)),
+                    Ain1: BinaryPrimitives.ReadUInt16BigEndian(usb.Slice(6, 2)));
+                if (frame == 0) telemetry0 = reading;
+                else telemetry1 = reading;
+            }
+            adcOverloadBits |= (byte)(usb[4] & 0x01);
+            adcOverloadBits |= (byte)((usb[5] & 0x01) << 1);
+
+            ReadOnlySpan<byte> payload = usb[UsbHeaderLength..];
+            for (int g = 0; g < Hl2Ps4DdcSamplesPerUsbFrame; g++)
+            {
+                int off = g * Hl2Ps4DdcBytesPerSlot;
+                int i0 = ReadInt24BigEndian(payload.Slice(off,      3));
+                int q0 = ReadInt24BigEndian(payload.Slice(off + 3,  3));
+                int i1 = ReadInt24BigEndian(payload.Slice(off + 6,  3));
+                int q1 = ReadInt24BigEndian(payload.Slice(off + 9,  3));
+                int i2 = ReadInt24BigEndian(payload.Slice(off + 12, 3));
+                int q2 = ReadInt24BigEndian(payload.Slice(off + 15, 3));
+                int i3 = ReadInt24BigEndian(payload.Slice(off + 18, 3));
+                int q3 = ReadInt24BigEndian(payload.Slice(off + 21, 3));
+                // off+24, off+25 = mic (ignored).
+                ddc0Out[wrote]     = ScaleInt24(i0);
+                ddc0Out[wrote + 1] = ScaleInt24(q0);
+                ddc1Out[wrote]     = ScaleInt24(i1);
+                ddc1Out[wrote + 1] = ScaleInt24(q1);
+                ddc2Out[wrote]     = ScaleInt24(i2);
+                ddc2Out[wrote + 1] = ScaleInt24(q2);
+                ddc3Out[wrote]     = ScaleInt24(i3);
+                ddc3Out[wrote + 1] = ScaleInt24(q3);
+                wrote += 2;
+            }
+        }
+
+        complexSamples = Hl2Ps4DdcSamplesPerPacket;
+        return true;
+    }
+
+    /// <summary>
     /// Sequence gap counter state; zero-initialized.
     /// </summary>
     public struct SequenceTracker

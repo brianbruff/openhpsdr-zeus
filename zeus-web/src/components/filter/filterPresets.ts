@@ -143,6 +143,22 @@ export function getPresetsForMode(mode: RxMode): readonly FilterPresetSlot[] {
   return PRESET_MAP[mode] ?? USB;
 }
 
+// Per-mode favorite-slot defaults. Mirrors FilterPresetStore.GetFavoriteSlots
+// on the server so the client can render correct defaults synchronously,
+// before the /api/filter/favorites round-trip resolves. Without this, every
+// first paint shows the ascending ['F4','F5','F6'] generic fallback even
+// though USB/LSB really default to ['F6','F5','F4'] (descending = ascending
+// passband width).
+export function defaultFavoritesForMode(mode: RxMode): readonly string[] {
+  switch (mode) {
+    case 'USB': case 'LSB': case 'DIGL': case 'DIGU': return ['F6', 'F5', 'F4'];
+    case 'CWU': case 'CWL': return ['F4', 'F5', 'F6'];
+    case 'AM':  case 'SAM': return ['F7', 'F8', 'F9'];
+    case 'DSB': return ['F6', 'F7', 'F8'];
+    case 'FM':  return ['F6', 'F5', 'F4'];
+  }
+}
+
 export function formatFilterWidth(lowHz: number, highHz: number): string {
   const width = Math.abs(highHz - lowHz);
   if (width >= 1000) {

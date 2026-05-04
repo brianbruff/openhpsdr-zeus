@@ -147,10 +147,12 @@ describe('normalizeState', () => {
     expect(normalizeState({ zoomLevel: 3 }).zoomLevel).toBe(3);
     expect(normalizeState({ zoomLevel: 4 }).zoomLevel).toBe(4);
     expect(normalizeState({ zoomLevel: 8 }).zoomLevel).toBe(8);
+    expect(normalizeState({ zoomLevel: 16 }).zoomLevel).toBe(16);
+    expect(normalizeState({ zoomLevel: 32 }).zoomLevel).toBe(32);
   });
   it('clamps out-of-range zoomLevel to 1', () => {
     expect(normalizeState({ zoomLevel: 0 }).zoomLevel).toBe(1);
-    expect(normalizeState({ zoomLevel: 9 }).zoomLevel).toBe(1);
+    expect(normalizeState({ zoomLevel: 33 }).zoomLevel).toBe(1);
     expect(normalizeState({ zoomLevel: 1.5 }).zoomLevel).toBe(1);
     expect(normalizeState({ zoomLevel: 'lots' }).zoomLevel).toBe(1);
   });

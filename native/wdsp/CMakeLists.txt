@@ -10,13 +10,14 @@
 # wdsp_export.h) so every upstream __declspec(dllexport) resolves to the right
 # platform-specific visibility attribute.
 #
-# FFTW3 (double precision) is required. Single-precision fftw3f is NOT used on
-# the RX call path WDSP-1.29 takes (verified: no fftwf_* references in the
-# upstream sources), so we link fftw3 only.
+# FFTW3 (double precision) is required for WDSP itself.
+# FFTW3f (single precision) is additionally required when WDSP_WITH_NR4=ON
+# because libspecbleach is single-precision.
 #
-# NR3 (RNNoise) and NR4 (libspecbleach) are off for MVP: we compile
-# stubs/rnnr_stub.c and stubs/sbnr_stub.c in place of rnnr.c/sbnr.c. Enable via
-# -DWDSP_WITH_NR3_NR4=ON once those deps are vendored.
+# NR3 (RNNoise) and NR4 (libspecbleach / SBNR) are gated by separate flags:
+#   * WDSP_WITH_NR3 — OFF by default. librnnoise is not yet vendored.
+#   * WDSP_WITH_NR4 — ON  by default. libspecbleach is vendored under
+#                    native/libspecbleach/ (see Phase 1a of #162).
 
 cmake_minimum_required(VERSION 3.20)
 project(wdsp
@@ -25,7 +26,8 @@ project(wdsp
     LANGUAGES C
 )
 
-option(WDSP_WITH_NR3_NR4 "Build with RNNoise (NR3) and libspecbleach (NR4) support" OFF)
+option(WDSP_WITH_NR3 "Build with RNNoise (NR3) support — requires librnnoise (not yet vendored)" OFF)
+option(WDSP_WITH_NR4 "Build with libspecbleach (NR4 / SBNR) support — vendored under native/libspecbleach/" ON)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_VISIBILITY_PRESET hidden)
@@ -37,7 +39,7 @@ endif()
 
 # -----------------------------------------------------------------------------
 # Source list (mirrors upstream WDSP 1.29 Makefile SOURCES, minus rnnr.c and
-# sbnr.c which are replaced by stubs when WDSP_WITH_NR3_NR4=OFF).
+# sbnr.c which are gated below per-flag).
 # -----------------------------------------------------------------------------
 set(WDSP_SOURCES
     amd.c ammod.c amsq.c analyzer.c anf.c anr.c apfshadow.c bandpass.c
@@ -50,10 +52,18 @@ set(WDSP_SOURCES
     syncbuffs.c TXA.c utilities.c varsamp.c version.c wcpAGC.c wisdom.c zetaHat.c
 )
 
-if(WDSP_WITH_NR3_NR4)
-    list(APPEND WDSP_SOURCES rnnr.c sbnr.c)
+# NR3 — RNNoise gate.
+if(WDSP_WITH_NR3)
+    list(APPEND WDSP_SOURCES rnnr.c)
 else()
-    list(APPEND WDSP_SOURCES stubs/rnnr_stub.c stubs/sbnr_stub.c)
+    list(APPEND WDSP_SOURCES stubs/nr3/rnnr_stub.c)
+endif()
+
+# NR4 — libspecbleach (SBNR) gate.
+if(WDSP_WITH_NR4)
+    list(APPEND WDSP_SOURCES sbnr.c)
+else()
+    list(APPEND WDSP_SOURCES stubs/nr4/sbnr_stub.c)
 endif()
 
 add_library(wdsp SHARED ${WDSP_SOURCES})
@@ -63,10 +73,15 @@ target_include_directories(wdsp
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-# Stub headers satisfy #include "rnnoise.h" and <specbleach_adenoiser.h> in
-# rnnr.h / sbnr.h when the real NR3/NR4 libraries are absent.
-if(NOT WDSP_WITH_NR3_NR4)
-    target_include_directories(wdsp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs)
+# Stubs are kept in per-NR subdirs (stubs/nr3/, stubs/nr4/) so we only add the
+# stub include path that matches the OFF flag — otherwise the libspecbleach
+# include path that comes via target_link_libraries(wdsp PRIVATE specbleach)
+# below would collide with stubs/specbleach_adenoiser.h.
+if(NOT WDSP_WITH_NR3)
+    target_include_directories(wdsp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs/nr3)
+endif()
+if(NOT WDSP_WITH_NR4)
+    target_include_directories(wdsp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs/nr4)
 endif()
 
 # -----------------------------------------------------------------------------
@@ -93,7 +108,7 @@ else()
 endif()
 
 # -----------------------------------------------------------------------------
-# FFTW3 (double precision)
+# FFTW3 (double precision) — required for WDSP core
 # -----------------------------------------------------------------------------
 find_package(PkgConfig QUIET)
 set(_fftw_found FALSE)
@@ -109,7 +124,8 @@ if(PkgConfig_FOUND)
 endif()
 
 # vcpkg / CMake CONFIG mode — used when the vcpkg toolchain is active (Windows)
-# or any platform where FFTW3 ships a CMake config package.
+# or any platform where FFTW3 ships a CMake config package. This call also makes
+# FFTW3::fftw3f available below for the libspecbleach build.
 if(NOT _fftw_found)
     find_package(FFTW3 CONFIG QUIET)
     if(FFTW3_FOUND)
@@ -138,6 +154,107 @@ if(NOT _fftw_found)
 endif()
 
 # -----------------------------------------------------------------------------
+# libspecbleach (NR4 / SBNR) — vendored at native/libspecbleach/, built inline
+# as a STATIC sub-target so it embeds into libwdsp without a separate runtime
+# library to ship.
+#
+# Thetis's libspecbleach/CMakeLists.txt is Windows-only (hardcoded fftw_x64
+# path, find_library lookup for the import .lib). We don't use it here — Zeus
+# drives the build directly so we get cross-platform behaviour with one
+# detection chain. Thetis's CMakeLists stays in-tree as upstream reference.
+# -----------------------------------------------------------------------------
+if(WDSP_WITH_NR4)
+    set(LIBSPECBLEACH_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../libspecbleach)
+    if(NOT EXISTS ${LIBSPECBLEACH_DIR}/include/specbleach_adenoiser.h)
+        message(FATAL_ERROR "WDSP_WITH_NR4=ON but native/libspecbleach/ is missing or incomplete. See native/libspecbleach/VENDORING.md.")
+    endif()
+
+    file(GLOB_RECURSE SPECBLEACH_SRCS
+        "${LIBSPECBLEACH_DIR}/src/*.c"
+    )
+    add_library(specbleach STATIC ${SPECBLEACH_SRCS})
+    set_target_properties(specbleach PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+        C_VISIBILITY_PRESET hidden
+        C_STANDARD 99
+    )
+    target_include_directories(specbleach
+        PUBLIC ${LIBSPECBLEACH_DIR}/include
+        PRIVATE ${LIBSPECBLEACH_DIR}/src
+    )
+    if(MSVC OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        target_compile_definitions(specbleach PRIVATE _USE_MATH_DEFINES)
+    endif()
+    if(NOT MSVC)
+        # Quiet upstream-style warnings from libspecbleach so they don't churn
+        # the build log; we don't own this source so we don't fix them.
+        target_compile_options(specbleach PRIVATE
+            -Wno-unused-variable -Wno-unused-function -Wno-unused-but-set-variable
+            -Wno-incompatible-pointer-types -Wno-implicit-function-declaration
+        )
+    endif()
+
+    # FFTW3f detection — prefers the FFTW3::fftw3f target the FFTW3 CONFIG
+    # package above already exposes (vcpkg path), falls back to pkg-config
+    # for system-package installs (Linux), and finally Homebrew on macOS.
+    set(_fftw3f_found FALSE)
+    if(TARGET FFTW3::fftw3f)
+        target_link_libraries(specbleach PRIVATE FFTW3::fftw3f)
+        set(_fftw3f_found TRUE)
+        message(STATUS "FFTW3f found via FFTW3 CONFIG package (vcpkg)")
+    endif()
+
+    if(NOT _fftw3f_found AND PkgConfig_FOUND)
+        pkg_check_modules(FFTW3F QUIET fftw3f)
+        if(FFTW3F_FOUND)
+            target_include_directories(specbleach PRIVATE ${FFTW3F_INCLUDE_DIRS})
+            target_link_libraries(specbleach PRIVATE ${FFTW3F_LIBRARIES})
+            target_link_directories(specbleach PRIVATE ${FFTW3F_LIBRARY_DIRS})
+            set(_fftw3f_found TRUE)
+            message(STATUS "FFTW3f found via pkg-config")
+        endif()
+    endif()
+
+    # vcpkg fallback: vcpkg's FFTW3Config.cmake exposes only FFTW3::fftw3
+    # (double precision) even though its fftw3 port builds fftw3f.lib
+    # alongside. Find the single-precision library file directly — the
+    # vcpkg toolchain has already augmented CMake's library search paths
+    # to cover the installed tree. fftw3.h is the same header for all
+    # three precisions, so we re-link FFTW3::fftw3 just to inherit its
+    # INTERFACE_INCLUDE_DIRECTORIES.
+    if(NOT _fftw3f_found)
+        find_library(FFTW3F_LIBRARY NAMES fftw3f libfftw3f-3 libfftw3f)
+        if(FFTW3F_LIBRARY)
+            target_link_libraries(specbleach PRIVATE ${FFTW3F_LIBRARY})
+            if(TARGET FFTW3::fftw3)
+                target_link_libraries(specbleach PRIVATE FFTW3::fftw3)
+            endif()
+            set(_fftw3f_found TRUE)
+            message(STATUS "FFTW3f found via find_library: ${FFTW3F_LIBRARY}")
+        endif()
+    endif()
+
+    if(NOT _fftw3f_found AND APPLE)
+        foreach(_prefix /opt/homebrew/opt/fftw /usr/local/opt/fftw)
+            if(EXISTS ${_prefix}/include/fftw3.h)
+                target_include_directories(specbleach PRIVATE ${_prefix}/include)
+                target_link_directories(specbleach PRIVATE ${_prefix}/lib)
+                target_link_libraries(specbleach PRIVATE fftw3f)
+                set(_fftw3f_found TRUE)
+                message(STATUS "FFTW3f found via Homebrew prefix: ${_prefix}")
+                break()
+            endif()
+        endforeach()
+    endif()
+
+    if(NOT _fftw3f_found)
+        message(FATAL_ERROR "FFTW3f (single-precision) not found, required by libspecbleach for NR4. Install with: brew install fftw (macOS, includes fftw3f) | apt install libfftw3-dev (Linux, ditto) | vcpkg install fftw3 (Windows). To build without NR4, configure with -DWDSP_WITH_NR4=OFF.")
+    endif()
+
+    target_link_libraries(wdsp PRIVATE specbleach)
+endif()
+
+# -----------------------------------------------------------------------------
 # Windows system libraries: main.c calls AvSetMmThreadCharacteristics /
 # AvSetMmThreadPriority / AvRevertMmThreadCharacteristics (Multimedia Class
 # Scheduler "Pro Audio") which live in avrt.lib. Thetis's wdsp.vcxproj does
@@ -162,4 +279,5 @@ if(WIN32)
 endif()
 
 message(STATUS "wdsp: build type = ${CMAKE_BUILD_TYPE}")
-message(STATUS "wdsp: NR3/NR4 enabled = ${WDSP_WITH_NR3_NR4}")
+message(STATUS "wdsp: NR3 (RNNoise) enabled = ${WDSP_WITH_NR3}")
+message(STATUS "wdsp: NR4 (libspecbleach / SBNR) enabled = ${WDSP_WITH_NR4}")

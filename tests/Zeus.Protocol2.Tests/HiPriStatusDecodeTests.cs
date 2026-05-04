@@ -1,0 +1,150 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF),
+//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//
+// See ATTRIBUTIONS.md at the repository root for the full provenance
+// statement and per-component attribution.
+
+using Xunit;
+
+namespace Zeus.Protocol2.Tests;
+
+/// <summary>
+/// Wire-format tests for the Protocol-2 hi-priority status packet
+/// (radio → host on UDP 1025). Field offsets sourced from Thetis
+/// <c>ChannelMaster/network.c:683-756</c>:
+///
+/// <list type="bullet">
+///   <item>byte 0 — bit 0 PTT, bit 1 Dot, bit 2 Dash, bit 4 PLL locked</item>
+///   <item>bytes 2..3 — exciter power ADC (BE u16)</item>
+///   <item>bytes 10..11 — PA forward power ADC (BE u16)</item>
+///   <item>bytes 18..19 — PA reverse power ADC (BE u16)</item>
+/// </list>
+///
+/// Issue #174 — without these offsets being honoured, the operator-facing
+/// TX power meter on a P2-connected G2 / Orion / ANAN sat at zero.
+/// </summary>
+public class HiPriStatusDecodeTests
+{
+    /// <summary>Build a fresh 60-byte hi-pri status payload zeroed.</summary>
+    private static byte[] EmptyPacket() => new byte[60];
+
+    /// <summary>Write a u16 big-endian into the buffer.</summary>
+    private static void WriteBeU16(byte[] buf, int offset, ushort value)
+    {
+        buf[offset]     = (byte)(value >> 8);
+        buf[offset + 1] = (byte)(value & 0xFF);
+    }
+
+    [Fact]
+    public void Decode_Zeros_AllFieldsZero()
+    {
+        var buf = EmptyPacket();
+        var r = Protocol2Client.DecodeHiPriStatus(buf);
+        Assert.Equal(0, r.FwdAdc);
+        Assert.Equal(0, r.RevAdc);
+        Assert.Equal(0, r.ExciterAdc);
+        Assert.False(r.PttIn);
+        Assert.False(r.PllLocked);
+    }
+
+    [Fact]
+    public void Decode_FwdPower_AtBytes10And11_BigEndian()
+    {
+        var buf = EmptyPacket();
+        WriteBeU16(buf, 10, 0x1234);
+        var r = Protocol2Client.DecodeHiPriStatus(buf);
+        Assert.Equal(0x1234, r.FwdAdc);
+        // No bleed into the other axes.
+        Assert.Equal(0, r.RevAdc);
+        Assert.Equal(0, r.ExciterAdc);
+    }
+
+    [Fact]
+    public void Decode_RevPower_AtBytes18And19_BigEndian()
+    {
+        var buf = EmptyPacket();
+        WriteBeU16(buf, 18, 0xBEEF);
+        var r = Protocol2Client.DecodeHiPriStatus(buf);
+        Assert.Equal(0xBEEF, r.RevAdc);
+        Assert.Equal(0, r.FwdAdc);
+        Assert.Equal(0, r.ExciterAdc);
+    }
+
+    [Fact]
+    public void Decode_ExciterPower_AtBytes2And3_BigEndian()
+    {
+        var buf = EmptyPacket();
+        WriteBeU16(buf, 2, 0xCAFE);
+        var r = Protocol2Client.DecodeHiPriStatus(buf);
+        Assert.Equal(0xCAFE, r.ExciterAdc);
+        Assert.Equal(0, r.FwdAdc);
+        Assert.Equal(0, r.RevAdc);
+    }
+
+    [Fact]
+    public void Decode_PttIn_FromByte0Bit0()
+    {
+        var buf = EmptyPacket();
+        buf[0] = 0x01;
+        var r = Protocol2Client.DecodeHiPriStatus(buf);
+        Assert.True(r.PttIn);
+        Assert.False(r.PllLocked);
+    }
+
+    [Fact]
+    public void Decode_PllLocked_FromByte0Bit4()
+    {
+        var buf = EmptyPacket();
+        buf[0] = 0x10;
+        var r = Protocol2Client.DecodeHiPriStatus(buf);
+        Assert.False(r.PttIn);
+        Assert.True(r.PllLocked);
+    }
+
+    [Fact]
+    public void Decode_FullPacket_AllFieldsIndependent()
+    {
+        // Realistic dual-set: PTT in, PLL locked, FWD reading mid-scale,
+        // REV near-zero (matched antenna), exciter at 12-bit max.
+        var buf = EmptyPacket();
+        buf[0] = 0x11; // PTT + PLL
+        WriteBeU16(buf, 2, 0x0FFF);   // exciter: 12-bit full scale
+        WriteBeU16(buf, 10, 0x0800);  // FWD: 2048 / 4095
+        WriteBeU16(buf, 18, 0x0040);  // REV: small
+        var r = Protocol2Client.DecodeHiPriStatus(buf);
+        Assert.True(r.PttIn);
+        Assert.True(r.PllLocked);
+        Assert.Equal(0x0FFF, r.ExciterAdc);
+        Assert.Equal(0x0800, r.FwdAdc);
+        Assert.Equal(0x0040, r.RevAdc);
+    }
+
+    [Fact]
+    public void Decode_DotAndDashBits_DoNotLeakIntoPllOrPtt()
+    {
+        // Byte 0 with Dot (bit 1) + Dash (bit 2) only — neither PTT nor PLL.
+        var buf = EmptyPacket();
+        buf[0] = 0x06;
+        var r = Protocol2Client.DecodeHiPriStatus(buf);
+        Assert.False(r.PttIn);
+        Assert.False(r.PllLocked);
+    }
+
+    [Fact]
+    public void Decode_AcceptsLongerPayload()
+    {
+        // Some firmwares pad the packet to a longer length. The decoder
+        // must read only the first 20 bytes; the tail is irrelevant.
+        var buf = new byte[256];
+        WriteBeU16(buf, 10, 0xABCD);
+        WriteBeU16(buf, 18, 0x1357);
+        // Trailing garbage shouldn't influence the readout.
+        for (int i = 20; i < buf.Length; i++) buf[i] = 0xFF;
+        var r = Protocol2Client.DecodeHiPriStatus(buf);
+        Assert.Equal(0xABCD, r.FwdAdc);
+        Assert.Equal(0x1357, r.RevAdc);
+    }
+}

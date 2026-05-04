@@ -10,6 +10,12 @@
   <ItemGroup>
     <ProjectReference Include="..\Zeus.Contracts\Zeus.Contracts.csproj" />
     <InternalsVisibleTo Include="Zeus.Dsp.Tests" />
+    <!-- Wave 6a: VstHostHostedService installs the seam handler / flag on
+         WdspDspEngine via the SetVstChainHandler / SetVstChainEnabled
+         internals. Keeping those non-public on the IDspEngine surface
+         means the host-integration code lives one layer up but still has
+         direct access. -->
+    <InternalsVisibleTo Include="Zeus.Server.Hosting" />
   </ItemGroup>
 
   <ItemGroup>
@@ -21,7 +27,9 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>runtimes/%(RecursiveDir)%(Filename)%(Extension)</Link>
     </None>
-    <None Include="runtimes/**/*.so" Pack="true" PackagePath="runtimes/">
+    <!-- *.so* (not *.so) so SONAME-versioned bundled deps like
+         libfftw3.so.3 / libfftw3f.so.3 are picked up alongside libwdsp.so. -->
+    <None Include="runtimes/**/*.so*" Pack="true" PackagePath="runtimes/">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>runtimes/%(RecursiveDir)%(Filename)%(Extension)</Link>
     </None>

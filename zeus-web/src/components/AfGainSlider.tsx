@@ -84,7 +84,28 @@ export function AfGainSlider() {
     [applyState],
   );
 
-  useEffect(() => () => inflightAbort.current?.abort(), []);
+  // Debounced send while dragging — 100ms is fast enough to feel immediate
+  // but prevents excessive API calls during a quick slider sweep.
+  const debounceTimer = useRef<number | null>(null);
+  const sendDebounced = useCallback(
+    (v: number) => {
+      if (debounceTimer.current !== null) {
+        clearTimeout(debounceTimer.current);
+      }
+      debounceTimer.current = window.setTimeout(() => {
+        sendValue(v);
+        debounceTimer.current = null;
+      }, 100);
+    },
+    [sendValue],
+  );
+
+  useEffect(() => () => {
+    inflightAbort.current?.abort();
+    if (debounceTimer.current !== null) {
+      clearTimeout(debounceTimer.current);
+    }
+  }, []);
 
   return (
     <label className="knob-group" style={{ minWidth: 170 }}>
@@ -96,17 +117,39 @@ export function AfGainSlider() {
         step={1}
         value={value}
         disabled={!connected}
-        onChange={(e) => setDragValue(Number(e.currentTarget.value))}
+        onChange={(e) => {
+          const newValue = Number(e.currentTarget.value);
+          setDragValue(newValue);
+          sendDebounced(newValue);
+        }}
         onMouseUp={() => {
-          if (dragValue !== null) sendValue(dragValue);
+          if (dragValue !== null) {
+            if (debounceTimer.current !== null) {
+              clearTimeout(debounceTimer.current);
+              debounceTimer.current = null;
+            }
+            sendValue(dragValue);
+          }
           setDragValue(null);
         }}
         onTouchEnd={() => {
-          if (dragValue !== null) sendValue(dragValue);
+          if (dragValue !== null) {
+            if (debounceTimer.current !== null) {
+              clearTimeout(debounceTimer.current);
+              debounceTimer.current = null;
+            }
+            sendValue(dragValue);
+          }
           setDragValue(null);
         }}
         onKeyUp={() => {
-          if (dragValue !== null) sendValue(dragValue);
+          if (dragValue !== null) {
+            if (debounceTimer.current !== null) {
+              clearTimeout(debounceTimer.current);
+              debounceTimer.current = null;
+            }
+            sendValue(dragValue);
+          }
           setDragValue(null);
         }}
         style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--accent)' }}

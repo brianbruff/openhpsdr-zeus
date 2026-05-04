@@ -107,16 +107,39 @@ cat > "${APP_BUNDLE}/Contents/MacOS/launch.sh" << 'EOF'
 #!/bin/bash
 cd "$(dirname "$0")"
 
-./Zeus.Server &
-SERVER_PID=$!
+# Pin the bundled libwdsp.dylib so an older copy in /usr/local/lib or
+# /opt/homebrew/lib (e.g. from a piHPSDR / DeskHPSDR install) cannot
+# shadow it. macOS dlopen does not search the executable's directory by
+# default, so without this line P/Invoke can bind against a stale dylib
+# that pre-dates symbols Zeus relies on (e.g. SetRXAEMNRpost2*). Both
+# arches are listed so the same launcher works on arm64 and x64 builds;
+# the loader silently skips a path that does not exist.
+export DYLD_LIBRARY_PATH="$(pwd)/runtimes/osx-arm64/native:$(pwd)/runtimes/osx-x64/native:${DYLD_LIBRARY_PATH}"
 
 # Cmd-Q from the Dock sends SIGTERM here — propagate it to the backend
-# so we don't leave Zeus.Server orphaned on port 6060.
+# so we don't leave Zeus.Server orphaned on port 6060. Set up the trap
+# BEFORE launching the server to ensure we catch early termination.
 cleanup() {
-    kill -TERM "$SERVER_PID" 2>/dev/null || true
-    wait "$SERVER_PID" 2>/dev/null || true
+    if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
+        kill -TERM "$SERVER_PID" 2>/dev/null || true
+        # Wait up to 5 seconds for graceful shutdown
+        for i in $(seq 1 10); do
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+                break
+            fi
+            sleep 0.5
+        done
+        # Force kill if still running
+        if kill -0 "$SERVER_PID" 2>/dev/null; then
+            kill -KILL "$SERVER_PID" 2>/dev/null || true
+        fi
+        wait "$SERVER_PID" 2>/dev/null || true
+    fi
 }
 trap cleanup EXIT INT TERM
+
+./Zeus.Server &
+SERVER_PID=$!
 
 # Wait up to ~30s for the HTTP listener. First-run WDSP wisdom takes 1–3
 # minutes, but the HTTP server binds before wisdom planning starts, so the

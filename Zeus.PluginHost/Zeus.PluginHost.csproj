@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <!--
+    Phase 1 keeps the dependency footprint to a single package:
+    Microsoft.Extensions.DependencyInjection.Abstractions, used solely by
+    the AddZeusPluginHost extension method that the seam-wiring branch
+    will eventually call from Zeus.Server/Program.cs. Logging uses the
+    in-house IPluginHostLog shim rather than
+    Microsoft.Extensions.Logging.Abstractions, and the control-channel
+    payload is a raw byte[] today — CBOR encoding lands in Phase 2 and
+    will then pull in either PeterO.Cbor or System.Formats.Cbor.
+  -->
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
+  </ItemGroup>
+
+</Project>

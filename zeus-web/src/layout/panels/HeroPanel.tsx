@@ -64,6 +64,10 @@ function useDisplayHzPerPixel(): string {
 export function HeroPanel() {
   const {
     terminatorActive,
+    imageMode,
+    bgActive,
+    backgroundImage,
+    backgroundImageFit,
     moxOn,
     tunOn,
     contact,
@@ -96,7 +100,7 @@ export function HeroPanel() {
 
   return (
     <div
-      className={`panel hero ${terminatorActive ? 'qrz-mode' : ''} ${mapInteractive ? 'map-mode' : ''}`}
+      className={`panel hero ${bgActive ? 'bg-active' : ''} ${mapInteractive ? 'map-mode' : ''}`}
       style={{ display: 'flex', flexDirection: 'column', height: '100%' }}
     >
       <div className="panel-head">
@@ -162,6 +166,12 @@ export function HeroPanel() {
         </span>
       </div>
       <div className="panel-body hero-body" style={{ flex: 1, position: 'relative' }}>
+        {imageMode && (
+          <div
+            className={`image-layer ${backgroundImageFit}`}
+            style={{ backgroundImage: `url(${backgroundImage})` }}
+          />
+        )}
         <div className={`map-layer ${terminatorActive ? 'visible' : ''}`}>
           <LeafletMapErrorBoundary
             onError={(error) => {
@@ -209,7 +219,7 @@ export function HeroPanel() {
           }}
         >
           {connected && <Panadapter />}
-          {connected && <Waterfall transparent={terminatorActive} />}
+          {connected && <Waterfall transparent={bgActive} />}
         </div>
       </div>
     </div>

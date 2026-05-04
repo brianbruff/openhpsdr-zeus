@@ -37,13 +37,22 @@ Before touching DSP, protocol, or layout code, skim these — they have bitten u
 
 ## Radio-Specific Behaviour — use the abstractions
 
-Zeus supports several HPSDR radios on one codebase (Hermes, HL2, ANAN-10/100/100D/200D, Orion, G2 MkII). The same protocol wire format does NOT mean identical behaviour — different boards honour different fields, use different drive-byte resolutions, and publish different PA gains. **Go through the existing per-board abstractions. Do not hard-code board-agnostic math in the drive / PA / TX path.**
+Zeus supports the full MW0LGE Thetis board lineup on one codebase — Metis (original HPSDR Mercury+Penelope+Metis) / Hermes / HermesII / ANAN-10/10E/100/100B/100D/200D / OrionMkII (the 0x0A wire-byte alias family covering G2 / G2 MkII / G2-1K / 7000DLE / 8000DLE / Apache OrionMkII original / ANVELINA-PRO3 / Red Pitaya) / HermesC10 (ANAN-G2E) / Hermes-Lite 2. The same protocol wire format does NOT mean identical behaviour — different boards honour different fields, use different drive-byte resolutions, and publish different PA gains. **Go through the existing per-board abstractions. Do not hard-code board-agnostic math in the drive / PA / TX path.**
 
-Extant seams:
+Reference docs (read before touching radio code):
 
-- **`Zeus.Server/RadioDriveProfile.cs`** — `IRadioDriveProfile.EncodeDriveByte(...)`. HL2 quantises to its 4-bit drive register here; every other board uses the 8-bit default. **Add new board quirks by implementing `IRadioDriveProfile` and extending `RadioDriveProfiles.For(...)` — do not special-case inside `RecomputePaAndPush`.**
-- **`Zeus.Server/PaDefaults.cs`** — per-board PA-gain and rated-watts seeds, dispatched on `HpsdrBoardKind`. New boards slot in at the `TableFor` switch.
-- **`RadioService.ConnectedBoardKind`** — the authoritative "what am I talking to?" for everything downstream.
+- **`docs/references/protocol-1/thetis-board-matrix.md`** — every board MW0LGE supports, per-board init fingerprint (RX-ADC count / MKII BPF / ADC supply / LR audio swap), volts/amps presence, PA-gain bracket, calibration constants. The cross-reference table at the bottom maps every Thetis surface to the Zeus seam that owns it.
+- **`docs/designs/radio-support-plan.md`** — six-phase implementation log; landing SHAs + the canonical naming / default decisions taken during issue #218.
+
+Extant seams (post-#218):
+
+- **`Zeus.Contracts/HpsdrBoardKind.cs`** — single canonical enum across both Protocol 1 and Protocol 2 (P1/P2 split was unified in Phase 4). Wire-byte values stable; serialised as bytes in `zeus-prefs.db`.
+- **`Zeus.Server.Hosting/RadioDriveProfile.cs`** — `IRadioDriveProfile.EncodeDriveByte(...)`. HL2 quantises to its 4-bit drive register here; every other board uses the 8-bit default. **Add new board quirks by implementing `IRadioDriveProfile` and extending `RadioDriveProfiles.For(...)` — do not special-case inside `RecomputePaAndPush`.**
+- **`Zeus.Server.Hosting/PaDefaults.cs`** — per-board PA-gain and rated-watts seeds. Variant-aware overload (`OrionMkIIVariant`) routes the 0x0A family. New boards slot in at the `TableFor` switch.
+- **`Zeus.Server.Hosting/RadioCalibrations.cs`** — per-board TX forward-power calibration buckets (`bridge_volt` / `ref_voltage` / `adc_cal_offset` / `MaxWatts`). Variant-aware overload picks 8000DLE / Apache-OrionMkII-original / G2-1K / G2 within the 0x0A family.
+- **`Zeus.Server.Hosting/BoardCapabilitiesTable.cs`** — per-board static fingerprint (`RxAdcCount`, `MkiiBpf`, `AdcSupplyMv`, `HasVolts`, `HasAudioAmplifier`, `HasSteppedAttenuationRx2`, `SupportsPathIllustrator`, etc.). Surfaced via `/api/radio/capabilities` so frontend can gate panels.
+- **`Zeus.Contracts/OrionMkIIVariant.cs`** — disambiguates the 0x0A wire-byte alias family (G2 / G2_1K / Anan7000DLE / Anan8000DLE / OrionMkII / AnvelinaPro3 / RedPitaya). Default G2. Persisted in `PreferredRadioStore`. Read via `RadioService.EffectiveOrionMkIIVariant` and surfaced via `/api/radio/variant`.
+- **`RadioService.ConnectedBoardKind`** — the authoritative "what am I talking to?" for everything downstream. Pair with `EffectiveOrionMkIIVariant` for 0x0A boards.
 
 Anti-pattern to watch for (the one KB2UKA's PA-menu refactor fell into): adding a calibration or encoding step that's correct for the radio in front of you (e.g. ANAN G2) and untested on other boards. Drive / TX / PA changes must be sanity-checked against HL2 at minimum; if a change *can't* be tested on HL2 locally, flag it explicitly in the PR so the maintainer can bench-test before merge.
 

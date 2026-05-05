@@ -734,7 +734,26 @@
 
 /* ===== Spectrum + waterfall ===== */
 .hero { height: 100%; }
-.hero-body { position: relative; height: calc(100% - 32px); }
+/* hero-body sizes via the parent flex column (flex:1, min-height:0) — no
+ * fixed height calc, so the body always fills whatever vertical space
+ * remains after the workspace-tile-header strip. */
+.hero-body { position: relative; min-height: 0; }
+
+/* Hero owns its workspace-tile-header (panels.ts: hero.headerless = true)
+ * — the strip carries the zoom slider, rotator chips, ⌥ hint, HZ/PX, and
+ * close X alongside the drag grip + title. The controls cluster sits on
+ * the right; the title (flex:1) ellipsises before the cluster, so a
+ * narrow tile loses the title text first, not the controls. */
+.hero-tile-header .dot { flex-shrink: 0; }
+.hero-tile-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  /* Default cursor inside the controls — the surrounding header is the
+   * grab handle, but a chip / slider / input shouldn't show grab. */
+  cursor: default;
+}
 .spectrum-wrap {
   position: relative;
   width: 100%;

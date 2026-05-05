@@ -134,6 +134,11 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'spectrum',
     tags: ['panadapter', 'waterfall', 'spectrum', 'map'],
     component: HeroPanel,
+    // Headerless: HeroPanel draws its own .workspace-tile-header so the
+    // single strip can host the zoom slider, rotator chips (SP/LP/BEAM),
+    // ⌥ map-mode hint, and HZ/PX readout — instead of stacking those on
+    // top of the default TileChrome (the old "double header").
+    headerless: true,
   },
   vfo: {
     id: 'vfo',

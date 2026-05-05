@@ -158,7 +158,7 @@ export function SettingsMenu({ open, onClose, initialTab }: Props) {
   const basePanel: React.CSSProperties = {
     position: 'fixed',
     width: 'min(1100px, 92vw)',
-    height: 'min(640px, 85vh)',
+    height: 'min(840px, 85vh)',
     zIndex: 50,
     background: 'var(--bg-1)',
     border: '1px solid var(--panel-border)',

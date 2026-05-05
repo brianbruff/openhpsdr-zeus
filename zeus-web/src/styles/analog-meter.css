@@ -16,88 +16,49 @@
   overflow: hidden;
 }
 
-/* ── Header ───────────────────────────────────────────────── */
-.am-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 6px 10px;
-  background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
-  border-bottom: 1px solid var(--panel-edge);
-  flex-shrink: 0;
-}
-.am-h-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+/* ── Header ───────────────────────────────────────────────────
+ * The S-meter tile is registered headerless, so this strip plays the
+ * role of `.workspace-tile-header` (RGL drag handle). Sizing/colors
+ * inherit from all-panels.css; we only add the status dot and tweak
+ * the title spacing. */
+.am-header.workspace-tile-header {
+  gap: 6px;
 }
 .am-status-dot {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+  flex-shrink: 0;
 }
 .am-h-title {
-  font-family: var(--font-sans);
-  font-size: 11px;
+  flex: 1;
   font-weight: 700;
-  letter-spacing: 0.2em;
-  color: var(--fg-0);
+  letter-spacing: 0.18em;
+  color: var(--fg-1);
 }
-.am-h-mode {
-  margin-left: 8px;
-  display: flex;
-  border: 1px solid var(--panel-edge);
-  border-radius: var(--r-md);
-  overflow: hidden;
-  background: var(--bg-2);
-}
-.am-mode-tab {
-  font-family: var(--font-sans);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.16em;
-  padding: 4px 12px;
-  background: transparent;
+.am-h-gear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
   border: 0;
+  border-radius: var(--r-xs, 2px);
+  background: transparent;
   color: var(--fg-2);
   cursor: pointer;
   transition: color var(--dur-fast), background var(--dur-fast);
-}
-.am-mode-tab:hover { color: var(--fg-0); }
-.am-mode-tab.on {
-  background: var(--accent);
-  color: var(--bg-0);
-}
-.am-h-gear,
-.am-h-close {
-  width: 26px;
-  height: 26px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--panel-edge);
-  background: var(--bg-2);
-  color: var(--fg-2);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  transition: color var(--dur-fast), border-color var(--dur-fast), background var(--dur-fast);
   flex-shrink: 0;
 }
-.am-h-gear { margin-left: auto; }
-.am-h-gear:hover,
-.am-h-close:hover {
+.am-h-gear:hover {
   color: var(--fg-0);
-  border-color: var(--fg-3);
+  background: var(--bg-2);
 }
 .am-h-gear.on {
   background: var(--accent-soft);
-  border-color: var(--accent);
   color: var(--fg-0);
-}
-.am-h-close {
-  font-size: 16px;
-  line-height: 1;
 }
 
 /* ── Dial face ────────────────────────────────────────────── */

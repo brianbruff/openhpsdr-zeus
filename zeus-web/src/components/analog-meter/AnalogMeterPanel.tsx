@@ -3,9 +3,11 @@
 // Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
 // Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
 //
-// Analog S-Meter tile — header (RX/TX tabs + gear), animated dial face,
-// gear-flyout config, and footer readout strip. Live data comes from
-// useTxStore: rxDbm drives the S scale, fwdWatts drives PO, swr drives SWR.
+// Analog S-Meter tile — standard tile header (drag handle, title, gear, X),
+// animated dial face, gear-flyout config, and footer readout strip. Live
+// data comes from useTxStore: rxDbm drives the S scale, fwdWatts drives PO,
+// swr drives SWR. The panel auto-flips RX↔TX from moxOn/tunOn — the operator
+// never tells the meter which side to read.
 //
 // The needle is driven by a requestAnimationFrame loop that:
 //   1. samples raw rxDbm/fwdWatts/swr each frame,
@@ -19,6 +21,8 @@
 // flat without making the animation chunky.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { GripVertical, Settings, X } from 'lucide-react';
+import { usePaStore } from '../../state/pa-store';
 import { useTxStore } from '../../state/tx-store';
 import { AnalogMeterFace } from './AnalogMeterFace';
 import { AnalogMeterConfig } from './AnalogMeterConfig';
@@ -38,76 +42,52 @@ import { useAnalogMeterStore } from './analogMeterStore';
 
 type Mode = 'rx' | 'tx';
 
-function GearIcon() {
-  return (
-    <svg
-      viewBox="0 0 16 16"
-      width={15}
-      height={15}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.4}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="8" cy="8" r="2.2" />
-      <path d="M8 1.5v2 M8 12.5v2 M1.5 8h2 M12.5 8h2 M3.3 3.3l1.4 1.4 M11.3 11.3l1.4 1.4 M3.3 12.7l1.4-1.4 M11.3 4.7l1.4-1.4" />
-    </svg>
-  );
-}
-
 interface TileHeaderProps {
-  mode: Mode;
-  onModeChange: (m: Mode) => void;
   configOpen: boolean;
   onGearClick: () => void;
   onClose?: () => void;
 }
 
-function TileHeader({ mode, onModeChange, configOpen, onGearClick, onClose }: TileHeaderProps) {
+function TileHeader({ configOpen, onGearClick, onClose }: TileHeaderProps) {
+  const stopDrag = (e: React.MouseEvent) => e.stopPropagation();
   return (
     <div className="am-header workspace-tile-header">
-      <div className="am-h-left">
-        <span className="am-status-dot" />
-        <span className="am-h-title">S-METER</span>
-      </div>
-
-      <div className="am-h-mode">
-        <button
-          type="button"
-          className={`am-mode-tab ${mode === 'rx' ? 'on' : ''}`}
-          onClick={() => onModeChange('rx')}
-        >
-          RX
-        </button>
-        <button
-          type="button"
-          className={`am-mode-tab ${mode === 'tx' ? 'on' : ''}`}
-          onClick={() => onModeChange('tx')}
-        >
-          TX
-        </button>
-      </div>
+      <span
+        className="workspace-tile-drag-handle"
+        aria-hidden="true"
+        title="Drag to reposition"
+      >
+        <GripVertical size={12} />
+      </span>
+      <span className="am-status-dot" />
+      <span className="workspace-tile-title am-h-title">S-METER</span>
 
       <button
         type="button"
         className={`am-h-gear ${configOpen ? 'on' : ''}`}
         onClick={onGearClick}
+        onMouseDown={stopDrag}
         aria-label="Configure meter"
+        aria-pressed={configOpen}
         title="Configure meter"
       >
-        <GearIcon />
+        <Settings size={14} />
       </button>
 
       {onClose && (
         <button
           type="button"
-          className="am-h-close workspace-tile-close"
-          onClick={onClose}
-          aria-label="Close panel"
-          title="Close"
+          className="workspace-tile-close"
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose();
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          aria-label="Remove S-Meter panel"
+          title="Remove panel"
         >
-          ×
+          <X size={12} />
         </button>
       )}
     </div>
@@ -185,12 +165,9 @@ export function AnalogMeterPanel({ onClose }: AnalogMeterPanelProps = {}) {
   const tunOn = useTxStore((s) => s.tunOn);
   const transmitting = moxOn || tunOn;
 
-  const [manualMode, setManualMode] = useState<Mode>('rx');
-  const mode: Mode = cfg.followMox ? (transmitting ? 'tx' : 'rx') : manualMode;
-  const onModeChange = (m: Mode) => {
-    setManualMode(m);
-    if (cfg.followMox) cfg.setFollowMox(false);
-  };
+  // The radio knows whether it's transmitting; the operator never has to tell
+  // the meter which side to read. RX while idle, TX during MOX/TUN.
+  const mode: Mode = transmitting ? 'tx' : 'rx';
 
   const [configOpen, setConfigOpen] = useState(false);
 
@@ -219,16 +196,23 @@ export function AnalogMeterPanel({ onClose }: AnalogMeterPanelProps = {}) {
     };
   }, [cfg.sTicks]);
 
-  // PO arc respects the operator's full-scale watts setting.
+  // PO arc full-scale is derived from the rated PA power configured in the
+  // main PA Settings panel: max(10 W, 120% of rated). A 5 W HL2 → 10 W scale,
+  // a 100 W rig → 120 W scale. When the operator hasn't configured a rated
+  // power yet, fall back to a 100 W bench rig (matches TxStageMeters).
+  const paMaxPowerWatts = usePaStore((s) => s.settings.global.paMaxPowerWatts);
+  const poMax = useMemo(() => {
+    const ratedW = paMaxPowerWatts > 0 ? paMaxPowerWatts : 100;
+    return Math.max(10, ratedW * 1.2);
+  }, [paMaxPowerWatts]);
   const dynamicPoScale = useMemo(() => {
-    const max = Math.max(10, cfg.poMax);
     return {
       ...PO_SCALE,
-      n: (w: number) => Math.min(1, Math.max(0, w) / max),
+      n: (w: number) => Math.min(1, Math.max(0, w) / poMax),
       fmt: (w: number) => `${w < 10 ? w.toFixed(1) : Math.round(w)} W`,
-      fromN: (n: number) => Math.max(0, Math.min(1, n)) * max,
+      fromN: (n: number) => Math.max(0, Math.min(1, n)) * poMax,
     };
-  }, [cfg.poMax]);
+  }, [poMax]);
 
   const activeScale = useMemo(() => {
     if (activeScaleId === 's') return customSScale;
@@ -335,8 +319,6 @@ export function AnalogMeterPanel({ onClose }: AnalogMeterPanelProps = {}) {
   return (
     <div className="am-tile" data-mode={mode}>
       <TileHeader
-        mode={mode}
-        onModeChange={onModeChange}
         configOpen={configOpen}
         onGearClick={() => setConfigOpen((o) => !o)}
         onClose={onClose}

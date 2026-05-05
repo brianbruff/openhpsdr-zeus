@@ -19,8 +19,6 @@ export interface AnalogMeterConfig {
   /** Subset of [1,3,5,7,8,9,11,13,15] — labels rendered on the S arc. */
   sTicks: number[];
   showDbm: boolean;
-  /** PO arc full-scale, watts (right edge). */
-  poMax: number;
   /** SWR threshold above which the readout switches to --tx. */
   swrAlarm: number;
   /** Needle ballistics (seconds). */
@@ -29,9 +27,6 @@ export interface AnalogMeterConfig {
   /** Pre-ballistic moving-average window, in samples (loop runs at rAF rate). */
   avg: number;
   peakHold: boolean;
-  /** When true, the panel auto-flips between RX and TX when MOX/TUN engages.
-   *  When false, the operator's manual mode-tab choice sticks. */
-  followMox: boolean;
   /** When true, an image of Zeus fades in over the S-meter face as the
    *  signal approaches S9+20, with a blue flicker glow. Pure visual flair —
    *  no protocol/DSP impact. Off by default. */
@@ -42,13 +37,11 @@ export interface AnalogMeterState extends AnalogMeterConfig {
   setScale: (id: 's' | 'po' | 'swr', on: boolean) => void;
   toggleSTick: (v: number) => void;
   setShowDbm: (on: boolean) => void;
-  setPoMax: (w: number) => void;
   setSwrAlarm: (r: number) => void;
   setAttack: (s: number) => void;
   setDecay: (s: number) => void;
   setAvg: (n: number) => void;
   setPeakHold: (on: boolean) => void;
-  setFollowMox: (on: boolean) => void;
   setZeusMode: (on: boolean) => void;
   resetBallistics: () => void;
 }
@@ -62,13 +55,11 @@ export const ANALOG_METER_DEFAULTS: AnalogMeterConfig = {
   // S8 omitted by default to match real moving-coil meters.
   sTicks: [1, 3, 5, 7, 9, 11, 13, 15],
   showDbm: true,
-  poMax: 100,
   swrAlarm: 3.0,
   attack: 0.05,
   decay: 0.6,
   avg: 6,
   peakHold: true,
-  followMox: true,
   zeusMode: false,
 };
 
@@ -89,13 +80,11 @@ export const useAnalogMeterStore = create<AnalogMeterState>()(
             : [...s.sTicks, v].sort((a, b) => a - b),
         })),
       setShowDbm: (on) => set({ showDbm: on }),
-      setPoMax: (w) => set({ poMax: Math.max(10, Math.min(1000, w)) }),
       setSwrAlarm: (r) => set({ swrAlarm: Math.max(1.5, Math.min(5, r)) }),
       setAttack: (s) => set({ attack: Math.max(0.005, Math.min(0.5, s)) }),
       setDecay: (s) => set({ decay: Math.max(0.05, Math.min(2, s)) }),
       setAvg: (n) => set({ avg: Math.max(1, Math.min(64, Math.round(n))) }),
       setPeakHold: (on) => set({ peakHold: on }),
-      setFollowMox: (on) => set({ followMox: on }),
       setZeusMode: (on) => set({ zeusMode: on }),
       resetBallistics: () =>
         set({

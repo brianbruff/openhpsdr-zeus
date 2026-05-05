@@ -11,6 +11,7 @@
 // repository for the full text, or https://www.gnu.org/licenses/.
 
 using LiteDB;
+using Zeus.Contracts;
 using Zeus.Protocol1.Discovery;
 
 namespace Zeus.Server;
@@ -136,6 +137,53 @@ public sealed class PreferredRadioStore : IDisposable
         }
     }
 
+    /// <summary>
+    /// Returns the operator-selected variant for the 0x0A wire byte
+    /// (issue #218). When no entry exists or the field is unset, returns
+    /// <see cref="OrionMkIIVariant.G2"/> — Zeus' shipping default.
+    /// Consulted only when the connected board kind is
+    /// <see cref="HpsdrBoardKind.OrionMkII"/>; ignored otherwise.
+    /// </summary>
+    public OrionMkIIVariant GetOrionMkIIVariant()
+    {
+        lock (_sync)
+        {
+            var e = _entries.FindAll().FirstOrDefault();
+            return e?.OrionMkIIVariant ?? OrionMkIIVariant.G2;
+        }
+    }
+
+    /// <summary>
+    /// Persists the operator's chosen variant. Stored in the same single-row
+    /// preferences entry as the board / override-detection fields. Setting
+    /// to <see cref="OrionMkIIVariant.G2"/> is identical to "unset" (the
+    /// shipping default).
+    /// </summary>
+    public void SetOrionMkIIVariant(OrionMkIIVariant variant)
+    {
+        lock (_sync)
+        {
+            var existing = _entries.FindAll().FirstOrDefault();
+            if (existing is null)
+            {
+                _entries.Insert(new PreferredRadioEntry
+                {
+                    Board = HpsdrBoardKind.Unknown,
+                    OverrideDetection = false,
+                    OrionMkIIVariant = variant,
+                    UpdatedUtc = DateTime.UtcNow,
+                });
+            }
+            else
+            {
+                existing.OrionMkIIVariant = variant;
+                existing.UpdatedUtc = DateTime.UtcNow;
+                _entries.Update(existing);
+            }
+        }
+        Changed?.Invoke();
+    }
+
     public void Dispose() => _db.Dispose();
 
     private static string GetDatabasePath()
@@ -152,5 +200,10 @@ public sealed class PreferredRadioEntry
     public int Id { get; set; }
     public HpsdrBoardKind Board { get; set; }
     public bool OverrideDetection { get; set; }
+    /// <summary>Operator-selected variant for the 0x0A wire-byte alias
+    /// family. LiteDB hydrates as <see cref="OrionMkIIVariant.G2"/>
+    /// (the zero-default) for older rows that pre-date this field, which
+    /// preserves Zeus' pre-#218 dispatch behaviour.</summary>
+    public OrionMkIIVariant OrionMkIIVariant { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

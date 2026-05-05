@@ -4,6 +4,7 @@
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 
+using Zeus.Contracts;
 using Zeus.Protocol1.Discovery;
 using Zeus.Server;
 
@@ -32,7 +33,7 @@ public class RadioDriveProfileTests
     [Theory]
     [InlineData(HpsdrBoardKind.Hermes)]
     [InlineData(HpsdrBoardKind.Metis)]
-    [InlineData(HpsdrBoardKind.Griffin)]
+    [InlineData(HpsdrBoardKind.HermesII)]
     [InlineData(HpsdrBoardKind.Angelia)]
     [InlineData(HpsdrBoardKind.Orion)]
     [InlineData(HpsdrBoardKind.OrionMkII)]

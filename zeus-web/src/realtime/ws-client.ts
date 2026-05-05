@@ -48,6 +48,7 @@ import { getAudioClient } from '../audio/audio-client';
 import { useConnectionStore, type WisdomPhase } from '../state/connection-store';
 import { useDisplayStore } from '../state/display-store';
 import { useTxStore } from '../state/tx-store';
+import { useBandPlanStore } from '../state/bandPlan';
 import { useRxMetersStore } from '../state/rx-meters-store';
 import { useVstHostStore } from '../state/vst-host-store';
 import { warnOnce } from '../util/logger';
@@ -100,6 +101,12 @@ const PA_TEMP_BYTES = 1 + 4;
 // when PS is off. Server-side bare-payload like TxMetersV2 (no header).
 export const MSG_TYPE_PS_METERS = 0x18;
 const PS_METERS_BYTES = 1 + 4 + 4 + 1 + 1 + 4;
+
+// Band plan changed: 1 type byte + UTF-8 region ID. Server emits when region
+// changes or plan is edited. Client refetches /api/bands/current. Originally
+// 0x18 on the issue-65 branch; renumbered to 0x1B on merge with develop to
+// resolve the collision with PsMeters above.
+export const MSG_TYPE_BAND_PLAN_CHANGED = 0x1B;
 
 // WDSP wisdom status: 1 type byte + 1 phase byte (0=idle, 1=building, 2=ready)
 // + optional UTF-8 status text trailer (e.g. "Planning COMPLEX FORWARD FFT
@@ -356,6 +363,10 @@ export function startRealtime(path = '/ws'): () => void {
           const msgBytes = new Uint8Array(ev.data, 2);
           const message = new TextDecoder('utf-8').decode(msgBytes);
           useTxStore.getState().setAlert({ kind, message });
+          return;
+        }
+        if (peekType === MSG_TYPE_BAND_PLAN_CHANGED) {
+          void useBandPlanStore.getState().refresh();
           return;
         }
         warnOnce(

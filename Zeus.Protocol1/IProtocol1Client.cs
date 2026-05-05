@@ -44,6 +44,7 @@
 
 using System.Net;
 using System.Threading.Channels;
+using Zeus.Contracts;
 using Zeus.Protocol1.Discovery;
 
 namespace Zeus.Protocol1;

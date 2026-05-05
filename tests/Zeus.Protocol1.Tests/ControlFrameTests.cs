@@ -43,6 +43,7 @@
 // License for details.
 
 using System.Buffers.Binary;
+using Zeus.Contracts;
 using Zeus.Protocol1.Discovery;
 
 namespace Zeus.Protocol1.Tests;

@@ -1,0 +1,147 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later
+ * PA Settings — control-surface treatment for the per-band table.
+ * Three primitives (pill bar / slider / compact density) translated
+ * from the Claude-Design handoff bundle into Zeus tokens. Palette
+ * (--accent blue for editable state, --bg-2/--bg-3 chrome, Archivo
+ * Narrow type) lives in tokens.css; this file only adds component
+ * shape, sizing, and motion.
+ */
+
+.pa-settings {
+  --pa-good: #4aa04a;        /* same value ps-settings already uses */
+  --pa-pill-h: 18px;
+  --pa-pill-w: 22px;
+  --pa-pill-gap: 4px;
+  --pa-row-py: 6px;
+  --pa-cell-fs: 11px;
+}
+
+.pa-settings.density-compact {
+  --pa-pill-h: 16px;
+  --pa-pill-w: 20px;
+  --pa-pill-gap: 3px;
+  --pa-row-py: 3px;
+  --pa-cell-fs: 10.5px;
+}
+
+/* ── pill bar ─────────────────────────────────────────────────
+   Replaces the 7-checkbox row with a single rounded container
+   that holds 7 tap-targets. Selected pin = accent fill, idle =
+   transparent on the container's bg-2. Drag-paint supported by
+   the React side via onMouseEnter while a drag is held.        */
+.pa-pill-bar {
+  display: inline-flex;
+  gap: var(--pa-pill-gap);
+  padding: 2px;
+  background: var(--bg-2);
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--r-md);
+  user-select: none;
+}
+.pa-pill {
+  width: var(--pa-pill-w);
+  height: var(--pa-pill-h);
+  border-radius: var(--r-sm);
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--pa-cell-fs);
+  font-weight: 600;
+  color: var(--fg-3);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              color      var(--dur-fast) var(--ease-out);
+}
+.pa-pill:hover {
+  background: var(--bg-3);
+  color: var(--fg-1);
+}
+.pa-pill.on {
+  background: var(--accent);
+  color: #0b1220;
+}
+
+/* read-only "Auto N2ADR" pills — visually distinct from the
+   accent-blue editable variants. Active pins use the same green
+   ps-settings already publishes; inactive pins are dimmed without
+   the hover affordance.                                          */
+.pa-pill-bar.ro {
+  cursor: default;
+}
+.pa-pill.ro {
+  cursor: not-allowed;
+  color: var(--fg-3);
+  opacity: 0.7;
+}
+.pa-pill.ro:hover {
+  background: transparent;
+  color: var(--fg-3);
+}
+.pa-pill.ro.on {
+  background: color-mix(in oklab, var(--pa-good) 22%, var(--bg-2));
+  color: color-mix(in oklab, var(--pa-good) 80%, var(--fg-0));
+  opacity: 1;
+}
+
+/* ── slider ──────────────────────────────────────────────────
+   Drag-to-set track + value readout. Track height kept thin to
+   suit the dense table; fill is --accent (state colour) so it
+   reads as "editable" in the same idiom as toggles & focus
+   rings.                                                        */
+.pa-slider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: ew-resize;
+  user-select: none;
+  min-width: 0;
+}
+.pa-slider-track {
+  position: relative;
+  flex: 1;
+  height: 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--panel-edge);
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.30);
+  min-width: 60px;
+}
+.pa-slider-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 80ms linear;
+}
+.pa-slider-val {
+  font-family: var(--font-mono);
+  font-size: var(--pa-cell-fs);
+  font-weight: 600;
+  color: var(--fg-0);
+  min-width: 52px;
+  text-align: right;
+  white-space: nowrap;
+}
+.pa-slider-val em {
+  font-style: normal;
+  color: var(--fg-3);
+  font-size: 9.5px;
+  margin-left: 2px;
+}
+.pa-slider-track:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── compact density rules ──────────────────────────────────
+   Layered on top of the existing tailwind row classes — the
+   custom property cascade above already shrinks pills; this
+   rule tightens the row's vertical rhythm and the column-head
+   typography.                                                  */
+.pa-settings.density-compact .pa-row {
+  padding-top: var(--pa-row-py);
+  padding-bottom: var(--pa-row-py);
+}
+.pa-settings.density-compact .pa-col-head {
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+}

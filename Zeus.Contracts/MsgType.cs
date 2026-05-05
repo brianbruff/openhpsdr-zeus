@@ -116,4 +116,11 @@ public enum MsgType : byte
     // 0x1A on merge to release/0.6.0-alpha to resolve the collision with
     // RxMetersV2 above.
     VstHostEvent = 0x1A,
+
+    // Server → client (band plan changed). Broadcast when the active region
+    // changes or the operator edits the plan. Payload: [type:1][regionIdUtf8…].
+    // Frontend refetches GET /api/bands/current on receipt.
+    // Originally 0x18 on the issue-65 branch; renumbered to 0x1B on merge
+    // with develop to resolve the collision with PsMeters above.
+    BandPlanChanged = 0x1B,
 }

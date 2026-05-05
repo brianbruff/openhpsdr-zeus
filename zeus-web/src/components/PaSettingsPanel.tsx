@@ -19,7 +19,7 @@
 // (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
 // Both are GPL-2.0-or-later.
 
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { HF_BANDS, usePaStore } from '../state/pa-store';
 import { useRadioStore } from '../state/radio-store';
 import { BOARD_LABELS } from '../api/radio';
@@ -44,34 +44,135 @@ const PA_MAX_W_MAX    = 1500;  // Covers Shared Apex / 1 kW + amps
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-function OcBitCheckbox({
+// One unified pill bar replacing the previous 7-checkbox grid. The
+// container holds 7 tappable pins; clicking flips the bit, and dragging
+// across multiple pins paints them to the first-clicked target value
+// (so changing a whole row is one drag, not 7 clicks). Read-only mode is
+// used for the Auto N2ADR column and disables the click + drag handlers.
+function PillBar({
   label,
-  bit,
   mask,
-  onToggle,
+  onChange,
+  readOnly = false,
 }: {
   label: string;
-  bit: number;
   mask: number;
-  onToggle: (nextMask: number) => void;
+  onChange?: (next: number) => void;
+  readOnly?: boolean;
 }) {
-  const active = (mask & (1 << (bit - 1))) !== 0;
+  const [paintTo, setPaintTo] = useState<0 | 1 | null>(null);
+  useEffect(() => {
+    if (paintTo === null) return;
+    const up = () => setPaintTo(null);
+    window.addEventListener('mouseup', up);
+    return () => window.removeEventListener('mouseup', up);
+  }, [paintTo]);
+
+  const setBit = (bit: number, on: 0 | 1) => {
+    if (!onChange) return;
+    const b = 1 << (bit - 1);
+    onChange(on ? mask | b : mask & ~b);
+  };
+
   return (
-    <label
-      title={`${label} pin ${bit}`}
-      className="inline-flex select-none items-center gap-1 text-[10px] text-neutral-400"
-    >
-      <input
-        type="checkbox"
-        checked={active}
-        onChange={(e) => {
-          const b = 1 << (bit - 1);
-          onToggle(e.target.checked ? mask | b : mask & ~b);
-        }}
-        className="h-3 w-3 accent-[#4a9eff]"
-      />
-      {bit}
-    </label>
+    <span className={'pa-pill-bar' + (readOnly ? ' ro' : '')}>
+      {OC_PINS.map((bit) => {
+        const active = (mask & (1 << (bit - 1))) !== 0;
+        const title = readOnly
+          ? `${label} pin ${bit} — ${active ? 'firmware-driven' : 'not driven'}`
+          : `${label} pin ${bit}`;
+        return (
+          <span
+            key={bit}
+            role={readOnly ? undefined : 'button'}
+            aria-pressed={readOnly ? undefined : active}
+            title={title}
+            className={'pa-pill' + (active ? ' on' : '') + (readOnly ? ' ro' : '')}
+            onMouseDown={
+              readOnly
+                ? undefined
+                : (e) => {
+                    e.preventDefault();
+                    const next: 0 | 1 = active ? 0 : 1;
+                    setPaintTo(next);
+                    setBit(bit, next);
+                  }
+            }
+            onMouseEnter={
+              readOnly
+                ? undefined
+                : () => {
+                    if (paintTo === null) return;
+                    if (active === (paintTo === 1)) return;
+                    setBit(bit, paintTo);
+                  }
+            }
+          >
+            {bit}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+// Drag-to-set horizontal slider replacing the per-band number input. On
+// HL2 the value is an output percentage (0..100); on Hermes / ANAN /
+// Orion / G2 it's PA forward gain in dB (0..70). Click anywhere on the
+// track to jump, drag for fine control. Step quantises to 0.1 to match
+// the previous numeric-input precision.
+function PaSlider({
+  value,
+  min,
+  max,
+  step,
+  unit,
+  onChange,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  unit: string;
+  onChange: (next: number) => void;
+}) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const quantise = (v: number) => {
+    const clamped = Math.max(min, Math.min(max, v));
+    return Math.round(clamped / step) * step;
+  };
+
+  const startDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const rect = trackRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const upd = (clientX: number) => {
+      const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      onChange(quantise(min + pct * (max - min)));
+    };
+    upd(e.clientX);
+    const move = (ev: MouseEvent) => upd(ev.clientX);
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
+
+  const pct = max > min ? ((value - min) / (max - min)) * 100 : 0;
+  const decimals = step >= 1 ? 0 : 1;
+
+  return (
+    <div className="pa-slider">
+      <div ref={trackRef} className="pa-slider-track" onMouseDown={startDrag}>
+        <div className="pa-slider-fill" style={{ width: `${pct}%` }} />
+      </div>
+      <span className="pa-slider-val">
+        {value.toFixed(decimals)}
+        <em>{unit}</em>
+      </span>
+    </div>
   );
 }
 
@@ -85,6 +186,12 @@ export function PaSettingsPanel() {
   const setBand = usePaStore((s) => s.setBand);
   const resetToBoardDefaults = usePaStore((s) => s.resetToBoardDefaults);
   const selection = useRadioStore((s) => s.selection);
+
+  // Show the "Auto N2ADR" column only when the board has a non-zero
+  // firmware auto-mask for at least one band — i.e. an HL2. Bare-Hermes
+  // and ANAN/Orion users don't need a column of empty chips, and showing
+  // it on first-boot (Unknown board, autoOcMask=0) would be visual noise.
+  const showAutoCol = settings.bands.some((b) => b.autoOcMask > 0);
 
   // HL2 overloads the "PA Gain" field into an output percentage. Switch
   // label + clamp range + step when the effective board (connected wins
@@ -118,7 +225,7 @@ export function PaSettingsPanel() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="pa-settings density-compact space-y-6">
       <section>
         <div className="mb-2 flex items-center justify-between gap-3">
           <h3 className="text-xs font-semibold uppercase tracking-widest text-neutral-300">
@@ -181,6 +288,12 @@ export function PaSettingsPanel() {
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-widest text-neutral-300">
           Per Band
         </h3>
+        {showAutoCol && (
+          <p className="mb-2 text-[10px] text-neutral-500">
+            Auto column shows the N2ADR LPF mask the HL2 fires automatically on band change.
+            These pins assert even when your OC TX / OC RX rows below are empty — pin colour matches state.
+          </p>
+        )}
         <div className="overflow-x-auto rounded bg-neutral-800/40">
           <table className="w-full border-collapse text-xs">
             <thead className="text-[10px] uppercase tracking-wider text-neutral-500">
@@ -190,6 +303,14 @@ export function PaSettingsPanel() {
                   {paFieldLabel}
                 </th>
                 <th className="px-2 py-2 text-center">Disable PA</th>
+                {showAutoCol && (
+                  <th
+                    className="px-2 py-2 text-left"
+                    title="Read-only: OC pins the firmware drives automatically per band (N2ADR LPF on HL2). OR'd with your OC TX / OC RX masks before the wire."
+                  >
+                    Auto N2ADR (1..7)
+                  </th>
+                )}
                 <th className="px-2 py-2 text-left">OC TX (1..7)</th>
                 <th className="px-2 py-2 text-left">OC RX (1..7)</th>
               </tr>
@@ -199,24 +320,23 @@ export function PaSettingsPanel() {
                 const b = settings.bands.find((x) => x.band === bandName);
                 if (!b) return null;
                 return (
-                  <tr key={bandName} className="border-t border-neutral-800 text-neutral-300">
-                    <td className="px-2 py-1 font-mono">{b.band}</td>
-                    <td className="px-2 py-1 text-right">
-                      <input
-                        type="number"
-                        step={paFieldStep}
+                  <tr key={bandName} className="pa-row border-t border-neutral-800 text-neutral-300">
+                    <td className="px-2 font-mono">{b.band}</td>
+                    <td className="px-2">
+                      <PaSlider
+                        value={b.paGainDb}
                         min={PA_GAIN_MIN_DB}
                         max={paFieldMax}
-                        value={b.paGainDb}
-                        onChange={(e) =>
+                        step={paFieldStep}
+                        unit={isHl2 ? '%' : 'dB'}
+                        onChange={(v) =>
                           setBand(b.band, {
-                            paGainDb: clamp(Number(e.target.value) || 0, PA_GAIN_MIN_DB, paFieldMax),
+                            paGainDb: clamp(v, PA_GAIN_MIN_DB, paFieldMax),
                           })
                         }
-                        className="w-20 rounded border border-neutral-700 bg-neutral-900 px-2 py-0.5 text-right text-neutral-100"
                       />
                     </td>
-                    <td className="px-2 py-1 text-center">
+                    <td className="px-2 text-center">
                       <input
                         type="checkbox"
                         checked={b.disablePa}
@@ -224,31 +344,28 @@ export function PaSettingsPanel() {
                         className="h-3 w-3 accent-[#4a9eff]"
                       />
                     </td>
-                    <td className="px-2 py-1">
-                      <div className="flex gap-2">
-                        {OC_PINS.map((bit) => (
-                          <OcBitCheckbox
-                            key={bit}
-                            label={`${bandName} OC-TX`}
-                            bit={bit}
-                            mask={b.ocTx}
-                            onToggle={(next) => setBand(b.band, { ocTx: next })}
-                          />
-                        ))}
-                      </div>
+                    {showAutoCol && (
+                      <td className="px-2">
+                        <PillBar
+                          label={`${bandName} N2ADR auto`}
+                          mask={b.autoOcMask}
+                          readOnly
+                        />
+                      </td>
+                    )}
+                    <td className="px-2">
+                      <PillBar
+                        label={`${bandName} OC-TX`}
+                        mask={b.ocTx}
+                        onChange={(next) => setBand(b.band, { ocTx: next })}
+                      />
                     </td>
-                    <td className="px-2 py-1">
-                      <div className="flex gap-2">
-                        {OC_PINS.map((bit) => (
-                          <OcBitCheckbox
-                            key={bit}
-                            label={`${bandName} OC-RX`}
-                            bit={bit}
-                            mask={b.ocRx}
-                            onToggle={(next) => setBand(b.band, { ocRx: next })}
-                          />
-                        ))}
-                      </div>
+                    <td className="px-2">
+                      <PillBar
+                        label={`${bandName} OC-RX`}
+                        mask={b.ocRx}
+                        onChange={(next) => setBand(b.band, { ocRx: next })}
+                      />
                     </td>
                   </tr>
                 );

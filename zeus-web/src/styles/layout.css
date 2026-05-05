@@ -1,10 +1,28 @@
 /* ===========================================================
    Zeus SDR — Layout & component CSS (faithful to reference)
-   =========================================================== */
+   ===========================================================
+
+   App shell grid (issue #241):
+
+       ┌──────┬──────────────────────────────────┐
+       │ left │   topbar        (68 px)          │
+       │ bar  │   alert banner  (auto)           │
+       │      │   workspace     (1fr, scrolls)   │
+       │      │   transport     (44 px, pinned) │
+       └──────┴──────────────────────────────────┘
+
+   The left bar spans the full app height; the rest stack in the right
+   column. Workspace (FlexWorkspace) is the only row that scrolls — the
+   transport row (TX controls + radio status pills + "+ Add Panel") stays
+   pinned at the bottom. Top bar holds inline transport-level controls
+   (mode/filter/band/step/front-end/AGC/AF) plus brand and the settings
+   + connect/disconnect buttons.
+*/
 
 .app {
   display: grid;
-  grid-template-rows: 54px 68px auto 1fr 44px;
+  grid-template-columns: 60px 1fr;
+  grid-template-rows: 68px auto 1fr 44px;
   height: 100vh;
   width: 100vw;
   background: var(--bg-0);
@@ -13,7 +31,251 @@
   gap: 6px;
 }
 
-/* ===== Top bar — beveled gradient strip with embedded pills ===== */
+.app > .left-layout-bar   { grid-column: 1; grid-row: 1 / -1; }
+.app > .topbar            { grid-column: 2; grid-row: 1; }
+.app > .alert-banner      { grid-column: 2; grid-row: 2; }
+.app > .flex-workspace    { grid-column: 2; grid-row: 3; min-height: 0; overflow: auto; }
+.app > .transport         { grid-column: 2; grid-row: 4; }
+
+/* ===== Left layout bar — issue #241 ===== */
+.left-layout-bar {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 4px;
+  background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--r-lg);
+  box-shadow: var(--panel-shadow);
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Subtle tint overlay. Two layers:
+   - ::before is the top-half wash (matches the VFO frequency-display blue at
+     the default). Solid 0–50%, fades out across 50–70%, fully transparent
+     below 70%.
+   - ::after is the diffused dot matrix. Invisible above 50%, fades in across
+     50–70%, gone by 70%.
+   The hue is sourced from --lb-wash-{r,g,b} (a darkened 0.25× variant of
+   the operator's panadapter trace colour) and --lb-tint-{r,g,b} (the trace
+   colour itself). Defaults preserve the original VFO-blue + accent-blue
+   look when the JS hasn't injected the operator's choice yet. The 70% mark
+   keeps the bar's lower half clean so action buttons stay readable. */
+.left-layout-bar {
+  --lb-wash-r: 20;
+  --lb-wash-g: 36;
+  --lb-wash-b: 62;
+  --lb-tint-r: 74;
+  --lb-tint-g: 158;
+  --lb-tint-b: 255;
+}
+.left-layout-bar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: linear-gradient(
+    to bottom,
+    rgba(var(--lb-wash-r), var(--lb-wash-g), var(--lb-wash-b), 0.55) 0%,
+    rgba(var(--lb-wash-r), var(--lb-wash-g), var(--lb-wash-b), 0.55) 50%,
+    rgba(var(--lb-wash-r), var(--lb-wash-g), var(--lb-wash-b), 0.00) 70%,
+    rgba(var(--lb-wash-r), var(--lb-wash-g), var(--lb-wash-b), 0.00) 100%
+  );
+}
+.left-layout-bar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(circle,
+      rgba(var(--lb-tint-r), var(--lb-tint-g), var(--lb-tint-b), 0.22) 1px,
+      transparent 1.5px)
+    0 0 / 8px 8px;
+  /* Dots only paint in the 50–70% band: fully transparent above 50%, fade
+     in to ~60% peak, fully transparent again by 70% so the bar's bottom
+     half stays clean. */
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    transparent 50%,
+    black 60%,
+    transparent 70%,
+    transparent 100%
+  );
+          mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    transparent 50%,
+    black 60%,
+    transparent 70%,
+    transparent 100%
+  );
+}
+
+/* Direct children sit above the accent layer so layout buttons / actions
+   stay fully readable and clickable. */
+.left-layout-bar > * { position: relative; z-index: 1; }
+.left-layout-bar .lb-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.left-layout-bar .lb-empty {
+  text-align: center;
+  font-size: 16px;
+  color: var(--fg-3);
+  padding: 12px 0;
+}
+.left-layout-bar .lb-item {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+}
+.left-layout-bar .lb-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 6px 4px 5px;
+  color: var(--fg-1);
+  background: linear-gradient(180deg, var(--btn-top), var(--btn-bot));
+  border: 1px solid var(--btn-edge);
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 1px 0 var(--btn-hl);
+  cursor: pointer;
+  text-align: center;
+  min-height: 50px;
+  transition: background var(--dur-fast), border-color var(--dur-fast),
+    color var(--dur-fast), box-shadow var(--dur-fast);
+}
+.left-layout-bar .lb-tab:hover { filter: brightness(1.12); }
+.left-layout-bar .lb-item.active .lb-tab {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: inset 0 1px 0 var(--btn-hl), 0 0 8px var(--accent-soft);
+}
+.left-layout-bar .lb-tab-icon {
+  font-size: 18px;
+  line-height: 1;
+  /* Force the OS colour-emoji palette so the chosen glyph stays vivid even
+     when the active state recolours the surrounding text. */
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji',
+    sans-serif;
+  filter: none;
+}
+.left-layout-bar .lb-tab-icon.lb-tab-icon-fallback {
+  /* Letter fallback for layouts without an icon — render in the tab's
+     current colour so it picks up the active state. */
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  opacity: 0.85;
+}
+.left-layout-bar .lb-tab-name {
+  font-family: var(--font-sans);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.1;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-clamp: 2;
+  overflow: hidden;
+  word-break: break-word;
+  hyphens: auto;
+  max-width: 100%;
+}
+.left-layout-bar .lb-gear {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  background: linear-gradient(180deg, #2e2f33, #1c1d20);
+  border: 1px solid var(--btn-edge);
+  border-radius: 50%;
+  color: var(--fg-2);
+  cursor: pointer;
+  line-height: 1;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  transition: opacity var(--dur-fast), color var(--dur-fast),
+    border-color var(--dur-fast);
+}
+.left-layout-bar .lb-item:hover .lb-gear,
+.left-layout-bar .lb-item.active .lb-gear,
+.left-layout-bar .lb-gear:focus-visible {
+  opacity: 1;
+}
+.left-layout-bar .lb-gear:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.left-layout-bar .lb-x {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  background: linear-gradient(180deg, #2e2f33, #1c1d20);
+  border: 1px solid var(--btn-edge);
+  border-radius: 50%;
+  color: var(--fg-2);
+  cursor: pointer;
+  line-height: 1;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+.left-layout-bar .lb-x:hover {
+  color: var(--tx);
+  border-color: var(--tx);
+}
+.left-layout-bar .lb-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.left-layout-bar .lb-action {
+  width: 100%;
+  padding: 6px 0;
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* ===== Top bar — issue #241 =====
+   Beveled gradient strip. Holds brand+radio label, transport-level inline
+   controls (mode/filter/band/step/front-end/AGC/AF), and the right-side
+   status pills + ⚙ settings. */
 .topbar {
   display: flex;
   align-items: center;
@@ -23,7 +285,19 @@
   border: 1px solid var(--panel-edge);
   border-radius: var(--r-lg);
   box-shadow: var(--panel-shadow);
-  height: 54px;
+  height: 68px;
+  overflow: hidden;
+}
+.topbar .topbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  /* Allow the controls block to scroll horizontally instead of bleeding off
+     the bar on narrow desktop windows; the bar's own overflow:hidden keeps
+     it from spilling into the workspace below. */
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 .brand {
   display: flex;
@@ -460,7 +734,26 @@
 
 /* ===== Spectrum + waterfall ===== */
 .hero { height: 100%; }
-.hero-body { position: relative; height: calc(100% - 32px); }
+/* hero-body sizes via the parent flex column (flex:1, min-height:0) — no
+ * fixed height calc, so the body always fills whatever vertical space
+ * remains after the workspace-tile-header strip. */
+.hero-body { position: relative; min-height: 0; }
+
+/* Hero owns its workspace-tile-header (panels.ts: hero.headerless = true)
+ * — the strip carries the zoom slider, rotator chips, ⌥ hint, HZ/PX, and
+ * close X alongside the drag grip + title. The controls cluster sits on
+ * the right; the title (flex:1) ellipsises before the cluster, so a
+ * narrow tile loses the title text first, not the controls. */
+.hero-tile-header .dot { flex-shrink: 0; }
+.hero-tile-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  /* Default cursor inside the controls — the surrounding header is the
+   * grab handle, but a chip / slider / input shouldn't show grab. */
+  cursor: default;
+}
 .spectrum-wrap {
   position: relative;
   width: 100%;

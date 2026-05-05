@@ -92,4 +92,26 @@ public static class N2adrBands
             _             => (byte)0x00,   // 6m and up — no LPF on N2ADR
         };
     }
+
+    /// <summary>
+    /// Same lookup keyed on the canonical band name used by per-band stores
+    /// (PaSettingsStore / BandUtils.HfBands). Used by the PA Settings panel
+    /// to surface the auto-mask alongside the operator-editable OC TX/RX
+    /// fields, so the operator can see what pins the N2ADR LPF table is
+    /// already driving for a given band. Unknown band returns 0.
+    /// </summary>
+    public static byte RxOcMaskForBand(string bandName) => bandName switch
+    {
+        "160m" => (byte)0x01,
+        "80m"  => (byte)0x42,
+        "60m"  => (byte)0x44,
+        "40m"  => (byte)0x44,
+        "30m"  => (byte)0x48,
+        "20m"  => (byte)0x48,
+        "17m"  => (byte)0x50,
+        "15m"  => (byte)0x50,
+        "12m"  => (byte)0x60,
+        "10m"  => (byte)0x60,
+        _      => (byte)0x00,
+    };
 }

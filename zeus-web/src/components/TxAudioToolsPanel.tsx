@@ -15,20 +15,20 @@
 
 import { CfcSettingsPanel } from './CfcSettingsPanel';
 import { VstHostSubmenu } from './VstHostSubmenu';
+import { useCapabilitiesStore } from '../state/capabilities-store';
 
-/**
- * "TX Audio Tools" settings tab — host for digital-domain TX shaping
- * controls. Issue #123 lands the 10-band CFC; issue #106 lands the VST
- * host submenu (out-of-process sidecar with an 8-slot chain). The
- * legacy in-process TX EQ remains paused — operators with EQ needs go
- * through a VST instead.
- */
+// CFC is WDSP-driven and always available. The VST host submenu is gated
+// on the zeus-plughost sidecar (today: Linux only) — when unavailable we
+// hide the submenu rather than the whole tab, so CFC stays reachable.
 export function TxAudioToolsPanel() {
+  const vstHostAvailable = useCapabilitiesStore(
+    (s) => s.capabilities?.features.vstHost.available ?? false,
+  );
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <CfcSettingsPanel />
 
-      <VstHostSubmenu />
+      {vstHostAvailable && <VstHostSubmenu />}
     </div>
   );
 }

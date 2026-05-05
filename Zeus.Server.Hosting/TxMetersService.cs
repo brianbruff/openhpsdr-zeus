@@ -378,7 +378,7 @@ public sealed class TxMetersService : BackgroundService
                         _fwdAdcPeak = 0;
                         _refAdcPeak = 0;
                     }
-                    var cal = RadioCalibrations.For(_radio.ConnectedBoardKind);
+                    var cal = RadioCalibrations.For(_radio.ConnectedBoardKind, _radio.EffectiveOrionMkIIVariant);
                     var (fwdW, refW, swrVal) = ComputeMeters(fwdAdc, refAdc, cal);
                     swr = swrVal;
                     // Stage meters are published by WdspDspEngine.ProcessTxBlock;

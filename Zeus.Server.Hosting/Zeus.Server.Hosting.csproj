@@ -60,6 +60,12 @@
     <Content Include="appsettings.Development.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- Shipped band-plan JSON. Plain Microsoft.NET.Sdk (not Web SDK) doesn't
+       include JSON under project root by default, so use explicit Include. -->
+  <ItemGroup>
+    <Content Include="BandPlans\**\*.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <!-- SPA assets are produced by Zeus.Server's BuildSpa target on publish; for
        library consumers (Zeus.Desktop) we recursively copy whatever's in
        wwwroot/ at consume time. The actual build is owned by the executable

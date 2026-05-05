@@ -45,64 +45,48 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { WorkspaceContext } from './layout/WorkspaceContext';
 import { FlexWorkspace } from './layout/FlexWorkspace';
-import { AgcSlider } from './components/AgcSlider';
 import { AfGainSlider } from './components/AfGainSlider';
+import { AgcSlider } from './components/AgcSlider';
 import { AlertBanner } from './components/AlertBanner';
 import { AttenuatorSlider } from './components/AttenuatorSlider';
 import { AudioToggle } from './components/AudioToggle';
-import { BandButtons } from './components/BandButtons';
-import { ConnectPanel } from './components/ConnectPanel';
-import { MicMeter } from './components/MicMeter';
-import { MobilePttButton } from './components/MobilePttButton';
-import { MobileZoomSlider } from './components/MobileZoomSlider';
-import { ZoomControl } from './components/ZoomControl';
-import { ModeBandwidth } from './components/ModeBandwidth';
-import { ModeFavorites } from './components/toolbar/ModeFavorites';
 import { BandFavorites } from './components/toolbar/BandFavorites';
-import { StepFavorites } from './components/toolbar/StepFavorites';
+import { ConnectPanel } from './components/ConnectPanel';
 import { FilterPanel } from './components/filter/FilterPanel';
-import { FilterRibbon, useFilterRibbonOpenSync } from './components/filter/FilterRibbon';
+import { LeftLayoutBar } from './components/LeftLayoutBar';
+import { MicMeter } from './components/MicMeter';
+import { ModeFavorites } from './components/toolbar/ModeFavorites';
 import { MoxButton } from './components/MoxButton';
-import { PsToggleButton } from './components/PsToggleButton';
-import { Panadapter } from './components/Panadapter';
-import { PaTempChip } from './components/PaTempChip';
 import { PreampButton } from './components/PreampButton';
+import { PsToggleButton } from './components/PsToggleButton';
+import { PaTempChip } from './components/PaTempChip';
 import { QrzStatusPill } from './components/QrzStatusPill';
 import { RotatorStatusPill } from './components/RotatorStatusPill';
 import { SettingsMenu } from './components/SettingsMenu';
-import { SMeterLive } from './components/SMeterLive';
-import { OverdriveIndicator, TxStageMeters } from './components/TxStageMeters';
+import { StepFavorites } from './components/toolbar/StepFavorites';
 import { TunButton } from './components/TunButton';
-import { VfoDisplay } from './components/VfoDisplay';
-import { Waterfall } from './components/Waterfall';
+import { BOARD_LABELS } from './api/radio';
+import { useFilterRibbonOpenSync } from './components/filter/FilterRibbon';
 import { useSwUpdatePrompt } from './pwa/useSwUpdatePrompt';
 import { CONTACTS, bandOf } from './components/design/data';
-import { Dockable } from './components/design/Dockable';
-import { DspPanel } from './components/DspPanel';
-import { TxFilterPanel } from './components/TxFilterPanel';
-import { QrzCard } from './components/design/QrzCard';
-import { TerminatorLines } from './components/design/TerminatorLines';
 import { bearingDeg, distanceKm } from './components/design/geo';
-import { LeafletWorldMap } from './components/design/LeafletWorldMap';
-import { LeafletMapErrorBoundary } from './components/design/LeafletMapErrorBoundary';
 import { startRealtime } from './realtime/ws-client';
 import { getServerBaseUrl, isCapacitorRuntime } from './serverUrl';
 import { getAudioClient } from './audio/audio-client';
 import { useMicUplink } from './audio/use-mic-uplink';
 import { fetchState } from './api/client';
-import { BOARD_LABELS } from './api/radio';
 import { useConnectionStore } from './state/connection-store';
 import { useRadioStore } from './state/radio-store';
 import { useQrzStore } from './state/qrz-store';
 import { useRotatorStore } from './state/rotator-store';
 import { useLoggerStore } from './state/logger-store';
 import { useTxStore } from './state/tx-store';
-import { useLayoutPreferenceStore } from './state/layout-preference-store';
 import { useLayoutStore } from './state/layout-store';
 import { useDisplaySettingsStore } from './state/display-settings-store';
 import { useCapabilitiesStore } from './state/capabilities-store';
 import { useKeyboardShortcuts } from './util/use-keyboard-shortcuts';
 import { SpectrumWheelActionsContext, type SpectrumWheelActions } from './util/use-pan-tune-gesture';
+import { BandPlanProvider } from './context/BandPlanContext';
 import { registerServiceWorker } from './service-worker/registerSW';
 import { UpdatePrompt } from './service-worker/UpdatePrompt';
 import { MobileApp, useIsMobileViewport } from './mobile/MobileApp';
@@ -123,29 +107,37 @@ export default function App() {
   const status = useConnectionStore((s) => s.status);
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   const mode = useConnectionStore((s) => s.mode);
-  const agcTop = useConnectionStore((s) => s.agcTopDb);
-  const filterLow = useConnectionStore((s) => s.filterLowHz);
-  const filterHigh = useConnectionStore((s) => s.filterHighHz);
   const preampOn = useConnectionStore((s) => s.preampOn);
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
-  const filterRibbonOpen = useConnectionStore((s) => s.filterAdvancedPaneOpen);
+  const endpoint = useConnectionStore((s) => s.endpoint);
   const connected = status === 'Connected';
-  // Brand sub label in the topbar reflects what discovery actually saw on
-  // the wire (selection.connected), not the operator's preferred override —
-  // showing "ANAN G2" when an HL2 is plugged in would just confuse anyone
-  // reading the topbar to confirm what they're talking to. Falls back to
-  // a neutral "NOT CONNECTED" when nothing is on the wire yet.
+  // Brand sub label reflects what discovery actually saw on the wire
+  // (selection.connected), not the operator's preferred override — showing
+  // "ANAN G2" when an HL2 is plugged in would just confuse anyone reading
+  // the bottom status bar to confirm what they're talking to. The bar
+  // itself reads radio-store; we still trigger a reload here whenever the
+  // connection flips so the label is fresh after Connect.
   const radioConnected = useRadioStore((s) => s.selection.connected);
   const radioLoad = useRadioStore((s) => s.load);
   // Reload on mount AND every time the wire connection flips to Connected.
   // Clicking Connect on a discovered radio doesn't refresh radio-store on
-  // its own (only the manual-connect path does), so without this the
-  // brand-sub label keeps showing "NOT CONNECTED" until the next page load.
+  // its own (only the manual-connect path does).
   useEffect(() => { radioLoad(); }, [radioLoad, connected]);
   const brandSub = radioConnected !== 'Unknown'
-    ? BOARD_LABELS[radioConnected].toUpperCase()
-    : 'NOT CONNECTED';
+    ? BOARD_LABELS[radioConnected]
+    : 'Not Connected';
+
+  // Per-radio layouts (issue #241): the layout-store is keyed on the active
+  // BoardKind. "default" is the sentinel for "no radio yet" — discovery
+  // landing flips this to e.g. "HermesLite2" / "AnanG2" and the store
+  // re-fetches that radio's named-layout collection from the server.
+  const loadLayoutsForRadio = useLayoutStore((s) => s.loadForRadio);
+  useEffect(() => {
+    const key = radioConnected !== 'Unknown' ? radioConnected : 'default';
+    void loadLayoutsForRadio(key);
+  }, [loadLayoutsForRadio, radioConnected]);
+  const activeLayoutId = useLayoutStore((s) => s.activeLayoutId);
 
   useKeyboardShortcuts();
   useMicUplink();
@@ -488,9 +480,6 @@ export default function App() {
 
   const bandLabel = bandOf(vfoHz);
 
-  // --- Tx status chip
-  const txChip = moxOn || tunOn ? 'TX' : 'RX';
-
   // Effective home for the map + bearing math. Null until QRZ supplies a real
   // station — the map just omits the home marker and great-circle until then.
   const effectiveHome = qrzHome && qrzHome.lat != null && qrzHome.lon != null
@@ -576,14 +565,6 @@ export default function App() {
   // a stale variant after a window resize / device-rotate.
   const isMobile = useIsMobileViewport();
 
-  // Feature flag: layout preference store determines whether to use the
-  // flexlayout-react dockable panel layout. Mobile shell does not use
-  // flexlayout-react and short-circuits before the desktop tree renders.
-  const layoutMode = useLayoutPreferenceStore((s) => s.layoutMode);
-  const useFlexLayout = useMemo(() => {
-    return layoutMode === 'flex' && !isMobile;
-  }, [layoutMode, isMobile]);
-
   // Bundle workspace state into a context so panel components can consume it
   // without prop-drilling through the FlexWorkspace factory.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -656,34 +637,28 @@ export default function App() {
   }
 
   return (
+    <BandPlanProvider>
     <WorkspaceContext.Provider value={workspaceCtx}>
     <SpectrumWheelActionsContext.Provider value={spectrumWheelActions}>
     <div className="app" data-screen-label="01 Main Console" style={{ position: 'relative' }}>
-      {/* Top bar — sits above the disconnected overlay (zIndex 200) so QRZ
-          sign-in and Discover Radio stay usable before the HL2 is connected. */}
-      <div className="topbar" style={{ position: 'relative', zIndex: 300 }}>
+      {/* Left layout bar — issue #241. Spans the full app height; lists named
+          layouts for the active radio with switch/add/delete/reset actions. */}
+      <LeftLayoutBar />
+
+      {/* Top bar — brand on the left, transport-level inline controls
+          (mode/filter/band/step/front-end/AGC/AF) in the middle, status
+          pills + settings on the right. These controls stay always-visible
+          across default layouts so they're reachable mid-QSO without hunting
+          through the workspace (see feedback memory: top bar keeps inline
+          controls). The bar sits above the disconnected overlay so QRZ
+          sign-in stays usable before a radio is connected. */}
+      <header className="topbar" style={{ position: 'relative', zIndex: 300 }}>
         <div className="brand">
           <div className="brand-mark">
             <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden>
               <circle cx="12" cy="12" r="3" fill="var(--accent)" />
-              <circle
-                cx="12"
-                cy="12"
-                r="7"
-                fill="none"
-                stroke="var(--accent)"
-                strokeWidth="1"
-                opacity="0.5"
-              />
-              <circle
-                cx="12"
-                cy="12"
-                r="11"
-                fill="none"
-                stroke="var(--accent)"
-                strokeWidth="1"
-                opacity="0.25"
-              />
+              <circle cx="12" cy="12" r="7" fill="none" stroke="var(--accent)" strokeWidth="1" opacity="0.5" />
+              <circle cx="12" cy="12" r="11" fill="none" stroke="var(--accent)" strokeWidth="1" opacity="0.25" />
             </svg>
           </div>
           <div className="brand-text">
@@ -692,56 +667,40 @@ export default function App() {
           </div>
         </div>
 
-        <div className="topbar-divider hide-mobile" />
+        <span className="topbar-divider hide-mobile" aria-hidden />
 
-        <div className="vfo-group hide-mobile">
-          <div className="vfo-tab active">
-            <div className="vfo-label label-xs">VFO A</div>
-            <div className="vfo-freq mono">{(vfoHz / 1e6).toFixed(3)}</div>
+        <div className="topbar-controls hide-mobile">
+          <ModeFavorites />
+          <span className="strip-divider" aria-hidden />
+          <FilterPanel />
+          <span className="strip-divider" aria-hidden />
+          <BandFavorites />
+          <span className="strip-divider" aria-hidden />
+          <StepFavorites />
+          <span className="strip-divider" aria-hidden />
+          <div className="ctrl-group" style={{ minWidth: 200 }}>
+            <div className="label-xs ctrl-lbl">FRONT-END</div>
+            <div className="btn-row" style={{ gap: 6, alignItems: 'center' }}>
+              <PreampButton />
+              <AttenuatorSlider />
+            </div>
           </div>
-        </div>
-
-        <div className="topbar-divider hide-mobile" />
-
-        <div className="status-chips hide-mobile">
-          <div className="chip">
-            <span className="k">MODE</span>
-            <span className="v">{mode}</span>
+          <div className="ctrl-group" style={{ minWidth: 160 }}>
+            <div className="label-xs ctrl-lbl">AGC</div>
+            <AgcSlider />
           </div>
-          <div className="chip">
-            <span className="k">BAND</span>
-            <span className="v">{bandLabel}</span>
-          </div>
-          <div className="chip accent">
-            <span className="k">AGC-T</span>
-            <span className="v mono">{agcTop}</span>
-          </div>
-          <div className="chip">
-            <span className="k">BW</span>
-            <span className="v mono">
-              {Math.min(Math.abs(filterLow), Math.abs(filterHigh))}…
-              {Math.max(Math.abs(filterLow), Math.abs(filterHigh))} Hz
-            </span>
-          </div>
-          <div className={`chip ${moxOn || tunOn ? 'tx' : ''}`}>
-            <span className="k">TX</span>
-            <span className="v">{txChip}</span>
+          <div className="ctrl-group" style={{ minWidth: 160 }}>
+            <div className="label-xs ctrl-lbl">AF</div>
+            <AfGainSlider />
           </div>
         </div>
 
         <div className="spacer" style={{ flex: 1 }} />
 
-        {/* While disconnected the centre overlay owns the Discover UI; the
-            topbar slot holds the connected-state Disconnect control. Mounting
-            just one ConnectPanel at a time also avoids doubled 10s discovery
-            polls. */}
-        {connected && <ConnectPanel />}
-
-        <div className="hide-mobile" style={{ display: 'contents' }}>
-          <RotatorStatusPill />
-          <QrzStatusPill />
-        </div>
-
+        {/* Settings comes first, then Disconnect. Rotator / QRZ pills and the
+            radio IP moved to the BottomStatusBar — no need to duplicate them
+            up here. While disconnected the centre overlay owns Discover so
+            we mount only one ConnectPanel at a time. */}
         <button
           type="button"
           className="btn"
@@ -750,305 +709,23 @@ export default function App() {
         >
           ⚙
         </button>
-      </div>
-
-      {/* Control strip — real wired controls rebuilt into the design's chassis */}
-      <div className="control-strip">
-        <div className="hide-mobile" style={{ display: 'contents' }}>
-          <ModeFavorites />
-          <span className="strip-divider" aria-hidden="true" />
-          <FilterPanel />
-          <span className="strip-divider" aria-hidden="true" />
-          <BandFavorites />
-          <span className="strip-divider" aria-hidden="true" />
-          <StepFavorites />
-          <span className="strip-divider" aria-hidden="true" />
-        </div>
-        <div className="show-mobile" style={{ display: 'none', gap: 8 }}>
-          <ModeBandwidth />
-          <FilterPanel />
-          <BandButtons />
-        </div>
-        <div className="ctrl-group hide-mobile" style={{ minWidth: 220 }}>
-          <div className="label-xs ctrl-lbl">FRONT-END</div>
-          <div className="btn-row" style={{ gap: 6, alignItems: 'center' }}>
-            <PreampButton />
-            <AttenuatorSlider />
-          </div>
-        </div>
-        <div className="ctrl-group hide-mobile" style={{ minWidth: 180 }}>
-          <div className="label-xs ctrl-lbl">AGC</div>
-          <AgcSlider />
-        </div>
-        <div className="ctrl-group hide-mobile" style={{ minWidth: 180 }}>
-          <div className="label-xs ctrl-lbl">AF</div>
-          <AfGainSlider />
-        </div>
-        {useFlexLayout && (
-          <div className="ctrl-group hide-mobile">
-            <div className="label-xs ctrl-lbl">PANEL</div>
-            <button
-              type="button"
-              className="btn sm"
-              onClick={() => useLayoutStore.getState().setAddPanelOpen(true)}
-              title="Add panel to workspace"
-            >
-              + Add
-            </button>
-          </div>
-        )}
-        <div className="spacer hide-mobile" style={{ flex: 1 }} />
-      </div>
+        {connected && <ConnectPanel compact />}
+      </header>
 
       <AlertBanner />
 
-      {useFlexLayout ? (
-        <FlexWorkspace />
-      ) : (
-      <div
-        className={`workspace ${terminatorActive ? 'terminator' : ''} ${filterRibbonOpen ? 'has-filter-ribbon' : ''}`}
-      >
-        {/* Advanced filter ribbon — dedicated row above the hero, same column
-            width as the panadapter. When closed, FilterRibbon renders null
-            and the `has-filter-ribbon` class is absent, so the workspace
-            collapses to its original two-row layout. */}
-        <FilterRibbon />
-        {/* Hero — spectrum + waterfall over an optional background overlay
-            (Beam Map or user image), driven by display-settings-store. */}
-        <div className={`panel hero ${bgActive ? 'bg-active' : ''} ${mapInteractive ? 'map-mode' : ''}`}>
-          <div className="panel-head">
-            <span className={`dot ${moxOn || tunOn ? 'tx' : 'on'}`} />
-            <span className="title">{heroTitle}</span>
-            <span className="spacer" style={{ flex: 1 }} />
-            {terminatorActive && contact && mapAvailable && (
-              <>
-                <button
-                  type="button"
-                  className="chip mono"
-                  onClick={() => rotateToBearing(sp)}
-                  title="Short path — click to rotate"
-                >
-                  <span className="k">SP</span>
-                  <span className="v">{sp.toFixed(0)}°</span>
-                </button>
-                <button
-                  type="button"
-                  className="chip mono"
-                  onClick={() => rotateToBearing(lp)}
-                  title="Long path — click to rotate"
-                >
-                  <span className="k">LP</span>
-                  <span className="v">{lp.toFixed(0)}°</span>
-                </button>
-                <form onSubmit={submitBeam} className="chip mono" style={{ gap: 4 }}>
-                  <span className="k">BEAM</span>
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    value={beamInputStr}
-                    onChange={(e) => setBeamInputStr(e.target.value)}
-                    placeholder={(((rotLiveAz ?? beamOverrideDeg ?? sp) % 360 + 360) % 360).toFixed(0)}
-                    style={{
-                      width: 40,
-                      background: 'transparent',
-                      border: '1px solid var(--line)',
-                      color: 'inherit',
-                      fontFamily: 'inherit',
-                      fontSize: 'inherit',
-                      padding: '0 2px',
-                    }}
-                  />
-                  <button type="submit" className="btn sm" style={{ padding: '0 6px' }}>
-                    Go
-                  </button>
-                </form>
-              </>
-            )}
-            {terminatorActive && mapAvailable && (
-              <span
-                className={`chip mono ${mapInteractive ? 'accent' : ''}`}
-                title="Hold ⌥ (Alt) to zoom and pan the map (click-to-tune paused)"
-              >
-                <span className="k">⌥</span>
-                <span className="v">+ −</span>
-              </span>
-            )}
-            <ZoomControl />
-            <HzPerPixelChip />
-          </div>
-          <div className="panel-body hero-body">
-            {imageMode && (
-              <div
-                className={`image-layer ${backgroundImageFit}`}
-                style={{ backgroundImage: `url(${backgroundImage})` }}
-              />
-            )}
-            <div className={`map-layer ${terminatorActive ? 'visible' : ''}`}>
-              <LeafletMapErrorBoundary
-                onError={(error) => {
-                  console.warn('Leaflet map unavailable:', error.message);
-                  setMapAvailable(false);
-                }}
-                fallback={null}
-              >
-                {effectiveHome && (
-                <LeafletWorldMap
-                  home={{
-                    call: effectiveHome.call,
-                    lat: effectiveHome.lat,
-                    lon: effectiveHome.lon,
-                    grid: effectiveHome.grid,
-                    imageUrl: effectiveHome.imageUrl,
-                  }}
-                  target={
-                    contact
-                      ? {
-                          call: contact.callsign,
-                          lat: contact.lat,
-                          lon: contact.lon,
-                          grid: contact.grid,
-                          imageUrl: contact.photoUrl ?? null,
-                        }
-                      : null
-                  }
-                  beamBearing={
-                    // Priority: rotctld live azimuth (ground truth — where the
-                    // antenna is actually pointing, including mid-rotation); then
-                    // the manual Go override (used when rotator is offline);
-                    // finally undefined, so LeafletWorldMap falls back to the
-                    // great-circle bearing to the target.
-                    rotLiveAz ?? beamOverrideDeg ?? undefined
-                  }
-                  active={terminatorActive}
-                  interactive={mapInteractive}
-                  mapRef={mapApiRef}
-                  onRotateToBearing={(brg) => {
-                    const rot = useRotatorStore.getState();
-                    if (!rot.config.enabled || !rot.status?.connected) return;
-                    const normalized = ((brg % 360) + 360) % 360;
-                    setBeamOverrideDeg(normalized);
-                    setBeamInputStr(normalized.toFixed(0));
-                    void rot.setAzimuth(normalized);
-                  }}
-                />
-                )}
-              </LeafletMapErrorBoundary>
-            </div>
-            <div
-              data-spectrum-stack
-              style={{
-                position: 'absolute',
-                inset: 0,
-                display: 'grid',
-                gridTemplateRows: '1fr 1fr',
-                zIndex: 1,
-              }}
-            >
-              {connected && <Panadapter />}
-              {connected && <Waterfall transparent={bgActive} />}
-            </div>
-            {/* Mobile vertical zoom slider — hidden on desktop via CSS */}
-            <div className="show-mobile" style={{ display: 'none' }}>
-              <MobileZoomSlider />
-            </div>
-          </div>
-        </div>
+      {/* Active layout's workspace. Keying on activeLayoutId forces a full
+          unmount + remount when the operator switches layouts so WebGL
+          canvases / RAF loops / hub subscriptions in the prior layout
+          release rather than lingering hidden (issue #241 requires that
+          inactive layouts not consume DOM resources). */}
+      <FlexWorkspace key={activeLayoutId} />
 
-        {/* Side stack — Freq, S-Meter, QRZ, DSP, Step (and Map when QRZ off) */}
-        <div className="side-stack">
-          <div className="side-slot">
-            <Dockable title="Frequency · VFO" ledOn>
-              <div className="freq-panel">
-                <VfoDisplay />
-              </div>
-            </Dockable>
-          </div>
-          <div className="side-slot">
-            <Dockable title={moxOn || tunOn ? 'Power Out' : 'S-Meter · RX'} ledTx={moxOn || tunOn} ledOn={!(moxOn || tunOn)}>
-              <SMeterLive />
-            </Dockable>
-          </div>
-
-          {/* QRZ.com Lookup is visible whenever QRZ is configured (XML
-              subscription + station home loaded). When QRZ is not
-              configured the slot collapses and DSP moves up. */}
-          {qrzActive && (
-            <div className="side-slot grow hide-mobile">
-              <Dockable
-                title="QRZ.com Lookup"
-                ledOn={!!contact}
-                key={'qrz-' + lookupKey}
-                className="t1000-panel"
-                actions={
-                  <form
-                    onSubmit={onCallsignSubmit}
-                    style={{ display: 'flex', gap: 4 }}
-                  >
-                    <input
-                      ref={csInputRef}
-                      className="cs-input mono"
-                      value={callsign}
-                      onChange={(e) => setCallsign(e.target.value.toUpperCase())}
-                      placeholder="CALL?"
-                    />
-                    <button type="submit" className="btn sm">Lookup</button>
-                  </form>
-                }
-              >
-                <QrzCard
-                  contact={contact}
-                  enriching={enriching}
-                  lookupError={qrzLookupError}
-                  onLogQso={handleLogQso}
-                  canLogQso={qrzActive && !!contact}
-                />
-              </Dockable>
-            </div>
-          )}
-
-          <div className="side-slot hide-mobile">
-            <Dockable title="DSP" ledOn={dspActive}>
-              <DspPanel />
-            </Dockable>
-          </div>
-
-          <div className="side-slot hide-mobile">
-            <Dockable title="TX" ledOn={false}>
-              <TxFilterPanel />
-            </Dockable>
-          </div>
-
-          {/* TX Stage Meters — MIC / ALC / PWR / SWR. Lit red while
-              keyed (MOX or TUN), green when receiving. */}
-          <div className="side-slot side-slot--tx-stage-meters hide-mobile">
-            <Dockable
-              title="TX Stage Meters"
-              ledTx={moxOn || tunOn}
-              ledOn={!(moxOn || tunOn)}
-              actions={<OverdriveIndicator />}
-            >
-              <TxStageMeters />
-            </Dockable>
-          </div>
-
-        </div>
-
-        {/* Bottom row — Logbook + TX Stage Meters were removed from the
-            default classic layout: TX Stage Meters now live in the
-            right-hand side stack as a Dockable, and Logbook can be
-            re-added via "+ Add" when the operator wants it back. The
-            mobile PTT button still occupies this strip on phones. */}
-        <div className="bottom-row">
-          <div className="bottom-slot show-mobile mobile-ptt-slot">
-            <MobilePttButton />
-          </div>
-        </div>
-
-        <TerminatorLines active={terminatorActive} />
-      </div>
-      )}
-
-      {/* Transport — MOX/TUN + audio + drive + mic meter + chips */}
+      {/* Transport — MOX/TUN + audio + mic + macro buttons on the left,
+          PA/PRE chips, then the per-radio status (radio IP, rotator, QRZ)
+          and "+ Add Panel" trigger on the right. This is the single
+          bottom-pinned bar; the previous separate BottomStatusBar was
+          merged in here so the chrome doesn't duplicate. */}
       <div className="transport">
         <MoxButton />
         <TunButton />
@@ -1063,13 +740,23 @@ export default function App() {
         <div className="spacer" style={{ flex: 1 }} />
         <PaTempChip />
         <div className="chip hide-mobile">
-          <span className="k">LINK</span>
-          <span className="v mono">{connected ? 'UP' : 'DOWN'}</span>
-        </div>
-        <div className="chip hide-mobile">
           <span className="k">PRE</span>
           <span className="v">{preampOn ? 'ON' : 'OFF'}</span>
         </div>
+        <span className={`chip ${connected ? 'accent' : ''}`}>
+          <span className="k">RADIO</span>
+          <span className="v mono">{connected ? (endpoint ?? '—') : '—'}</span>
+        </span>
+        <RotatorStatusPill />
+        <QrzStatusPill />
+        <button
+          type="button"
+          className="btn sm"
+          onClick={() => useLayoutStore.getState().setAddPanelOpen(true)}
+          title="Add a panel to the active layout"
+        >
+          + Add Panel
+        </button>
       </div>
 
       {disconnectedOverlay}
@@ -1078,23 +765,7 @@ export default function App() {
     </div>
     </SpectrumWheelActionsContext.Provider>
     </WorkspaceContext.Provider>
-  );
-}
-
-// Isolated child component so the hzPerPixel store subscription is scoped to
-// this chip rather than the whole App tree — bin-width changes re-render only
-// the chip, not the panadapter / waterfall / VFO siblings.
-import { useDisplayStore } from './state/display-store';
-function HzPerPixelChip() {
-  const v = useDisplayStore((s) => s.hzPerPixel);
-  const text = !Number.isFinite(v) || v <= 0
-    ? '—'
-    : v >= 1 ? `${v.toFixed(1)} Hz` : `${(v * 1000).toFixed(0)} mHz`;
-  return (
-    <span className="chip mono">
-      <span className="k">HZ/PX</span>
-      <span className="v">{text}</span>
-    </span>
+    </BandPlanProvider>
   );
 }
 

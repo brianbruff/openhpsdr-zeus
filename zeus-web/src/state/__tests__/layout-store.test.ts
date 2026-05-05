@@ -49,13 +49,13 @@ describe('layout-store / workspace tile mutators', () => {
   });
 
   it('addTile places the new tile at y = max(existing y+h)', () => {
-    // DEFAULT_WORKSPACE_LAYOUT's tallest existing y+h is qrz/logbook/txmeters
-    // at y=14, h=6 → 20. So the new tile should land at y=20.
+    // DEFAULT_WORKSPACE_LAYOUT's tallest existing y+h is hero/dsp at
+    // y=6+18 / y=17+7 = 24. So the new tile should land at y=24.
     const uid = useLayoutStore.getState().addTile('cw');
     const tile = useLayoutStore
       .getState()
       .workspace.tiles.find((t) => t.uid === uid);
-    expect(tile?.y).toBe(20);
+    expect(tile?.y).toBe(24);
     expect(tile?.x).toBe(0);
   });
 

@@ -44,6 +44,30 @@ cd "${SCRIPT_DIR}"
 # pre-dates symbols Zeus relies on (e.g. SetRXAEMNRpost2*).
 export LD_LIBRARY_PATH="${SCRIPT_DIR}/runtimes/linux-x64/native:${SCRIPT_DIR}/runtimes/linux-arm64/native:${LD_LIBRARY_PATH}"
 
+# Cleanup handler to terminate the server subprocess on script exit.
+# Ensures that Ctrl-C, kill, or terminal close properly stops Zeus.Server
+# and prevents orphaned processes.
+cleanup() {
+    if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
+        echo ""
+        echo "Stopping Zeus server..."
+        kill -TERM "$SERVER_PID" 2>/dev/null || true
+        # Wait up to 5 seconds for graceful shutdown
+        for i in $(seq 1 10); do
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+                break
+            fi
+            sleep 0.5
+        done
+        # Force kill if still running
+        if kill -0 "$SERVER_PID" 2>/dev/null; then
+            kill -KILL "$SERVER_PID" 2>/dev/null || true
+        fi
+        wait "$SERVER_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT INT TERM
+
 # Check if running in a display environment
 if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
     echo "Starting Zeus server on http://localhost:6060"
@@ -64,12 +88,16 @@ if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
         echo "Please open http://localhost:6060 in your web browser."
     fi
 
+    echo "Zeus is running. Press Ctrl-C to stop."
     wait $SERVER_PID
 else
     # No display, just run the server
     echo "Starting Zeus server on http://localhost:6060"
     echo "Open this URL in your web browser to access Zeus."
-    ./Zeus.Server
+    ./Zeus.Server &
+    SERVER_PID=$!
+    echo "Zeus is running. Press Ctrl-C to stop."
+    wait $SERVER_PID
 fi
 EOF
 chmod +x "${PACKAGE_DIR}/zeus"

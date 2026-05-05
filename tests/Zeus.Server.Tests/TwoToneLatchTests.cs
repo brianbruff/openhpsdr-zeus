@@ -55,7 +55,7 @@ public class TwoToneLatchTests : IDisposable
         var radio = new RadioService(loggerFactory, dspStore, paStore);
         var hub = new StreamingHub(new NullLogger<StreamingHub>());
         var pipeline = new DspPipelineService(radio, hub, loggerFactory);
-        return new TxService(radio, pipeline, hub, new NullLogger<TxService>());
+        return new TxService(radio, pipeline, hub, NullBandPlanService.Instance, new NullLogger<TxService>());
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public class TwoToneLatchTests : IDisposable
         radio.MarkProtocol2Connected("127.0.0.1:1024", 48_000);
         var hub = new StreamingHub(new NullLogger<StreamingHub>());
         var pipeline = new DspPipelineService(radio, hub, loggerFactory);
-        return (radio, new TxService(radio, pipeline, hub, new NullLogger<TxService>()));
+        return (radio, new TxService(radio, pipeline, hub, NullBandPlanService.Instance, new NullLogger<TxService>()));
     }
 
     [Fact]

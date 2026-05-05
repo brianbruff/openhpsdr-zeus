@@ -1,0 +1,357 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* CFC Settings — Variant A (EQ Curve with draggable knots).
+   Adapted from the Claude Design handoff bundle (CFC Settings.html / cfc-curve.jsx).
+   Tokens map to zeus-web/src/styles/tokens.css; colours below are CFC-curve-local
+   only (not part of the global palette). */
+
+.cfc-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+
+  /* Curve-only auxiliary colours. The post-gain dashed line uses --cfc-good
+     (matches the Zeus meter-fill green); the live-edit halo uses --cfc-line-2.
+     These are component-scoped, never reused outside this panel. */
+  --cfc-good: #4aa04a;
+  --cfc-line-2: rgba(255, 255, 255, 0.10);
+}
+
+.cfc-blurb {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-md);
+  background: var(--bg-1);
+  font-size: 12px;
+  color: var(--fg-2);
+  line-height: 1.5;
+}
+.cfc-blurb .tag {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  text-transform: uppercase;
+  font-weight: 600;
+  padding: 3px 7px;
+  border: 1px solid color-mix(in oklab, var(--accent) 50%, var(--panel-border));
+  border-radius: 3px;
+  background: color-mix(in oklab, var(--accent) 8%, transparent);
+  white-space: nowrap;
+}
+.cfc-blurb p { margin: 0; }
+.cfc-blurb p strong { color: var(--fg-1); font-weight: 600; }
+
+/* Master row — bypass + Post-EQ + pre-comp / pre-peq + presets */
+.cfc-master {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  gap: 18px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-md);
+  background: linear-gradient(180deg, var(--bg-1), var(--bg-0));
+}
+.cfc-master .m-toggles { display: flex; gap: 14px; }
+.cfc-master .m-trims {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  justify-content: flex-end;
+}
+.cfc-master .m-trim { display: flex; flex-direction: column; gap: 3px; }
+.cfc-master .m-trim label {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  color: var(--fg-3);
+  text-transform: uppercase;
+}
+.cfc-master .ninput {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.cfc-master .ninput input {
+  width: 64px;
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  color: var(--fg-1);
+  border-radius: 3px;
+  padding: 3px 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: right;
+}
+.cfc-master .ninput input:focus { outline: none; border-color: var(--accent); }
+.cfc-master .ninput .u {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  color: var(--fg-3);
+  text-transform: uppercase;
+}
+
+/* Big bypass switch */
+.cfc-power {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.cfc-power input { position: absolute; opacity: 0; pointer-events: none; }
+.cfc-power .sw {
+  width: 42px;
+  height: 22px;
+  border-radius: 11px;
+  background: var(--bg-3);
+  border: 1px solid var(--panel-border);
+  position: relative;
+  transition: 0.15s;
+}
+.cfc-power .sw::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--fg-2);
+  transition: 0.15s;
+}
+.cfc-power input:checked + .sw {
+  background: color-mix(in oklab, var(--accent) 60%, var(--bg-3));
+  border-color: var(--accent);
+}
+.cfc-power input:checked + .sw::after {
+  left: 22px;
+  background: var(--accent);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--accent) 60%, transparent);
+}
+.cfc-power input:focus-visible + .sw {
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 50%, transparent);
+}
+.cfc-power .lbl {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--fg-1);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.cfc-power.is-off .lbl { color: var(--fg-3); }
+
+/* Post-EQ checkbox (custom box for visual parity with switch) */
+.cfc-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  color: var(--fg-2);
+  text-transform: uppercase;
+}
+.cfc-check input { position: absolute; opacity: 0; pointer-events: none; }
+.cfc-check .box {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  display: inline-block;
+  position: relative;
+}
+.cfc-check input:checked + .box {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.cfc-check input:checked + .box::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--fg-0);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* Preset chips */
+.cfc-presets { display: flex; gap: 6px; align-items: center; }
+.cfc-presets .lab {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  margin-right: 4px;
+}
+.cfc-presets .chip {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  border-radius: 3px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.cfc-presets .chip:hover { color: var(--fg-1); border-color: var(--cfc-line-2); }
+.cfc-presets .chip.on {
+  color: var(--fg-0);
+  background: color-mix(in oklab, var(--accent) 25%, var(--bg-0));
+  border-color: var(--accent);
+}
+
+/* Bypass dim */
+.cfc-body.is-bypass { opacity: 0.5; pointer-events: none; }
+
+/* Curve canvas */
+.cfc-curve .canvas {
+  position: relative;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-md);
+  background: linear-gradient(180deg, var(--bg-1) 0%, var(--bg-0) 100%);
+  padding: 14px 16px 16px;
+  user-select: none;
+}
+.cfc-curve .canvas svg { display: block; width: 100%; height: 280px; }
+.cfc-curve .gridline { stroke: var(--panel-border); stroke-width: 1; opacity: 0.5; }
+.cfc-curve .gridmid { stroke: var(--panel-border); stroke-width: 1; opacity: 0.9; stroke-dasharray: 2 4; }
+.cfc-curve .axis-text {
+  fill: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+}
+.cfc-curve .band-area { fill: url(#cfc-curve-fill); opacity: 0.55; }
+.cfc-curve .band-line {
+  stroke: var(--accent);
+  stroke-width: 2;
+  fill: none;
+  filter: drop-shadow(0 0 4px color-mix(in oklab, var(--accent) 50%, transparent));
+}
+.cfc-curve .post-line {
+  stroke: var(--cfc-good);
+  stroke-width: 1.5;
+  fill: none;
+  stroke-dasharray: 4 3;
+  opacity: 0.85;
+}
+.cfc-curve .knot {
+  fill: var(--bg-1);
+  stroke: var(--accent);
+  stroke-width: 2;
+  cursor: ns-resize;
+}
+.cfc-curve .knot:hover { fill: var(--accent); }
+.cfc-curve .knot.is-active {
+  fill: var(--accent);
+  filter: drop-shadow(0 0 6px var(--accent));
+}
+.cfc-curve .knot.post { stroke: var(--cfc-good); cursor: ns-resize; }
+.cfc-curve .knot.post:hover,
+.cfc-curve .knot.post.is-active {
+  fill: var(--cfc-good);
+  filter: drop-shadow(0 0 6px var(--cfc-good));
+}
+.cfc-curve .freq-tick { stroke: var(--cfc-line-2); stroke-width: 1; }
+.cfc-curve .band-label {
+  fill: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-anchor: middle;
+}
+
+/* Legend */
+.cfc-curve .legend {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  padding: 8px 14px 0;
+  font-size: 11px;
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+}
+.cfc-curve .legend .k { display: inline-flex; align-items: center; gap: 6px; }
+.cfc-curve .legend .k::before {
+  content: "";
+  width: 14px;
+  height: 2px;
+  display: inline-block;
+  background: var(--accent);
+}
+.cfc-curve .legend .k.post::before { background: var(--cfc-good); }
+.cfc-curve .legend .sp { flex: 1; }
+
+/* Below-curve strip */
+.cfc-curve .strip {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 80px repeat(10, 1fr);
+  gap: 6px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-md);
+  background: var(--bg-1);
+  padding: 10px;
+}
+.cfc-curve .strip .col {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: stretch;
+  text-align: center;
+  padding: 4px 0;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.cfc-curve .strip .col.lbl {
+  align-items: flex-start;
+  text-align: left;
+  padding: 4px 8px;
+  cursor: default;
+}
+.cfc-curve .strip .col.lbl em {
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: var(--fg-3);
+  text-transform: uppercase;
+}
+.cfc-curve .strip .col.lbl em.t { margin-top: 6px; }
+.cfc-curve .strip .col.lbl em.t.b { margin-top: 8px; }
+.cfc-curve .strip .col.is-active {
+  background: color-mix(in oklab, var(--accent) 10%, transparent);
+  border-color: color-mix(in oklab, var(--accent) 50%, transparent);
+}
+.cfc-curve .strip .bnum {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-1);
+}
+.cfc-curve .strip input {
+  width: 100%;
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  color: var(--fg-1);
+  border-radius: var(--r-sm);
+  padding: 3px 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: center;
+}
+.cfc-curve .strip input:focus { outline: none; border-color: var(--accent); }

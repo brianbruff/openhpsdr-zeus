@@ -116,16 +116,30 @@ cd "$(dirname "$0")"
 # the loader silently skips a path that does not exist.
 export DYLD_LIBRARY_PATH="$(pwd)/runtimes/osx-arm64/native:$(pwd)/runtimes/osx-x64/native:${DYLD_LIBRARY_PATH}"
 
-./Zeus.Server &
-SERVER_PID=$!
-
 # Cmd-Q from the Dock sends SIGTERM here — propagate it to the backend
-# so we don't leave Zeus.Server orphaned on port 6060.
+# so we don't leave Zeus.Server orphaned on port 6060. Set up the trap
+# BEFORE launching the server to ensure we catch early termination.
 cleanup() {
-    kill -TERM "$SERVER_PID" 2>/dev/null || true
-    wait "$SERVER_PID" 2>/dev/null || true
+    if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
+        kill -TERM "$SERVER_PID" 2>/dev/null || true
+        # Wait up to 5 seconds for graceful shutdown
+        for i in $(seq 1 10); do
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+                break
+            fi
+            sleep 0.5
+        done
+        # Force kill if still running
+        if kill -0 "$SERVER_PID" 2>/dev/null; then
+            kill -KILL "$SERVER_PID" 2>/dev/null || true
+        fi
+        wait "$SERVER_PID" 2>/dev/null || true
+    fi
 }
 trap cleanup EXIT INT TERM
+
+./Zeus.Server &
+SERVER_PID=$!
 
 # Wait up to ~30s for the HTTP listener. First-run WDSP wisdom takes 1–3
 # minutes, but the HTTP server binds before wisdom planning starts, so the

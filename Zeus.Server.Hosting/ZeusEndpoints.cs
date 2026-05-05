@@ -601,6 +601,62 @@ public static class ZeusEndpoints
             return Results.Ok(new BandMemoryDto(band, req.Hz, req.Mode));
         });
 
+        // Regional band plan (issue #65). Shipped JSON under BandPlans/ defines
+        // baseline regions (IARU R1/R2/R3) and country overrides (EI, G, US FCC
+        // General/Extra). Operator can edit per-region segments (PUT) and reset
+        // back to shipped defaults (DELETE). Active region is persisted in
+        // BandPrefsStore; switches fire BandPlanChanged (0x1B) so other tabs
+        // refetch.
+        app.MapGet("/api/bands/regions", (BandPlanStore store) =>
+            Results.Ok(store.Regions));
+
+        app.MapGet("/api/bands/plan", (string? region, BandPlanService svc) =>
+        {
+            var regionId = region ?? svc.CurrentRegion.Id;
+            var plan = svc.ResolvePlan(regionId);
+            return Results.Ok(new BandPlanDto(regionId, plan));
+        });
+
+        app.MapGet("/api/bands/current", (BandPlanService svc) =>
+            Results.Ok(new
+            {
+                regionId = svc.CurrentRegion.Id,
+                region = svc.CurrentRegion,
+                segments = svc.CurrentPlan,
+                txGuardIgnore = svc.TxGuardIgnore,
+            }));
+
+        app.MapPost("/api/bands/current", (BandPlanCurrentSetRequest req, BandPlanService svc) =>
+        {
+            svc.SetRegion(req.RegionId);
+            return Results.Ok(new { regionId = svc.CurrentRegion.Id });
+        });
+
+        app.MapPut("/api/bands/plan", (BandPlanSaveRequest req, BandPlanService svc) =>
+        {
+            try
+            {
+                svc.SavePlan(req.RegionId, req.Segments);
+                return Results.Ok(new { regionId = req.RegionId, saved = req.Segments.Count });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
+
+        app.MapDelete("/api/bands/plan/{regionId}", (string regionId, BandPlanService svc) =>
+        {
+            svc.ResetPlan(regionId);
+            return Results.Ok(new { regionId, reset = true });
+        });
+
+        app.MapPost("/api/bands/guard", (BandGuardSetRequest req, BandPlanService svc) =>
+        {
+            svc.SetTxGuardIgnore(req.Ignore);
+            return Results.Ok(new { txGuardIgnore = req.Ignore });
+        });
+
         // PA settings — per-band gain/OC masks + globals. Single PUT replaces the
         // whole snapshot because the UI edits rows as a table; incremental PATCHing
         // would deadlock with the RadioService recompute subscription fired on Save.
@@ -744,6 +800,38 @@ public static class ZeusEndpoints
                 OverrideDetection: overrideDetection));
         });
 
+        // Board capability fingerprint for the effective board — what the
+        // web UI gates feature panels on (volts/amps meter, audio-amp
+        // controls, RX2 attenuator mode, Path Illustrator visibility, etc.).
+        // Read once at connect; static facts that depend only on the board
+        // class. Cross-references docs/references/protocol-1/thetis-board-matrix.md.
+        app.MapGet("/api/radio/capabilities", (RadioService radio) =>
+        {
+            return Results.Ok(BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant));
+        });
+
+        // Operator-selected variant for the 0x0A wire-byte alias family
+        // (issue #218). Routes calibration / PA gain / rated-watts dispatch
+        // when the connected board is OrionMkII. Default G2 preserves
+        // pre-#218 behaviour; operators with a non-G2 board select the
+        // variant once and the dispatch picks up the right bridge constants.
+        app.MapGet("/api/radio/variant", (PreferredRadioStore prefs) =>
+        {
+            return Results.Ok(new { Variant = prefs.GetOrionMkIIVariant().ToString() });
+        });
+
+        app.MapPut("/api/radio/variant", (RadioVariantSetRequest req, PreferredRadioStore prefs) =>
+        {
+            if (req is null || string.IsNullOrWhiteSpace(req.Variant))
+                return Results.BadRequest(new { error = "variant required" });
+
+            if (!Enum.TryParse<OrionMkIIVariant>(req.Variant, ignoreCase: true, out var variant))
+                return Results.BadRequest(new { error = $"unknown variant '{req.Variant}'" });
+
+            prefs.SetOrionMkIIVariant(variant);
+            return Results.Ok(new { Variant = variant.ToString() });
+        });
+
         // UI layout: flexlayout-react panel arrangement, persisted per operator profile.
         // GET returns 404 when no layout has been saved yet (frontend falls back to
         // DEFAULT_LAYOUT). PUT replaces; DELETE resets to default on next load.
@@ -775,13 +863,68 @@ public static class ZeusEndpoints
             var body = await reader.ReadToEndAsync(ctx.RequestAborted);
             try
             {
-                var req = System.Text.Json.JsonSerializer.Deserialize<UiLayoutSetRequest>(
+                // Accept either the legacy single-layout shape or the v2
+                // named-layout shape — beforeunload handlers in the field can
+                // still be sending the old format while the page is reloading
+                // into the new client.
+                var named = System.Text.Json.JsonSerializer.Deserialize<SaveNamedLayoutRequest>(
                     body, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                if (req?.LayoutJson is { } json && !string.IsNullOrWhiteSpace(json))
-                    store.Upsert(json);
+                if (named?.LayoutJson is { } njson && !string.IsNullOrWhiteSpace(njson)
+                    && !string.IsNullOrWhiteSpace(named.LayoutId))
+                {
+                    store.UpsertNamed(
+                        named.RadioKey ?? "default",
+                        named.LayoutId,
+                        named.Name ?? named.LayoutId,
+                        njson,
+                        named.Icon,
+                        named.Description);
+                }
+                else
+                {
+                    var req = System.Text.Json.JsonSerializer.Deserialize<UiLayoutSetRequest>(
+                        body, new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    if (req?.LayoutJson is { } json && !string.IsNullOrWhiteSpace(json))
+                        store.Upsert(json);
+                }
             }
             catch { /* sendBeacon is fire-and-forget; swallow parse errors */ }
             return Results.Ok();
+        });
+
+        // Multi-layout API (issue #241) — named layouts keyed per radio.
+        // `radio` query param is the BoardKind string ("HermesLite2", etc.) or
+        // "default" while no radio is connected.
+        app.MapGet("/api/ui/layouts", (string? radio, LayoutStore store) =>
+            Results.Ok(store.GetForRadio(radio ?? "default")));
+
+        app.MapPut("/api/ui/layouts", (SaveNamedLayoutRequest req, LayoutStore store) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.LayoutJson))
+                return Results.BadRequest(new { error = "layoutJson required" });
+            if (string.IsNullOrWhiteSpace(req.LayoutId))
+                return Results.BadRequest(new { error = "layoutId required" });
+            return Results.Ok(store.UpsertNamed(
+                req.RadioKey ?? "default",
+                req.LayoutId,
+                req.Name ?? req.LayoutId,
+                req.LayoutJson,
+                req.Icon,
+                req.Description));
+        });
+
+        app.MapPost("/api/ui/layouts/active", (SetActiveLayoutRequest req, LayoutStore store) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.LayoutId))
+                return Results.BadRequest(new { error = "layoutId required" });
+            return Results.Ok(store.SetActive(req.RadioKey ?? "default", req.LayoutId));
+        });
+
+        app.MapDelete("/api/ui/layouts", (string? radio, string? id, LayoutStore store) =>
+        {
+            if (string.IsNullOrWhiteSpace(id))
+                return Results.BadRequest(new { error = "id required" });
+            return Results.Ok(store.DeleteNamed(radio ?? "default", id));
         });
 
         app.MapGet("/api/qrz/status", (QrzService qrz) => qrz.GetStatus());

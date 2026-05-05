@@ -45,6 +45,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.NetworkInformation;
+using Zeus.Contracts;
 
 namespace Zeus.Protocol1.Discovery;
 
@@ -120,11 +121,12 @@ public static class ReplyParser
     {
         0x00 => HpsdrBoardKind.Metis,
         0x01 => HpsdrBoardKind.Hermes,
-        0x02 => HpsdrBoardKind.Griffin,
+        0x02 => HpsdrBoardKind.HermesII,
         0x04 => HpsdrBoardKind.Angelia,
         0x05 => HpsdrBoardKind.Orion,
         0x06 => HpsdrBoardKind.HermesLite2,
         0x0A => HpsdrBoardKind.OrionMkII,
+        0x14 => HpsdrBoardKind.HermesC10,
         _ => HpsdrBoardKind.Unknown,
     };
 

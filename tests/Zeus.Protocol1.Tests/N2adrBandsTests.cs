@@ -42,6 +42,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+using Zeus.Contracts;
 using Zeus.Protocol1.Discovery;
 
 namespace Zeus.Protocol1.Tests;
@@ -119,6 +120,29 @@ public class N2adrBandsTests
             HasN2adr: false);
         ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, state);
         Assert.Equal(0, cc[2]);
+    }
+
+    // Parallel band-name lookup used by PaSettingsStore to surface the
+    // firmware auto-mask in the PA Settings panel. Must agree pin-for-pin
+    // with the freq-keyed RxOcMask above — operator-visible UI mustn't
+    // diverge from what the wire actually drives.
+    [Theory]
+    [InlineData("160m", 0x01)]
+    [InlineData("80m",  0x42)]
+    [InlineData("60m",  0x44)]
+    [InlineData("40m",  0x44)]
+    [InlineData("30m",  0x48)]
+    [InlineData("20m",  0x48)]
+    [InlineData("17m",  0x50)]
+    [InlineData("15m",  0x50)]
+    [InlineData("12m",  0x60)]
+    [InlineData("10m",  0x60)]
+    [InlineData("6m",   0x00)]
+    [InlineData("",     0x00)]
+    [InlineData("garbage", 0x00)]
+    public void N2adrBands_RxOcMaskForBand_MatchesFreqKeyedTable(string band, byte expected)
+    {
+        Assert.Equal(expected, N2adrBands.RxOcMaskForBand(band));
     }
 
     [Fact]

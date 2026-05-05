@@ -124,16 +124,42 @@ public sealed record RadioCalibration(
     /// ANAN-8000D / Thetis "ORIONMKII" enum — Thetis
     /// <c>console.cs:25089-25093</c>. Bridge 0.08, ref 5.0, offset 18.
     /// Board id 0x0A in <c>HpsdrBoardKind</c> aliases both ANAN-8000D and
-    /// G2; without an extra discriminator we cannot disambiguate at runtime,
-    /// so the dispatch in <c>RadioCalibrations.For</c> picks
-    /// <see cref="OrionMkII"/> by default. ANAN-8000D operators who notice
-    /// a meter offset can revisit this — flag for maintainer review.
-    /// TODO(p2-cal): expose a per-radio override or extend discovery so
-    /// the right bucket lands automatically.
+    /// G2; the operator selects the variant via
+    /// <see cref="OrionMkIIVariant"/> and <c>RadioCalibrations.For</c>
+    /// dispatches to this bucket when <see cref="OrionMkIIVariant.Anan8000DLE"/>
+    /// is chosen. Apache OrionMkII (original) shares these constants with a
+    /// separate bucket (<see cref="OrionMkIIOriginal"/>) for the 100 W
+    /// rated-watts override.
     /// </summary>
     public static readonly RadioCalibration OrionMkIIAnan8000 = new(
         BridgeVolt: 0.08,
         RefVoltage: 5.0,
         AdcCalOffset: 18,
         MaxWatts: 200.0);
+
+    /// <summary>
+    /// Apache OrionMkII (original 100 W radio, Orion-MkII firmware) —
+    /// Thetis <c>console.cs:25089-25093</c>. Same bridge constants as
+    /// <see cref="OrionMkIIAnan8000"/> but 100 W rated rather than 200 W.
+    /// Selected via <see cref="OrionMkIIVariant.OrionMkII"/>.
+    /// </summary>
+    public static readonly RadioCalibration OrionMkIIOriginal = new(
+        BridgeVolt: 0.08,
+        RefVoltage: 5.0,
+        AdcCalOffset: 18,
+        MaxWatts: 100.0);
+
+    /// <summary>
+    /// ANAN-G2-1K (Saturn FPGA, 1 kW PA). Same bridge constants as
+    /// <see cref="OrionMkII"/> but 1000 W rated for meter scaling.
+    /// Selected via <see cref="OrionMkIIVariant.G2_1K"/>. G8NJJ noted in
+    /// Thetis (<c>clsHardwareSpecific.cs:171</c>) that the 1K variant
+    /// "likely needs further changes for PA" — the bridge constants here
+    /// match G2 for parity until a real-radio operator dials them in.
+    /// </summary>
+    public static readonly RadioCalibration AnanG21K = new(
+        BridgeVolt: 0.12,
+        RefVoltage: 5.0,
+        AdcCalOffset: 32,
+        MaxWatts: 1000.0);
 }

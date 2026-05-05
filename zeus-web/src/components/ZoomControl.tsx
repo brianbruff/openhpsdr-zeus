@@ -42,22 +42,26 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 
 // Compact zoom slider styled as a panel-head chip. Lives in the hero
-// panel header (above the panadapter) so the operator always sees the
-// current zoom level alongside HZ/PX. Uses the same abort-inflight
-// pattern as use-keyboard-shortcuts so rapid drags don't queue POSTs.
+// tile header (above the panadapter) so the operator always sees the
+// current zoom level alongside HZ/PX.
+//
+// Send-on-change (no deferred mouseup commit): every step of the drag
+// pushes via setZoom, with the previous in-flight request aborted so
+// only the final value's echo survives. The optimistic setZoomLevel
+// update means the thumb tracks user intent immediately and isn't
+// yanked back by the next state broadcast — which is what made the
+// old "commit on mouseup" pattern unreliable when the release point
+// missed the input element.
 export function ZoomControl() {
   const serverZoom = useConnectionStore((s) => s.zoomLevel);
   const setLocalZoom = useConnectionStore((s) => s.setZoomLevel);
   const applyState = useConnectionStore((s) => s.applyState);
   const connected = useConnectionStore((s) => s.status === 'Connected');
-
-  const [dragValue, setDragValue] = useState<ZoomLevel | null>(null);
-  const value = dragValue ?? serverZoom;
 
   const inflightAbort = useRef<AbortController | null>(null);
   const latestSent = useRef<ZoomLevel>(serverZoom);
@@ -83,25 +87,29 @@ export function ZoomControl() {
 
   useEffect(() => () => inflightAbort.current?.abort(), []);
 
-  const commit = () => {
-    if (dragValue !== null) sendValue(dragValue);
-    setDragValue(null);
-  };
-
   return (
-    <label className="chip mono" style={{ gap: 6, alignItems: 'center' }}>
-      <span className="k">ZOOM</span>
+    <label
+      className="mono"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        // Blend with the gradient tile header — no chip background / border.
+        background: 'transparent',
+        border: 'none',
+        padding: '0 2px',
+        fontSize: 10,
+      }}
+    >
+      <span className="k" style={{ color: 'var(--fg-2)', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', fontSize: 9 }}>ZOOM</span>
       <input
         type="range"
         min={ZOOM_MIN}
         max={ZOOM_MAX}
         step={1}
-        value={value}
+        value={serverZoom}
         disabled={!connected}
-        onChange={(e) => setDragValue(Number(e.currentTarget.value) as ZoomLevel)}
-        onMouseUp={commit}
-        onTouchEnd={commit}
-        onKeyUp={commit}
+        onChange={(e) => sendValue(Number(e.currentTarget.value) as ZoomLevel)}
         aria-label="Zoom level"
         style={{
           width: 90,
@@ -110,8 +118,17 @@ export function ZoomControl() {
           margin: 0,
         }}
       />
-      <span className="v" style={{ minWidth: 18, textAlign: 'right' }}>
-        {value}×
+      <span
+        className="v"
+        style={{
+          minWidth: 18,
+          textAlign: 'right',
+          color: 'var(--fg-0)',
+          fontWeight: 700,
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        {serverZoom}×
       </span>
     </label>
   );

@@ -54,8 +54,8 @@ describe('AddPanelModal', () => {
     const cards = container.querySelectorAll(
       '[data-testid="add-panel-cards"] .add-panel-card',
     );
-    // 16 panels in registry.
-    expect(cards.length).toBe(16);
+    // 17 panels in registry.
+    expect(cards.length).toBe(17);
     unmount();
   });
 
@@ -70,12 +70,14 @@ describe('AddPanelModal', () => {
     const cards = container.querySelectorAll(
       '[data-testid="add-panel-cards"] .add-panel-card',
     );
-    // smeter, txmeters, meters — the three panels in the meters category.
-    expect(cards.length).toBe(3);
+    // smeter, txmeters, meters, analogmeter — four panels in the meters category.
+    expect(cards.length).toBe(4);
     const ids = Array.from(cards).map((c) =>
       c.getAttribute('data-panel-id'),
     );
-    expect(ids).toEqual(expect.arrayContaining(['smeter', 'txmeters', 'meters']));
+    expect(ids).toEqual(
+      expect.arrayContaining(['smeter', 'txmeters', 'meters', 'analogmeter']),
+    );
     unmount();
   });
 

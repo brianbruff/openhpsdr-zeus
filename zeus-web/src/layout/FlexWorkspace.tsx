@@ -17,7 +17,7 @@
 //   - "+ Add Panel" is a single workspace-level button at the top-right,
 //     opening the categorized AddPanelModal.
 
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ResponsiveGridLayout,
   useContainerWidth,
@@ -28,7 +28,9 @@ import { useLayoutStore } from '../state/layout-store';
 import { PANELS } from './panels';
 import {
   WORKSPACE_GRID_COLS,
+  WORKSPACE_ROW_HEIGHT_MIN_PX,
   WORKSPACE_ROW_HEIGHT_PX,
+  WORKSPACE_TARGET_ROWS,
   WORKSPACE_TILE_MIN_H,
   WORKSPACE_TILE_MIN_W,
   type WorkspaceTile,
@@ -134,20 +136,55 @@ function WorkspaceCanvas({
   // measurement. mounted=false on first paint to avoid the 1280-px width
   // flash before the observer fires. Same pattern MetersCanvas uses.
   const { width, containerRef, mounted } = useContainerWidth();
+  // Track container height so rowHeight can scale with the viewport — this
+  // is what gives panels their "anchor: bottom" feel: hero (h=18) fills the
+  // available vertical space, right-column tiles distribute proportionally,
+  // window resize re-flows automatically.
+  const [containerHeight, setContainerHeight] = useState(0);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    setContainerHeight(el.getBoundingClientRect().height);
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) setContainerHeight(e.contentRect.height);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [containerRef]);
+  // Responsive rowHeight: solve containerHeight ≈ rowHeight*N + margin*(N-1)
+  // + 2*containerPadding. Margin and containerPadding here mirror the props
+  // passed to ResponsiveGridLayout below — keep them in sync if those change.
+  const rowHeight = useMemo(() => {
+    if (containerHeight <= 0) return WORKSPACE_ROW_HEIGHT_PX;
+    const margin = 6;
+    const containerPadding = 6;
+    const inner =
+      containerHeight - 2 * containerPadding - margin * (WORKSPACE_TARGET_ROWS - 1);
+    const computed = Math.floor(inner / WORKSPACE_TARGET_ROWS);
+    return Math.max(WORKSPACE_ROW_HEIGHT_MIN_PX, computed);
+  }, [containerHeight]);
 
   // RGL needs a stable per-render layouts.lg array. Memoise against the
   // tile list identity so we don't push a new prop on every parent render.
+  // Per-panel maxW/maxH (when defined in panels.ts) is propagated here so
+  // RGL clamps user resize drags — that's what gives right-column panels
+  // (vfo/smeter/dsp/txmeters/tx) their "grow in height only" feel.
   const rglLayouts = useMemo(
     () => ({
-      lg: tiles.map((t) => ({
-        i: t.uid,
-        x: t.x,
-        y: t.y,
-        w: t.w,
-        h: t.h,
-        minW: WORKSPACE_TILE_MIN_W,
-        minH: WORKSPACE_TILE_MIN_H,
-      })),
+      lg: tiles.map((t) => {
+        const def = PANELS[t.panelId];
+        return {
+          i: t.uid,
+          x: t.x,
+          y: t.y,
+          w: t.w,
+          h: t.h,
+          minW: WORKSPACE_TILE_MIN_W,
+          minH: WORKSPACE_TILE_MIN_H,
+          ...(def?.maxW !== undefined ? { maxW: def.maxW } : {}),
+          ...(def?.maxH !== undefined ? { maxH: def.maxH } : {}),
+        };
+      }),
     }),
     [tiles],
   );
@@ -163,7 +200,7 @@ function WorkspaceCanvas({
           width={width}
           breakpoints={{ lg: 0 }}
           cols={{ lg: WORKSPACE_GRID_COLS }}
-          rowHeight={WORKSPACE_ROW_HEIGHT_PX}
+          rowHeight={rowHeight}
           margin={[6, 6]}
           containerPadding={[6, 6]}
           // Drag from anywhere in the tile header (the grip + title strip),

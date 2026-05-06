@@ -19,6 +19,7 @@ import {
   PANEL_CATEGORIES,
   PANEL_CATEGORY_LABELS,
   type PanelCategory,
+  type PanelDef,
 } from './panels';
 
 interface AddPanelModalProps {
@@ -28,16 +29,31 @@ interface AddPanelModalProps {
   existingPanels: Set<string>;
   onAdd: (panelId: string) => void;
   onClose: () => void;
+  /** Optional visibility predicate. When supplied, panels for which this
+   *  returns false are hidden from both the category filter and the search
+   *  results. HL2 multi-slice (issue #251) uses this to hide the hero-rx1..3
+   *  entries when the connected board's MaxReceivers ≤ 1 or when multi-slice
+   *  is disabled — operator-side feature gating without bloating PanelDef. */
+  panelVisible?: (def: PanelDef) => boolean;
 }
 
 type CategoryFilter = PanelCategory | 'all';
 
-export function AddPanelModal({ existingPanels, onAdd, onClose }: AddPanelModalProps) {
+export function AddPanelModal({
+  existingPanels,
+  onAdd,
+  onClose,
+  panelVisible,
+}: AddPanelModalProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] =
     useState<CategoryFilter>('all');
 
   const availablePanels = Object.values(PANELS).filter((panel) => {
+    // Caller-supplied visibility gate — used to hide HL2 multi-RX panels
+    // when MaxReceivers ≤ 1 / multi-slice is off.
+    if (panelVisible && !panelVisible(panel)) return false;
+
     // Single-instance panels disappear from the list once added; multi-
     // instance panels stay visible (the badge changes to "+ Add another").
     if (existingPanels.has(panel.id) && !panel.multiInstance) return false;

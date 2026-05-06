@@ -14,7 +14,7 @@
 // of scissor-clipping or sharing the main panadapter's GL context.
 
 import { useEffect, useRef } from 'react';
-import { useDisplayStore } from '../../state/display-store';
+import { getSliceState, useDisplayStore } from '../../state/display-store';
 import { useConnectionStore } from '../../state/connection-store';
 import { setFilter } from '../../api/client';
 import { formatCutOffset } from './filterPresets';
@@ -78,7 +78,9 @@ export function FilterMiniPan() {
 
     const draw = () => {
       rafHandle = 0;
-      const d = useDisplayStore.getState();
+      // Filter editor is a single radio-wide control — always reads RX0.
+      // Per-slice filter UI is deferred; see Task #4 hand-off notes.
+      const d = getSliceState(0);
       const c = useConnectionStore.getState();
       if (d.lastSeq === lastSeq) return;
       lastSeq = d.lastSeq;

@@ -63,6 +63,7 @@ import {
   setPreamp,
   setSampleRate,
   setTun,
+  setVfo,
   setZoom,
 } from './client';
 
@@ -257,6 +258,52 @@ describe('POST helpers', () => {
       preampOn: true,
       atten: 2,
     });
+  });
+
+  it('setVfo posts { hz } to /api/vfo when rxId is omitted (legacy / single-slice)', async () => {
+    // Pinning test: the single-slice payload must NOT carry a rxId field
+    // so a server that pre-dates Task #6 still binds correctly. Don't add
+    // rxId to the body just because the parameter has a default — only
+    // append it when it's actually > 0.
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(okState));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await setVfo(14_200_000);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/vfo');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse((init?.body ?? '') as string)).toEqual({ hz: 14_200_000 });
+  });
+
+  it('setVfo posts { hz, rxId } when rxId > 0 (multi-slice tuning)', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(okState));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await setVfo(14_300_000, undefined, 1);
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0]![1]?.body ?? '') as string,
+    );
+    expect(body).toEqual({ hz: 14_300_000, rxId: 1 });
+  });
+
+  it('setVfo treats rxId === 0 as the master VFO (no rxId field on the wire)', async () => {
+    // Defensive: a caller that explicitly passes rxId=0 should still get
+    // the legacy payload — we rely on this to keep the keyboard / band-
+    // button paths bit-identical when they evolve to pass the parameter.
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(okState));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await setVfo(14_200_000, undefined, 0);
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0]![1]?.body ?? '') as string,
+    );
+    expect(body).toEqual({ hz: 14_200_000 });
   });
 
   it('setSampleRate posts { rate } to /api/sampleRate', async () => {

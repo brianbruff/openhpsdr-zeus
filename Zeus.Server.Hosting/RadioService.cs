@@ -433,6 +433,62 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
+    /// <summary>
+    /// Tune a non-primary multi-slice receiver. <paramref name="rxId"/> must be
+    /// in <c>[1, NumActiveSlices - 1]</c> and multi-slice must be enabled in
+    /// the current state — otherwise an <see cref="ArgumentException"/> is
+    /// thrown so the endpoint returns 400. <paramref name="rxId"/>=0 is
+    /// rejected here intentionally; callers should use <see cref="SetVfo"/>
+    /// for the primary so the existing CW / band-edge / RecomputePaAndPush
+    /// logic is invoked. Per-slice mode/filter/AGC are radio-wide in Phase 1
+    /// (Phase 2 work) so this method only updates the slice's NCO.
+    ///
+    /// State persistence: the new VFO is mirrored into
+    /// <see cref="StateDto.MultiSlice"/>'s <c>SliceVfoHz</c> list so a later
+    /// reconnect or multi-slice resync re-applies the same per-slice tune
+    /// rather than dropping back to the master VFO. <see cref="DspPipelineService"/>
+    /// listens for these state changes and forwards them to the live
+    /// <see cref="Protocol1Client"/>; we also push directly here so the wire
+    /// reflects the change before the next state-broadcast tick.
+    /// </summary>
+    public StateDto SetVfoSlice(int rxId, long hz)
+    {
+        if (rxId <= 0)
+            throw new ArgumentException("rxId must be > 0; use SetVfo for the primary slice.", nameof(rxId));
+
+        long clamped = Math.Clamp(hz, 0L, 60_000_000L);
+        var snap = Snapshot();
+        var ms = snap.MultiSlice ?? MultiSliceConfig.Default;
+        if (!ms.Enabled || ms.NumActiveSlices <= 1)
+            throw new ArgumentException("multi-slice is not enabled.", nameof(rxId));
+        if (rxId >= ms.NumActiveSlices)
+            throw new ArgumentException(
+                $"rxId {rxId} out of range [1, {ms.NumActiveSlices - 1}]",
+                nameof(rxId));
+
+        // Build the new SliceVfoHz list with the request's hz at index rxId-1.
+        // Pad shorter lists with the master VFO so a sparse persisted state
+        // (e.g. only RX1 was tuned, RX2/RX3 untouched) round-trips cleanly.
+        int needed = ms.NumActiveSlices - 1;
+        var next = new long[needed];
+        var existing = ms.SliceVfoHz;
+        for (int i = 0; i < needed; i++)
+        {
+            next[i] = existing != null && i < existing.Count ? existing[i] : snap.VfoHz;
+        }
+        next[rxId - 1] = clamped;
+
+        Mutate(s => s with { MultiSlice = ms with { SliceVfoHz = next } });
+
+        // Push to the wire immediately — Mutate raises StateChanged, which
+        // DspPipelineService picks up to call SetVfoSliceHz, but doing it
+        // here keeps the call site non-event-dependent so test seams that
+        // don't run the pipeline can still observe the wire-side change
+        // via Protocol1Client.SnapshotState().
+        ActiveClient?.SetVfoSliceHz(rxId, clamped);
+        return Snapshot();
+    }
+
     // Per-mode-family remembered filter magnitudes. Mode switching snapshots
     // the current abs-filter into the departing family's slot and restores the
     // target family's slot on entry — so FM→USB brings back the SSB width
@@ -1269,6 +1325,41 @@ public sealed class RadioService : IDisposable
             _state = next;
         }
         StateChanged?.Invoke(next);
+    }
+
+    /// <summary>
+    /// Apply a multi-slice configuration request. Phase 1: HL2 only, default
+    /// OFF. Refuses (and logs a warning) when PureSignal is armed —
+    /// PS+multi-RX coexistence is a Phase 2 concern. <paramref name="cfg"/>'s
+    /// NumActiveSlices is clamped to <see cref="BoardCapabilities.MaxReceivers"/>
+    /// for the connected board (and to a hard ceiling of 4, the HL2 protocol
+    /// limit). Per-slice VFOs default to the master VFO when not provided.
+    /// </summary>
+    public StateDto SetMultiSlice(MultiSliceConfig cfg)
+    {
+        if (cfg is null) cfg = MultiSliceConfig.Default;
+
+        var snap = Snapshot();
+        if (snap.PsEnabled && cfg.Enabled)
+        {
+            _log.LogWarning(
+                "multiSlice request refused: PureSignal is armed (PS coexistence is Phase 2).");
+            // Persist Enabled=false so the operator UI can re-render the
+            // refusal; preserve the rest of the request so a follow-up
+            // PS-disarm doesn't lose the operator's slice count / VFOs.
+            cfg = cfg with { Enabled = false };
+        }
+
+        // Clamp slice count to the connected board's ceiling AND the
+        // protocol-1 multi-RX hard ceiling (4) so we never ask the gateware
+        // for an undefined nddc value.
+        var caps = BoardCapabilitiesTable.For(EffectiveBoardKind, EffectiveOrionMkIIVariant);
+        int hardCap = Math.Min(caps.MaxReceivers, 4);
+        int n = Math.Clamp(cfg.NumActiveSlices, 1, Math.Max(1, hardCap));
+        cfg = cfg with { NumActiveSlices = (byte)n };
+
+        Mutate(s => s with { MultiSlice = cfg });
+        return Snapshot();
     }
 
     // Used by DspPipelineService when a Protocol 2 radio connects or

@@ -208,8 +208,22 @@ public static class ZeusEndpoints
 
         app.MapPost("/api/vfo", (VfoSetRequest req, RadioService r) =>
         {
-            log.LogInformation("api.vfo hz={Hz}", req.Hz);
-            return r.SetVfo(req.Hz);
+            log.LogInformation("api.vfo hz={Hz} rxId={RxId}", req.Hz, req.RxId);
+            // Backward-compat: rxId=0 (the JSON default) routes to the
+            // primary VFO setter — bit-identical to today. rxId>0 targets
+            // a non-primary multi-slice receiver and 400s when multi-slice
+            // is off / out of range.
+            if (req.RxId == 0)
+                return Results.Ok(r.SetVfo(req.Hz));
+            try
+            {
+                var snap = r.SetVfoSlice(req.RxId, req.Hz);
+                return Results.Ok(snap);
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
         });
 
         app.MapPost("/api/mode", (ModeSetRequest req, RadioService r) =>
@@ -808,6 +822,17 @@ public static class ZeusEndpoints
         app.MapGet("/api/radio/capabilities", (RadioService radio) =>
         {
             return Results.Ok(BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant));
+        });
+
+        // Multi-slice (multi-receiver) configuration. Phase 1: HL2 only,
+        // default OFF. The backend clamps NumActiveSlices to the board's
+        // documented MaxReceivers and refuses to enable while PureSignal is
+        // armed (logs a warning, returns Enabled=false in the response).
+        // See docs/proposals/multi-panadapter-design.md.
+        app.MapPost("/api/multi-slice", (MultiSliceConfig req, RadioService r) =>
+        {
+            var snap = r.SetMultiSlice(req ?? MultiSliceConfig.Default);
+            return Results.Ok(snap);
         });
 
         // Operator-selected variant for the 0x0A wire-byte alias family

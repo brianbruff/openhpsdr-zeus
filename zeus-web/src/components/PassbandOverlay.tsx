@@ -42,7 +42,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useDisplayStore } from '../state/display-store';
+import { useSliceDisplay } from '../state/display-store';
 import { useConnectionStore } from '../state/connection-store';
 
 // Translucent rectangle drawn inside the panadapter container to show the
@@ -51,10 +51,15 @@ import { useConnectionStore } from '../state/connection-store';
 // of carrier, LSB to the left, CW narrow around zero, AM symmetric.
 // Positioned by percentage of the total span so it tracks resize and tune
 // without measuring DOM width.
-export function PassbandOverlay() {
-  const centerHz = useDisplayStore((s) => s.centerHz);
-  const hzPerPixel = useDisplayStore((s) => s.hzPerPixel);
-  const width = useDisplayStore((s) => s.panDb?.length ?? 0);
+//
+// `rxId` (default 0) picks the slice geometry; filterLow/HighHz still track
+// the radio-wide filter from connection-store (per-slice filters are
+// deferred — see Task #4 hand-off notes).
+export function PassbandOverlay({ rxId = 0 }: { rxId?: number } = {}) {
+  const slice = useSliceDisplay(rxId);
+  const centerHz = slice.centerHz;
+  const hzPerPixel = slice.hzPerPixel;
+  const width = slice.panDb?.length ?? 0;
   const filterLowHz = useConnectionStore((s) => s.filterLowHz);
   const filterHighHz = useConnectionStore((s) => s.filterHighHz);
 

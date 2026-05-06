@@ -161,7 +161,17 @@ internal static class ControlFrame
         // RX-side encoding for C4". Range when set: -28..+31 dB
         // (mi0bot console.cs:2084 udTXStepAttData min=-28; +31 is the AD9866
         // TX PGA upper). Wire encoding lives in WriteAttenuatorPayload.
-        int Hl2TxAttnDb = int.MinValue);
+        int Hl2TxAttnDb = int.MinValue,
+        // Per-slice NCO frequencies for slices 1..3 (slice 0 reuses VfoAHz).
+        // Honoured only when the corresponding RxFreqN register is emitted —
+        // the single-slice phase rotation never includes RxFreq2/3/4 so these
+        // values are inert until multi-slice is enabled and the multi-slice
+        // rotation widens. Defaults of 0 keep wire bytes identical to the
+        // pre-multi-slice path when the rotation does select RxFreq2 (e.g.
+        // PS-armed, where DDC1 still tunes to TX freq via the PS path).
+        long VfoBHz = 0,
+        long VfoCHz = 0,
+        long VfoDHz = 0);
 
     /// <summary>
     /// Write the 5 C&amp;C bytes for <paramref name="register"/> given the current
@@ -187,12 +197,22 @@ internal static class ControlFrame
             case CcRegister.RxFreq3:
             case CcRegister.RxFreq4:
                 // Frequency payload is a BE uint32 in C1..C4 (doc 02 §4 "Frequency payload").
-                // All five frequency registers (TxFreq + four RX NCOs) carry the
-                // same VfoAHz here — Zeus has no separate TX VFO. During HL2
-                // PS+MOX, mi0bot tunes DDC2 and DDC3 to TX freq, which is the
-                // operator-tuned freq for SSB; for CW, EffectiveLoHz is already
+                // RxFreq + TxFreq always carry VfoAHz — Zeus has no separate TX
+                // VFO. RxFreq2/3/4 carry per-slice NCOs (VfoBHz/CHz/DHz)
+                // populated by SnapshotState. For HL2 PS+MOX (4-DDC PS layout)
+                // SnapshotState seeds VfoB/C/D with VfoAHz so DDC2/DDC3 stay
+                // tuned to TX freq — bit-identical to pre-multi-slice. For
+                // multi-slice non-PS, SnapshotState seeds VfoB/C/D with the
+                // per-slice operator NCOs. For CW, EffectiveLoHz is already
                 // baked into VfoAHz upstream in RadioService.SetVfo.
-                BinaryPrimitives.WriteUInt32BigEndian(cc[1..5], (uint)state.VfoAHz);
+                long ncoHz = register switch
+                {
+                    CcRegister.RxFreq2 => state.VfoBHz,
+                    CcRegister.RxFreq3 => state.VfoCHz,
+                    CcRegister.RxFreq4 => state.VfoDHz,
+                    _                  => state.VfoAHz,
+                };
+                BinaryPrimitives.WriteUInt32BigEndian(cc[1..5], (uint)ncoHz);
                 break;
 
             case CcRegister.DriveFilter:

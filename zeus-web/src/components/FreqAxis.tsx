@@ -42,7 +42,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useDisplayStore } from '../state/display-store';
+import { useSliceDisplay } from '../state/display-store';
 import { useConnectionStore } from '../state/connection-store';
 
 function pickStrideHz(spanHz: number, targetTicks: number): number {
@@ -73,10 +73,16 @@ function formatMHz(hz: number, strideHz: number): string {
 // physical LO and lands at 50%. The amber dial-marker line tracks
 // VfoHz, which equals centerHz outside CW and sits ±cw_pitch from
 // centre in CWU/CWL — in non-CW the marker stays at 50% (zero offset).
-export function FreqAxis() {
-  const centerHz = useDisplayStore((s) => s.centerHz);
-  const hzPerPixel = useDisplayStore((s) => s.hzPerPixel);
-  const width = useDisplayStore((s) => s.panDb?.length ?? 0);
+//
+// `rxId` selects which slice this axis belongs to (defaults to 0). The
+// vfoHz dial marker still tracks the radio-wide VFO from connection-store
+// for now — per-RX VFO tuning is a Phase 2 wrinkle on top of the multi-
+// panadapter Phase 1 visualization (see Task #4 hand-off notes).
+export function FreqAxis({ rxId = 0 }: { rxId?: number } = {}) {
+  const slice = useSliceDisplay(rxId);
+  const centerHz = slice.centerHz;
+  const hzPerPixel = slice.hzPerPixel;
+  const width = slice.panDb?.length ?? 0;
   const vfoHz = useConnectionStore((s) => s.vfoHz);
 
   if (!width || hzPerPixel <= 0) return null;

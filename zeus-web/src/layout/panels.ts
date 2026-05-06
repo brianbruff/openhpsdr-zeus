@@ -43,7 +43,12 @@
 // License for details.
 
 import type { ComponentType } from 'react';
-import { HeroPanel } from './panels/HeroPanel';
+import {
+  HeroPanel,
+  HeroPanelRx1,
+  HeroPanelRx2,
+  HeroPanelRx3,
+} from './panels/HeroPanel';
 import { VfoPanel } from './panels/VfoPanel';
 import { SMeterPanel } from './panels/SMeterPanel';
 import { QrzPanel } from './panels/QrzPanel';
@@ -138,6 +143,37 @@ export const PANELS: Record<string, PanelDef> = {
     // single strip can host the zoom slider, rotator chips (SP/LP/BEAM),
     // ⌥ map-mode hint, and HZ/PX readout — instead of stacking those on
     // top of the default TileChrome (the old "double header").
+    headerless: true,
+  },
+  // HL2 multi-slice (issue #251) — extra RX panels reuse HeroPanel verbatim,
+  // each pinned to a different `rxId`. Visibility is gated dynamically by
+  // FlexWorkspace.panelVisible (only shown when MaxReceivers > 1 AND
+  // multi-slice is enabled AND numActiveSlices > N). RX0 always exists; the
+  // operator opts into RX1..RX3 from the Add Panel modal once enabled.
+  // Maximum 4 simultaneous slices in Phase 1 — that's the HL2 protocol
+  // ceiling (C4 bits [5:3]) per docs/references/protocol-1/hermes-lite2-protocol.md:478-485.
+  'hero-rx1': {
+    id: 'hero-rx1',
+    name: 'Panadapter · RX1',
+    category: 'spectrum',
+    tags: ['panadapter', 'waterfall', 'spectrum', 'rx1', 'multi-slice'],
+    component: HeroPanelRx1,
+    headerless: true,
+  },
+  'hero-rx2': {
+    id: 'hero-rx2',
+    name: 'Panadapter · RX2',
+    category: 'spectrum',
+    tags: ['panadapter', 'waterfall', 'spectrum', 'rx2', 'multi-slice'],
+    component: HeroPanelRx2,
+    headerless: true,
+  },
+  'hero-rx3': {
+    id: 'hero-rx3',
+    name: 'Panadapter · RX3',
+    category: 'spectrum',
+    tags: ['panadapter', 'waterfall', 'spectrum', 'rx3', 'multi-slice'],
+    component: HeroPanelRx3,
     headerless: true,
   },
   vfo: {

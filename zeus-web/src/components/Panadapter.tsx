@@ -45,7 +45,7 @@
 import { useEffect, useRef } from 'react';
 import { createPanRenderer, hexToRgbFloats } from '../gl/panadapter';
 import { planWaterfallUpdate } from '../gl/wf-shift';
-import { useDisplayStore } from '../state/display-store';
+import { EMPTY_SLICE_STATE, useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
@@ -53,7 +53,15 @@ import { FreqAxis } from './FreqAxis';
 import { PassbandOverlay } from './PassbandOverlay';
 import { DbScale } from './DbScale';
 
-export function Panadapter() {
+/**
+ * `rxId` selects which DDC slice this panadapter renders. Defaults to 0,
+ * which is the only slice the single-receiver path ever populates — so the
+ * default-prop call site is bit-identical to the pre-multi-slice store.
+ * For HL2 multi-slice (issue #251) additional HeroPanel instances pass
+ * `rxId={1}`, etc., and read their own slice from the per-RxId display
+ * store without affecting RX0's renderer state.
+ */
+export function Panadapter({ rxId = 0 }: { rxId?: number } = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -118,33 +126,40 @@ export function Panadapter() {
     resize();
 
     let lastSeqDrawn = -1;
+    // Subscribe to the whole store rather than `useSliceDisplay(rxId)`: this
+    // effect already runs outside React render, so we want the imperative
+    // store handle. The `lastSeq` early-return below fires for frames that
+    // belong to a different RxId — Map identity changes on every pushFrame
+    // (so subscribers wake up) but THIS slice's lastSeq only advances when
+    // its own frame lands, leaving the dedup intact.
     const unsub = useDisplayStore.subscribe((state) => {
-      if (state.lastSeq === lastSeqDrawn) return;
-      lastSeqDrawn = state.lastSeq;
-      if (!state.panValid || !state.panDb) return;
+      const slice = state.slices.get(rxId) ?? EMPTY_SLICE_STATE;
+      if (slice.lastSeq === lastSeqDrawn) return;
+      lastSeqDrawn = slice.lastSeq;
+      if (!slice.panValid || !slice.panDb) return;
 
       const decision = planWaterfallUpdate({
         lastCenterHz,
         lastHzPerPixel,
         lastWidth,
-        nextCenterHz: state.centerHz,
-        nextHzPerPixel: state.hzPerPixel,
-        nextWidth: state.panDb.length,
+        nextCenterHz: slice.centerHz,
+        nextHzPerPixel: slice.hzPerPixel,
+        nextWidth: slice.panDb.length,
       });
 
       switch (decision.kind) {
         case 'reset':
-          drawPan = state.panDb;
+          drawPan = slice.panDb;
           drawOffsetPx = 0;
-          lastPan = state.panDb;
-          lastCenterHz = state.centerHz;
-          lastHzPerPixel = state.hzPerPixel;
-          lastWidth = state.panDb.length;
+          lastPan = slice.panDb;
+          lastCenterHz = slice.centerHz;
+          lastHzPerPixel = slice.hzPerPixel;
+          lastWidth = slice.panDb.length;
           break;
         case 'push':
-          drawPan = state.panDb;
+          drawPan = slice.panDb;
           drawOffsetPx = 0;
-          lastPan = state.panDb;
+          lastPan = slice.panDb;
           // lastCenterHz unchanged so sub-pixel retunes accumulate.
           break;
         case 'shift':
@@ -153,7 +168,7 @@ export function Panadapter() {
           // top row and this trace land the same carriers in the same
           // columns. Offset accumulates across consecutive shift ticks and
           // resets on the next push (which updates lastPan to fresh data).
-          drawPan = lastPan ?? state.panDb;
+          drawPan = lastPan ?? slice.panDb;
           drawOffsetPx += decision.shiftPx;
           lastCenterHz = decision.residualCenterHz;
           break;
@@ -182,9 +197,9 @@ export function Panadapter() {
       if (rafHandle !== 0) cancelAnimationFrame(rafHandle);
       renderer.dispose();
     };
-  }, []);
+  }, [rxId]);
 
-  usePanTuneGesture(canvasRef);
+  usePanTuneGesture(canvasRef, rxId);
 
   return (
     <div
@@ -199,8 +214,8 @@ export function Panadapter() {
       }}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
-      <PassbandOverlay />
-      <FreqAxis />
+      <PassbandOverlay rxId={rxId} />
+      <FreqAxis rxId={rxId} />
       <DbScale />
     </div>
   );

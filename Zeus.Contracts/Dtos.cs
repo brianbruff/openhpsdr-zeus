@@ -234,7 +234,35 @@ public sealed record StateDto(
     // Nullable so legacy state frames (no Cfc field) deserialize unchanged;
     // null at the engine seam means "use CfcConfig.Default" — same pattern
     // as the Nr field above. Persisted globally via DspSettingsStore.
-    CfcConfig? Cfc = null);
+    CfcConfig? Cfc = null,
+
+    // ---- Multi-slice / multi-receiver (Phase 1: HL2 only, default OFF) ----
+    // When Enabled is true and the connected board can advertise more than 1
+    // DDC (BoardCapabilities.MaxReceivers), Zeus opens NumActiveSlices WDSP
+    // RXA channels and broadcasts one DisplayFrame per slice keyed by RxId.
+    // Phase 1 scope: HL2 with PureSignal OFF — single-slice + PS path stays
+    // bit-identical to today. If PS is on when multi-slice is requested the
+    // backend refuses to enable and logs a warning.
+    // Nullable so legacy state frames (no MultiSlice field) deserialize
+    // unchanged — null at the service seam means "feature off, default
+    // single-slice behaviour". See docs/proposals/multi-panadapter-design.md.
+    MultiSliceConfig? MultiSlice = null);
+
+/// <summary>
+/// Multi-slice (multi-receiver) configuration. Default-constructed value is
+/// "feature off, single slice" so a fresh state DTO matches today's wire
+/// behaviour exactly. <see cref="SliceVfoHz"/> carries the per-slice NCO
+/// frequencies for slices 1..N-1; slice 0 always tracks the master
+/// <see cref="StateDto.VfoHz"/>. Length is at most 7 (Saturn-class P2
+/// ceiling) — only the first <c>NumActiveSlices - 1</c> entries are honoured.
+/// </summary>
+public sealed record MultiSliceConfig(
+    bool Enabled = false,
+    byte NumActiveSlices = 1,
+    IReadOnlyList<long>? SliceVfoHz = null)
+{
+    public static readonly MultiSliceConfig Default = new();
+}
 
 public sealed record RadioInfo(
     string MacAddress,
@@ -250,7 +278,14 @@ public sealed record ConnectRequest(
     bool? PreampOn = null,
     int? Atten = null);
 
-public sealed record VfoSetRequest(long Hz);
+/// <summary>
+/// VFO tune request. <paramref name="RxId"/> defaults to 0 — the primary
+/// receiver — so legacy callers that send only <c>{ "Hz": ... }</c> remain
+/// bit-identical to the pre-multi-slice path. <c>RxId &gt; 0</c> targets a
+/// non-primary slice opened via <see cref="MultiSliceConfig"/>; the server
+/// rejects with 400 when multi-slice is off or the rxId is out of range.
+/// </summary>
+public sealed record VfoSetRequest(long Hz, byte RxId = 0);
 
 public sealed record ModeSetRequest(RxMode Mode);
 

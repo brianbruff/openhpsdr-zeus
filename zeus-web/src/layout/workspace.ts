@@ -72,6 +72,12 @@ export const EMPTY_WORKSPACE_LAYOUT: WorkspaceLayout = {
 export const DEFAULT_TILE_SPAN: Record<string, { w: number; h: number }> = {
   filter: { w: 9, h: 2 },
   hero: { w: 9, h: 12 },
+  // HL2 multi-slice secondary RX panels — same width as hero, half height by
+  // default so two stacked secondary panels fit naturally in the column the
+  // primary hero leaves behind. RGL still lets the operator resize freely.
+  'hero-rx1': { w: 9, h: 6 },
+  'hero-rx2': { w: 9, h: 6 },
+  'hero-rx3': { w: 9, h: 6 },
   qrz: { w: 3, h: 6 },
   logbook: { w: 3, h: 6 },
   txmeters: { w: 3, h: 6 },

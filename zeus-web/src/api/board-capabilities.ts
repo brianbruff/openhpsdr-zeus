@@ -19,6 +19,11 @@ export interface BoardCapabilities {
   hasAudioAmplifier: boolean;
   hasSteppedAttenuationRx2: boolean;
   supportsPathIllustrator: boolean;
+  /** Maximum simultaneous DDC receivers the board can advertise. Drives
+   *  HL2 multi-slice (issue #251) UI gating: 1 hides every multi-slice
+   *  surface; >1 enables the toggle and the hero-rxN panel entries up to
+   *  this ceiling. See `Zeus.Contracts.BoardCapabilities.MaxReceivers`. */
+  maxReceivers: number;
 }
 
 // Safe defaults matching Zeus.Contracts.BoardCapabilities.UnknownDefaults —
@@ -35,6 +40,7 @@ export const UNKNOWN_BOARD_CAPABILITIES: BoardCapabilities = {
   hasAudioAmplifier: false,
   hasSteppedAttenuationRx2: false,
   supportsPathIllustrator: false,
+  maxReceivers: 1,
 };
 
 export function parseBoardCapabilities(raw: unknown): BoardCapabilities {
@@ -59,6 +65,10 @@ export function parseBoardCapabilities(raw: unknown): BoardCapabilities {
       typeof r.supportsPathIllustrator === 'boolean'
         ? r.supportsPathIllustrator
         : UNKNOWN_BOARD_CAPABILITIES.supportsPathIllustrator,
+    maxReceivers:
+      typeof r.maxReceivers === 'number' && r.maxReceivers > 0
+        ? Math.floor(r.maxReceivers)
+        : UNKNOWN_BOARD_CAPABILITIES.maxReceivers,
   };
 }
 

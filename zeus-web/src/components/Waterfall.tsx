@@ -45,7 +45,7 @@
 import { useEffect, useRef } from 'react';
 import { COLORMAPS, type ColormapId } from '../gl/colormap';
 import { createWfRenderer } from '../gl/waterfall';
-import { useDisplayStore } from '../state/display-store';
+import { EMPTY_SLICE_STATE, useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
@@ -61,9 +61,13 @@ const WF_PUSH_EVERY_N = 2;
 type WaterfallProps = {
   /** When true, noise floor fades to transparent so the QRZ-mode map shows through. */
   transparent?: boolean;
+  /** Which RxId slice this waterfall renders. Defaults to 0 (the only slice
+   *  the single-receiver path ever populates). HL2 multi-slice (issue #251)
+   *  passes higher rxIds for the additional HeroPanel instances. */
+  rxId?: number;
 };
 
-export function Waterfall({ transparent = false }: WaterfallProps = {}) {
+export function Waterfall({ transparent = false, rxId = 0 }: WaterfallProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<ReturnType<typeof createWfRenderer> | null>(null);
@@ -124,17 +128,22 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     ro.observe(container);
     resize();
 
+    // Subscribe to the whole store and dedupe on the slice's lastSeq so a
+    // frame for a different RxId doesn't drive a no-op pushFrame on this
+    // waterfall's history texture (which would cost a row-upload on the GPU
+    // and break the WF_PUSH_EVERY_N decimation invariant).
     const unsub = useDisplayStore.subscribe((state) => {
-      if (state.lastSeq === lastSeqDrawn) return;
-      lastSeqDrawn = state.lastSeq;
-      if (state.wfValid && state.wfDb) {
+      const slice = state.slices.get(rxId) ?? EMPTY_SLICE_STATE;
+      if (slice.lastSeq === lastSeqDrawn) return;
+      lastSeqDrawn = slice.lastSeq;
+      if (slice.wfValid && slice.wfDb) {
         tickCounter++;
         const skipRowUpload = tickCounter % WF_PUSH_EVERY_N !== 0;
-        renderer.pushFrame(state.wfDb, state.centerHz, state.hzPerPixel, {
+        renderer.pushFrame(slice.wfDb, slice.centerHz, slice.hzPerPixel, {
           skipRowUpload,
         });
         // Feed the auto-range tracker — it's a no-op when AUTO is off.
-        useDisplaySettingsStore.getState().updateAutoRange(state.wfDb);
+        useDisplaySettingsStore.getState().updateAutoRange(slice.wfDb);
       }
       requestRedraw();
     });
@@ -165,7 +174,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       renderer.dispose();
       rendererRef.current = null;
     };
-  }, []);
+  }, [rxId]);
 
   // Keep the renderer's transparency flag in sync without remounting so the
   // history texture survives a QRZ engage/disengage. draw() runs on the next
@@ -174,7 +183,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     rendererRef.current?.setTransparent(transparent);
   }, [transparent]);
 
-  usePanTuneGesture(canvasRef);
+  usePanTuneGesture(canvasRef, rxId);
 
   return (
     <div

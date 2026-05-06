@@ -25,7 +25,9 @@ import {
 } from 'react-grid-layout';
 import { useWorkspace } from './WorkspaceContext';
 import { useLayoutStore } from '../state/layout-store';
-import { PANELS } from './panels';
+import { useRadioStore } from '../state/radio-store';
+import { useMultiSliceStore } from '../state/multi-slice-store';
+import { PANELS, type PanelDef } from './panels';
 import {
   WORKSPACE_GRID_COLS,
   WORKSPACE_ROW_HEIGHT_MIN_PX,
@@ -73,6 +75,31 @@ export function FlexWorkspace() {
     [workspace.tiles],
   );
 
+  // HL2 multi-slice gating (issue #251). The hero-rx1..hero-rx3 panel defs
+  // are only visible in the Add Panel modal when:
+  //   1. The connected board advertises MaxReceivers > 1 (capabilities), AND
+  //   2. Multi-slice is enabled in the operator preferences, AND
+  //   3. The panel's slice index < numActiveSlices.
+  // Boards with MaxReceivers === 1 (Hermes / single-DDC) never see the
+  // RX1+ entries at all — single-slice operators get the bit-identical
+  // pre-multi-slice picker.
+  const maxReceivers = useRadioStore((s) => s.capabilities.maxReceivers);
+  const multiSliceConfig = useMultiSliceStore((s) => s.config);
+  const panelVisible = useCallback(
+    (def: PanelDef): boolean => {
+      const m = def.id.match(/^hero-rx(\d+)$/);
+      if (!m) return true;
+      const sliceIdx = Number(m[1]);
+      if (!Number.isFinite(sliceIdx) || sliceIdx < 1) return false;
+      if (maxReceivers <= 1) return false;
+      if (!multiSliceConfig.enabled) return false;
+      // Cap at the operator-chosen active count AND the board's MaxReceivers.
+      const cap = Math.min(multiSliceConfig.numActiveSlices, maxReceivers);
+      return sliceIdx < cap;
+    },
+    [maxReceivers, multiSliceConfig],
+  );
+
   const onLayoutChange = useCallback(
     (next: Layout) => {
       // RGL fires onLayoutChange on every render with the current layout
@@ -113,6 +140,7 @@ export function FlexWorkspace() {
           existingPanels={existingPanels}
           onAdd={onAddPanel}
           onClose={() => setAddPanelOpen(false)}
+          panelVisible={panelVisible}
         />
       )}
     </div>

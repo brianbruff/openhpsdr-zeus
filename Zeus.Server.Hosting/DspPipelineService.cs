@@ -95,6 +95,37 @@ public class DspPipelineService : BackgroundService
     private Task? _iqPumpTask;
     private CancellationTokenSource? _iqPumpCts;
 
+    // ---- Multi-slice (Phase 1: HL2 only, default OFF) ----------------
+    // Slice 0 is _channelId; non-primary slices (RxId 1..MaxHl2Receivers-1)
+    // own their own WDSP RXA channel + IQ pump. The list is mutated only
+    // under _engineLock so Tick can snapshot it cheaply. When multi-slice
+    // is OFF the list is empty and Tick behaves exactly as the single-slice
+    // path. PureSignal coexistence is a Phase 2 concern: when PS is on we
+    // tear down any extra slices and refuse to open new ones.
+    //
+    // Each non-primary slice carries its own IQ pump task so the per-RxId
+    // ChannelReader<IqFrame> on Protocol1Client doesn't back-pressure the
+    // RX-thread when the primary IqFrames consumer is slow.
+    private sealed class SliceContext
+    {
+        public int RxId;
+        public int ChannelId;
+        public long VfoHz;
+        public Task? PumpTask;
+        public CancellationTokenSource? PumpCts;
+    }
+    // Volatile array reference: ApplyMultiSliceConfig builds a new array
+    // and publishes it via Volatile.Write; Tick reads via Volatile.Read for
+    // a lock-free, race-free snapshot. Slice mutations are infrequent
+    // (operator opt-in) so the COW cost is negligible. _extraSlicesMutex
+    // serialises mutators since multiple StateChanged callbacks could in
+    // principle race (though in practice they're single-threaded per the
+    // RadioService callback model).
+    private SliceContext[] _extraSlices = Array.Empty<SliceContext>();
+    private readonly object _extraSlicesMutex = new();
+    // Latched multi-slice config so OnRadioStateChanged is edge-triggered.
+    private MultiSliceConfig _appliedMultiSlice = MultiSliceConfig.Default;
+
     // PureSignal feedback pump. Reads paired DDC0+DDC1 IQ from the active
     // protocol client and feeds the WDSP psccF entry once per 1024-sample
     // block. Lifecycle is tied to the connection (started on connect,
@@ -326,6 +357,11 @@ public class DspPipelineService : BackgroundService
 
         StartIqPump(client);
         StartPsFeedbackPumpP1(client);
+        // Force the multi-slice latch to re-evaluate after a fresh connect
+        // — the live RadioService snapshot may carry an enabled config
+        // from a previous session that we want to honour now that the
+        // engine and client are both up.
+        _appliedMultiSlice = MultiSliceConfig.Default;
         // Force the next OnRadioStateChanged to re-push every PS field into
         // the freshly-opened WdspDspEngine instance — same rationale as the
         // P2 reconnect path. Without this, a P1 reconnect leaves the engine
@@ -344,6 +380,9 @@ public class DspPipelineService : BackgroundService
 
     private void OnRadioDisconnected()
     {
+        // Tear down any extra slices first so per-slice pumps don't race
+        // the channel close on the way out.
+        TeardownAllExtraSlices();
         StopIqPumpAsync().GetAwaiter().GetResult();
 
         var synth = new SyntheticDspEngine();
@@ -588,9 +627,223 @@ public class DspPipelineService : BackgroundService
             _appliedTxMonitorEnabled = s.TxMonitorEnabled;
         }
 
+        // ---- Multi-slice (Phase 1) ----
+        // PS-precedence: if PS is armed, tear down any extra slices and
+        // refuse new ones. Single-slice + PS path stays bit-identical.
+        var requested = s.MultiSlice ?? MultiSliceConfig.Default;
+        if (s.PsEnabled && (requested.Enabled || _appliedMultiSlice.Enabled))
+        {
+            if (Volatile.Read(ref _extraSlices).Length > 0)
+            {
+                _log.LogWarning("multi-slice disabled because PureSignal is armed (Phase 2 work)");
+                ApplyMultiSliceConfig(MultiSliceConfig.Default);
+            }
+            _appliedMultiSlice = requested with { Enabled = false };
+        }
+        else if (!MultiSliceConfigEqual(requested, _appliedMultiSlice) || resync)
+        {
+            ApplyMultiSliceConfig(requested);
+            _appliedMultiSlice = requested;
+        }
+        else if (requested.Enabled
+                 && requested.SliceVfoHz is { } vfos
+                 && vfos.Count > 0)
+        {
+            // Steady-state per-slice VFO updates (no slice-count change).
+            // Forward into the live client + cached slice state without
+            // touching the WDSP channels.
+            ForwardSliceVfos(vfos);
+        }
+
         // Resync done — clear the flag so subsequent state changes use
         // normal change-detect (no spurious wire writes on each tick).
         _psResyncRequired = false;
+    }
+
+    private static bool MultiSliceConfigEqual(MultiSliceConfig a, MultiSliceConfig b)
+    {
+        if (a.Enabled != b.Enabled) return false;
+        if (a.NumActiveSlices != b.NumActiveSlices) return false;
+        var av = a.SliceVfoHz;
+        var bv = b.SliceVfoHz;
+        int an = av?.Count ?? 0;
+        int bn = bv?.Count ?? 0;
+        if (an != bn) return false;
+        for (int i = 0; i < an; i++)
+        {
+            if (av![i] != bv![i]) return false;
+        }
+        return true;
+    }
+
+    private void ForwardSliceVfos(IReadOnlyList<long> vfos)
+    {
+        var p1 = _radio.ActiveClient;
+        // Match _extraSlices index → vfos index. vfos[0] = slice 1 NCO,
+        // vfos[1] = slice 2 NCO, etc. Per-slice VFO is informational on
+        // the engine (SetVfoHz on RXA is a no-op — VFO translation lives
+        // on the wire NCO), but we cache it on the SliceContext so the
+        // DisplayFrame's CenterHz reflects what the operator sees.
+        var slices = Volatile.Read(ref _extraSlices);
+        for (int i = 0; i < slices.Length && i < vfos.Count; i++)
+        {
+            long hz = vfos[i];
+            slices[i].VfoHz = hz;
+            p1?.SetVfoSliceHz(slices[i].RxId, hz);
+        }
+    }
+
+    /// <summary>
+    /// Reconfigure the active extra-slice set to match the requested
+    /// <see cref="MultiSliceConfig"/>. Opens/closes WDSP RXA channels and
+    /// per-slice IQ pumps. Called from <see cref="OnRadioStateChanged"/>
+    /// and <see cref="OnRadioConnected"/>.
+    ///
+    /// WDSP init ordering invariant: <c>OpenChannel</c> already opens at
+    /// <c>state=0</c>, runs configuration setters, then flips
+    /// <c>SetChannelState(id, 1, 0)</c> last. See
+    /// <c>docs/lessons/wdsp-init-gotchas.md</c>.
+    /// </summary>
+    private void ApplyMultiSliceConfig(MultiSliceConfig cfg)
+    {
+        IDspEngine? engine;
+        int sampleRate;
+        lock (_engineLock)
+        {
+            engine = _engine;
+            sampleRate = _sampleRateHz;
+        }
+        var p1 = _radio.ActiveClient;
+        bool isHl2 = _radio.ConnectedBoardKind == HpsdrBoardKind.HermesLite2;
+        // Phase 1 hardware gate: HL2 only. On non-HL2 boards we still
+        // accept the request but emit no extra slices; the wire layer
+        // also no-ops because Protocol1Client.SetMultiSlice gates on the
+        // HermesLite2 board kind inside SnapshotState.
+        bool wantMulti = cfg.Enabled
+            && cfg.NumActiveSlices > 1
+            && isHl2
+            && engine is WdspDspEngine
+            && p1 is not null;
+
+        // Compute the new slice array under _extraSlicesMutex so concurrent
+        // mutators (in practice serialised via the StateChanged callback)
+        // don't race on the COW publish.
+        lock (_extraSlicesMutex)
+        {
+            var current = _extraSlices;
+            int desiredExtras = wantMulti ? cfg.NumActiveSlices - 1 : 0;
+            int max = wantMulti
+                ? Math.Min(desiredExtras, Protocol1Client.MaxHl2Receivers - 1)
+                : 0;
+
+            // Close any extras above the new ceiling, in reverse order.
+            // Done OUTSIDE _engineLock — engine.CloseChannel is its own
+            // synchronisation domain.
+            var keep = new List<SliceContext>(Math.Min(current.Length, max));
+            int firstClose = max;
+            for (int i = 0; i < current.Length; i++)
+            {
+                if (i < firstClose) keep.Add(current[i]);
+                else
+                {
+                    var slice = current[i];
+                    StopSliceIqPumpAsync(slice).GetAwaiter().GetResult();
+                    try { engine?.CloseChannel(slice.ChannelId); }
+                    catch (Exception ex) { _log.LogWarning(ex, "multi-slice close channel rxId={RxId} threw", slice.RxId); }
+                }
+            }
+
+            // Open additional slices up to the desired count.
+            if (wantMulti && engine is not null)
+            {
+                var vfos = cfg.SliceVfoHz;
+                for (int i = keep.Count; i < max; i++)
+                {
+                    int rxId = i + 1;
+                    int channelId = engine.OpenChannel(sampleRate, Width);
+                    ApplyStateToNewChannel(engine, channelId);
+                    long vfoHz = (vfos != null && i < vfos.Count) ? vfos[i] : _radio.Snapshot().VfoHz;
+                    var ctx = new SliceContext { RxId = rxId, ChannelId = channelId, VfoHz = vfoHz };
+                    keep.Add(ctx);
+                    p1?.SetVfoSliceHz(rxId, vfoHz);
+                    StartSliceIqPump(ctx, p1!);
+                    _log.LogInformation("multi-slice opened rxId={RxId} channel={Channel} vfo={Hz}", rxId, channelId, vfoHz);
+                }
+            }
+
+            Volatile.Write(ref _extraSlices, keep.ToArray());
+        }
+
+        // Push the slice count to the wire AFTER opening engine channels so
+        // a client side races for "first packet at new layout" land in a
+        // place where there's already a WDSP channel ready.
+        if (p1 is not null)
+        {
+            p1.SetMultiSlice(wantMulti, wantMulti ? cfg.NumActiveSlices : 1);
+        }
+    }
+
+    private void StartSliceIqPump(SliceContext ctx, IProtocol1Client client)
+    {
+        var cts = new CancellationTokenSource();
+        ctx.PumpCts = cts;
+        var reader = client.IqFramesForSlice(ctx.RxId);
+        ctx.PumpTask = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var frame in reader.ReadAllAsync(cts.Token).ConfigureAwait(false))
+                {
+                    IDspEngine? engine;
+                    lock (_engineLock) { engine = _engine; }
+                    engine?.FeedIq(ctx.ChannelId, frame.InterleavedSamples.Span);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (ChannelClosedException) { }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "multi-slice iq-pump rxId={RxId} exited with error", ctx.RxId);
+            }
+        }, cts.Token);
+    }
+
+    private void TeardownAllExtraSlices()
+    {
+        IDspEngine? engine;
+        lock (_engineLock) { engine = _engine; }
+        SliceContext[] toClose;
+        lock (_extraSlicesMutex)
+        {
+            toClose = _extraSlices;
+            Volatile.Write(ref _extraSlices, Array.Empty<SliceContext>());
+        }
+        for (int i = toClose.Length - 1; i >= 0; i--)
+        {
+            var slice = toClose[i];
+            try { StopSliceIqPumpAsync(slice).GetAwaiter().GetResult(); }
+            catch (Exception ex) { _log.LogWarning(ex, "multi-slice pump-stop rxId={RxId} threw", slice.RxId); }
+            try { engine?.CloseChannel(slice.ChannelId); }
+            catch (Exception ex) { _log.LogWarning(ex, "multi-slice close-channel rxId={RxId} threw", slice.RxId); }
+        }
+        _appliedMultiSlice = MultiSliceConfig.Default;
+    }
+
+    private static async Task StopSliceIqPumpAsync(SliceContext ctx)
+    {
+        var cts = ctx.PumpCts;
+        var task = ctx.PumpTask;
+        ctx.PumpCts = null;
+        ctx.PumpTask = null;
+        if (cts is null) return;
+        try { cts.Cancel(); } catch (ObjectDisposedException) { }
+        if (task is not null)
+        {
+            try { await task.ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+            catch { }
+        }
+        cts.Dispose();
     }
 
     // CfcConfig auto-generated record Equals does reference equality on the
@@ -1182,6 +1435,42 @@ public class DspPipelineService : BackgroundService
             WfDb: wfBuf);
 
         _hub.Broadcast(frame);
+
+        // ---- Multi-slice fan-out -----------------------------------------
+        // Phase 1 scope: broadcast a DisplayFrame per non-primary slice
+        // using the per-slice WDSP RXA channel's analyzer pixels. Audio /
+        // TX / TX-monitor / PS paths stay scoped to RxId 0 only.
+        // While keyed (MOX/TUN), or while connected via Synthetic, we skip
+        // the per-slice fan-out — TX analyzer + tone generator only have
+        // meaning on slice 0. Volatile.Read snapshots the array reference
+        // for a race-free iteration even if ApplyMultiSliceConfig publishes
+        // a new array mid-tick.
+        var extraSnapshot = Volatile.Read(ref _extraSlices);
+        if (!_keyed && extraSnapshot.Length > 0)
+        {
+            for (int i = 0; i < extraSnapshot.Length; i++)
+            {
+                var slice = extraSnapshot[i];
+                bool sPan = engine.TryGetDisplayPixels(slice.ChannelId, DisplayPixout.Panadapter, panBuf);
+                bool sWf = engine.TryGetDisplayPixels(slice.ChannelId, DisplayPixout.Waterfall, wfBuf);
+                if (sPan) Array.Reverse(panBuf);
+                if (sWf) Array.Reverse(wfBuf);
+                var sFlags = DisplayBodyFlags.None;
+                if (sPan) sFlags |= DisplayBodyFlags.PanValid;
+                if (sWf) sFlags |= DisplayBodyFlags.WfValid;
+                var sliceFrame = new DisplayFrame(
+                    Seq: ++_seq,
+                    TsUnixMs: nowMs,
+                    RxId: (byte)slice.RxId,
+                    BodyFlags: sFlags,
+                    Width: Width,
+                    CenterHz: slice.VfoHz,
+                    HzPerPixel: hzPerPixel,
+                    PanDb: panBuf,
+                    WfDb: wfBuf);
+                _hub.Broadcast(sliceFrame);
+            }
+        }
 
         // Audio broadcast — when TX monitor is on, replace RX audio with the
         // monitor channel's demodulated TX audio so the operator hears the

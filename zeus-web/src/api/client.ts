@@ -207,6 +207,26 @@ export type RadioStateDto = {
   // after normalisation; falls back to CFC_CONFIG_DEFAULT when the server
   // omits it (legacy state frames).
   cfc: CfcConfigDto;
+  // Multi-slice / multi-receiver (issue #251). Mirrors
+  // Zeus.Contracts.MultiSliceConfig. Always present after normalisation;
+  // legacy server state frames without it fall back to MULTI_SLICE_DEFAULT
+  // (enabled=false, numActiveSlices=1).
+  multiSlice: MultiSliceConfigDto;
+};
+
+// Mirrors Zeus.Contracts.MultiSliceConfig (Phase 1: HL2-only). `sliceVfoHz`
+// carries the per-slice NCO frequencies for slices 1..N-1; slice 0 always
+// tracks the master `vfoHz`. Length is at most 7 (Saturn-class P2 ceiling)
+// — only the first `numActiveSlices - 1` entries are honoured.
+export type MultiSliceConfigDto = {
+  enabled: boolean;
+  numActiveSlices: number;
+  sliceVfoHz: number[];
+};
+export const MULTI_SLICE_DEFAULT: MultiSliceConfigDto = {
+  enabled: false,
+  numActiveSlices: 1,
+  sliceVfoHz: [],
 };
 
 // CFC mirrors Zeus.Contracts.CfcConfig. Bands array is fixed at 10 entries
@@ -447,7 +467,31 @@ export function normalizeState(raw: unknown): RadioStateDto {
     twoToneFreq2: typeof r.twoToneFreq2 === 'number' ? r.twoToneFreq2 : 1900,
     twoToneMag: typeof r.twoToneMag === 'number' ? r.twoToneMag : 0.49,
     cfc: normalizeCfc(r.cfc),
+    multiSlice: normalizeMultiSlice(r.multiSlice),
   };
+}
+
+// Multi-slice config normaliser. Server omits the field on legacy state
+// frames → snap to "feature off, single slice" so the existing single-RX
+// behaviour stays bit-identical. `sliceVfoHz` is optional on the wire (null
+// when no per-slice tunings have been pushed yet) — coerce to an empty
+// array so consumers can `.length`-check without a null guard.
+export function normalizeMultiSlice(raw: unknown): MultiSliceConfigDto {
+  if (!raw || typeof raw !== 'object') return { ...MULTI_SLICE_DEFAULT };
+  const r = raw as Record<string, unknown>;
+  const enabled = typeof r.enabled === 'boolean' ? r.enabled : false;
+  const numActiveSlicesRaw =
+    typeof r.numActiveSlices === 'number' ? r.numActiveSlices : 1;
+  const numActiveSlices = Math.max(
+    1,
+    Math.floor(Number.isFinite(numActiveSlicesRaw) ? numActiveSlicesRaw : 1),
+  );
+  const sliceVfoHz = Array.isArray(r.sliceVfoHz)
+    ? r.sliceVfoHz
+        .map((v) => (typeof v === 'number' ? v : Number(v)))
+        .filter((v) => Number.isFinite(v))
+    : [];
+  return { enabled, numActiveSlices, sliceVfoHz };
 }
 
 // Normalise the wire CFC config. Missing or malformed payload falls back to
@@ -614,16 +658,31 @@ export function disconnectP2(signal?: AbortSignal): Promise<unknown> {
   );
 }
 
+/**
+ * Set the VFO frequency. `rxId` defaults to 0 (the master / primary VFO);
+ * when undefined or 0 the wire payload is byte-identical to the legacy
+ * `{ hz }` body so older servers and the bit-identical single-slice path
+ * stay untouched. `rxId > 0` routes to the per-slice VFO setter (Task #6) —
+ * backend validates that multi-slice is enabled and `rxId` is within the
+ * active slice range, returning 400 otherwise.
+ *
+ * Wire contract per backend: body `{ "Hz": number, "RxId"?: byte }`.
+ * ASP.NET Core JSON binding is case-insensitive, so the existing lowercase
+ * `hz` field stays valid; we only add `rxId` when it's non-zero so the
+ * legacy server can't see an unrecognised field.
+ */
 export function setVfo(
   hz: number,
   signal?: AbortSignal,
+  rxId?: number,
 ): Promise<RadioStateDto> {
+  const body = rxId !== undefined && rxId > 0 ? { hz, rxId } : { hz };
   return jsonFetch(
     '/api/vfo',
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ hz }),
+      body: JSON.stringify(body),
       signal,
     },
     normalizeState,
@@ -1404,6 +1463,27 @@ export async function setTwoTone(
 }
 
 // Mic-gain endpoint: POST /api/mic-gain { db }. Returns { micGainDb }.
+// Multi-slice (multi-receiver) configuration setter. POSTs the requested
+// shape and returns the full normalised state DTO so the caller can adopt
+// whatever the backend actually applied (clamped numActiveSlices,
+// PS-refused enable, etc.). Mirrors `MapPost("/api/multi-slice", ...)` in
+// Zeus.Server.Hosting.ZeusEndpoints.
+export function setMultiSliceConfig(
+  config: MultiSliceConfigDto,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/multi-slice',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(config),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
 // Backend may not have landed the handler yet — a 404 is downgraded to a
 // silent warnOnce so the console doesn't fill with noise during the
 // frontend-ahead-of-backend window. Non-404 failures bubble up so the

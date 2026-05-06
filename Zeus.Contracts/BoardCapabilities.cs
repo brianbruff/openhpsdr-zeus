@@ -62,7 +62,18 @@ public sealed record BoardCapabilities(
     /// <c>clsHardwareSpecific.cs:773-780</c> excludes the high-power
     /// MkII family (OrionMkII / 7000DLE / 8000DLE / G2 / G2-1K /
     /// ANVELINA-PRO3 / Red Pitaya / G2E).</summary>
-    bool SupportsPathIllustrator)
+    bool SupportsPathIllustrator,
+    /// <summary>Maximum simultaneous receivers (DDC slices) the board
+    /// can advertise. This is the protocol/hardware ceiling — the actual
+    /// number Zeus opens is also constrained by PureSignal reservations
+    /// and operator preference. Hermes-class single-DDC boards = 1;
+    /// Angelia / Orion (Protocol-1 dual-ADC) = 2; HermesLite 2 advertises
+    /// up to 4 DDCs via C4 bits [5:3] per
+    /// <c>docs/references/protocol-1/hermes-lite2-protocol.md:478-485</c>;
+    /// Saturn-class 0x0A family (G2 / G2-1K / 7000DLE / 8000DLE /
+    /// ANVELINA-PRO3 / Red Pitaya) = 8; Apache OrionMkII original = 2.
+    /// HermesC10 (ANAN-G2E) is single-RX = 1.</summary>
+    int MaxReceivers)
 {
     /// <summary>Safe defaults for an unrecognised / disconnected board.
     /// Single ADC, no extras — minimum-surprise capability set so a
@@ -77,5 +88,6 @@ public sealed record BoardCapabilities(
         HasAmps: false,
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: false,
-        SupportsPathIllustrator: false);
+        SupportsPathIllustrator: false,
+        MaxReceivers: 1);
 }

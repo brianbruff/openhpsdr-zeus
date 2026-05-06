@@ -460,6 +460,120 @@ internal static class PacketParser
         return true;
     }
 
+    // ---- HL2 multi-RX layout (PS off, nddc = 2..4) -----------------------
+    // mi0bot networkproto1.c:537,569 — when nddc > 1 the EP6 sample slot
+    // packs N × (3I + 3Q) per-DDC bytes, then 2 mic bytes:
+    //   bytes per slot = 6 * nddc + 2
+    //   slots per USB-frame = 504 / (6N+2)  (truncates: 36 for N=2, 24 for
+    //                                        N=3, 19 for N=4)
+    //   total samples per packet per DDC = slots/USB × 2 USB-frames
+    // Telemetry (FWD/REF/PA-temp) and ADC-overload bits live on the same
+    // usb[3..8] C&C echo as the single-DDC layout — only the payload below
+    // the 8-byte USB header changes shape with nddc.
+    //
+    // Out-of-range nddc (< 1 or > 4) is rejected. nddc = 1 is intentionally
+    // accepted as a passthrough for callers that want a single code path
+    // across the slice count (it produces the same complexSamples count as
+    // TryParsePacket — but TryParsePacket remains the canonical single-DDC
+    // parser for the bit-identical fast path).
+    public const int Hl2MaxNddcMultiRx = 4;
+    /// <summary>Bytes per sample-slot for an HL2 multi-RX EP6 payload at
+    /// the given nddc count (2 ≤ nddc ≤ 4 in practice). Returns
+    /// <c>6 × nddc + 2</c>.</summary>
+    public static int Hl2MultiRxBytesPerSlot(int nddc) => 6 * nddc + 2;
+    /// <summary>Sample-slots per USB-frame for the given nddc.</summary>
+    public static int Hl2MultiRxSamplesPerUsbFrame(int nddc) => UsbPayloadLength / Hl2MultiRxBytesPerSlot(nddc);
+    /// <summary>Total samples per packet per DDC for the given nddc.</summary>
+    public static int Hl2MultiRxSamplesPerPacket(int nddc) => Hl2MultiRxSamplesPerUsbFrame(nddc) * 2;
+
+    /// <summary>
+    /// Decode an HL2 multi-RX EP6 packet (nddc 1..4, PS off). Each
+    /// <paramref name="ddcOuts"/> destination must have room for at least
+    /// <c>2 × <see cref="Hl2MultiRxSamplesPerPacket"/>(nddc)</c> doubles
+    /// (interleaved I/Q). Returns false on bad framing or an out-of-range
+    /// nddc; returns true with <paramref name="complexSamples"/> set to the
+    /// per-DDC sample count on success.
+    ///
+    /// Telemetry / overload extraction follows the canonical single-DDC
+    /// parser exactly — the C&amp;C echo at usb[3..8] is layout-agnostic.
+    /// </summary>
+    public static bool TryParseHl2MultiRxPacket(
+        ReadOnlySpan<byte> packet,
+        int nddc,
+        double[][] ddcOuts,
+        out uint sequence,
+        out int complexSamples,
+        out TelemetryReading telemetry0,
+        out TelemetryReading telemetry1,
+        out byte adcOverloadBits)
+    {
+        sequence = 0;
+        complexSamples = 0;
+        telemetry0 = default;
+        telemetry1 = default;
+        adcOverloadBits = 0;
+
+        if (nddc < 1 || nddc > Hl2MaxNddcMultiRx) return false;
+        if (ddcOuts is null || ddcOuts.Length < nddc) return false;
+
+        if (packet.Length != PacketLength) return false;
+        if (packet[0] != MetisMagic0 || packet[1] != MetisMagic1) return false;
+        if (packet[2] != MetisTypeDataFrame) return false;
+        if (packet[3] != MetisEp6) return false;
+
+        sequence = BinaryPrimitives.ReadUInt32BigEndian(packet[4..8]);
+
+        int bytesPerSlot = Hl2MultiRxBytesPerSlot(nddc);
+        int slotsPerUsb = Hl2MultiRxSamplesPerUsbFrame(nddc);
+        int samplesPerPacket = slotsPerUsb * 2;
+        int needed = 2 * samplesPerPacket;
+        for (int d = 0; d < nddc; d++)
+        {
+            if (ddcOuts[d] is null || ddcOuts[d].Length < needed) return false;
+        }
+
+        int wrote = 0;
+        for (int frame = 0; frame < 2; frame++)
+        {
+            int frameStart = MetisHeaderLength + frame * UsbFrameLength;
+            ReadOnlySpan<byte> usb = packet.Slice(frameStart, UsbFrameLength);
+            if (usb[0] != Sync || usb[1] != Sync || usb[2] != Sync) return false;
+
+            byte c0 = usb[3];
+            int addr = (c0 >> 3) & 0x1F;
+            if (addr is 1 or 2 or 3)
+            {
+                var reading = new TelemetryReading(
+                    C0Address: c0,
+                    Ain0: BinaryPrimitives.ReadUInt16BigEndian(usb.Slice(4, 2)),
+                    Ain1: BinaryPrimitives.ReadUInt16BigEndian(usb.Slice(6, 2)));
+                if (frame == 0) telemetry0 = reading;
+                else telemetry1 = reading;
+            }
+            adcOverloadBits |= (byte)(usb[4] & 0x01);
+            adcOverloadBits |= (byte)((usb[5] & 0x01) << 1);
+
+            ReadOnlySpan<byte> payload = usb[UsbHeaderLength..];
+            for (int g = 0; g < slotsPerUsb; g++)
+            {
+                int off = g * bytesPerSlot;
+                for (int d = 0; d < nddc; d++)
+                {
+                    int dOff = off + d * 6;
+                    int i = ReadInt24BigEndian(payload.Slice(dOff,     3));
+                    int q = ReadInt24BigEndian(payload.Slice(dOff + 3, 3));
+                    ddcOuts[d][wrote]     = ScaleInt24(i);
+                    ddcOuts[d][wrote + 1] = ScaleInt24(q);
+                }
+                // Last 2 bytes of each slot = mic, ignored on HL2 (no codec).
+                wrote += 2;
+            }
+        }
+
+        complexSamples = samplesPerPacket;
+        return true;
+    }
+
     /// <summary>
     /// Sequence gap counter state; zero-initialized.
     /// </summary>

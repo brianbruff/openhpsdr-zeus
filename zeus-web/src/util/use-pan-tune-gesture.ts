@@ -45,7 +45,7 @@
 import { createContext, useContext, useEffect, type RefObject } from 'react';
 import { setVfo, setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
-import { useDisplayStore } from '../state/display-store';
+import { getSliceState } from '../state/display-store';
 import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 
 const MAX_HZ = 60_000_000;
@@ -87,8 +87,8 @@ export type SpectrumWheelActions = {
 
 export const SpectrumWheelActionsContext = createContext<SpectrumWheelActions>({});
 
-function readView(): { centerHz: number; spanHz: number } | null {
-  const s = useDisplayStore.getState();
+function readView(rxId: number): { centerHz: number; spanHz: number } | null {
+  const s = getSliceState(rxId);
   if (!s.panDb || s.hzPerPixel <= 0) return null;
   return {
     centerHz: Number(s.centerHz),
@@ -102,10 +102,31 @@ function readView(): { centerHz: number; spanHz: number } | null {
  * view they prefer. Values snap to PAN_STEP_HZ (500 Hz) — the per-gesture
  * default. Drags coalesce to one POST per animation frame; releases commit
  * final and re-sync from the server response.
+ *
+ * `rxId` (default 0) selects which slice's geometry is used to translate
+ * pointer x → frequency AND which VFO the gesture retunes. Backend Task #6
+ * extended `POST /api/vfo` to accept `RxId` so each panadapter retunes its
+ * own slice. RxId=0 (the default for every legacy panadapter call) sends
+ * the bit-identical `{ hz }` body; rxId>0 adds `rxId` to the payload and
+ * the backend routes to `Protocol1Client.SetVfoSliceHz`.
+ *
+ * Optimistic-update gating: `useConnectionStore.vfoHz` mirrors the *master*
+ * VFO; updating it from a rxId>0 gesture would jerk RX0's dial marker on
+ * an RX1 drag. We only push the optimistic value when `rxId === 0`. For
+ * higher slices the panadapter's own centerHz still updates from the next
+ * server frame, so the visual feedback comes through the regular path —
+ * just one server-tick delayed compared to the master VFO's "drag-to-jump"
+ * feel. Per-slice optimistic UX is a Phase 2 polish item.
  */
 export function usePanTuneGesture(
   canvasRef: RefObject<HTMLCanvasElement | null>,
+  rxId: number = 0,
 ) {
+  // Only the master VFO (rxId 0) carries through useConnectionStore — every
+  // other call site (FreqAxis dial marker, vfo display, status pills)
+  // reads from there too. For multi-slice gestures we still update vfoHz
+  // when rxId === 0; otherwise we leave the master alone.
+  const isPrimary = rxId === 0;
   const wheelActions = useContext(SpectrumWheelActionsContext);
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -160,11 +181,12 @@ export function usePanTuneGesture(
       const hz = pendingHz;
       pendingHz = null;
       if (hz == null) return;
-      useConnectionStore.setState({ vfoHz: hz });
+      // Master-VFO mirror only — see top-of-hook comment. RX1+ skip this.
+      if (isPrimary) useConnectionStore.setState({ vfoHz: hz });
       pendingAbort?.abort();
       const ctrl = new AbortController();
       pendingAbort = ctrl;
-      setVfo(hz, ctrl.signal).catch(() => {});
+      setVfo(hz, ctrl.signal, rxId).catch(() => {});
     };
 
     const scheduleFlush = () => {
@@ -173,7 +195,9 @@ export function usePanTuneGesture(
 
     const commitFinal = (hz: number) => {
       const snapped = snapHz(hz);
-      useConnectionStore.setState({ vfoHz: snapped });
+      // Master-VFO mirror only. For rxId>0 the panadapter centerHz updates
+      // when the backend's next per-slice DisplayFrame lands.
+      if (isPrimary) useConnectionStore.setState({ vfoHz: snapped });
       pendingAbort?.abort();
       pendingAbort = null;
       if (pendingRaf !== 0) {
@@ -181,15 +205,29 @@ export function usePanTuneGesture(
         pendingRaf = 0;
       }
       pendingHz = null;
-      setVfo(snapped)
+      // Backend mirrors the new VFO into MultiSlice.SliceVfoHz[rxId-1] and
+      // returns the full StateDto. applyState picks up the master VFO
+      // (unchanged for rxId>0 by the backend's contract — see Task #6) plus
+      // any cross-cutting fields (mode/filter) that may have changed. Safe
+      // to call regardless of rxId.
+      setVfo(snapped, undefined, rxId)
         .then((s) => useConnectionStore.getState().applyState(s))
         .catch(() => {});
     };
 
     // Wheel-driven VFO nudge: fine-tune step, no snap to PAN_STEP_HZ. Coalesces
     // to one POST per rAF via the same pending pipeline as drag-to-pan.
+    //
+    // Base hz: master path uses connection-store.vfoHz (the radio-wide VFO).
+    // For rxId>0 the master VFO is the wrong reference — the operator is
+    // notching against THIS slice — so we fall back to the slice's
+    // panadapter centerHz, which is the slice's tuned NCO (in non-CW;
+    // Phase 1 keeps mode radio-wide so non-CW is the operator's reality).
     const nudgeVfo = (deltaHz: number) => {
-      const cur = pendingHz ?? useConnectionStore.getState().vfoHz;
+      const fallbackHz = isPrimary
+        ? useConnectionStore.getState().vfoHz
+        : Number(getSliceState(rxId).centerHz);
+      const cur = pendingHz ?? fallbackHz;
       pendingHz = clampHz(cur + deltaHz);
       scheduleFlush();
     };
@@ -241,7 +279,7 @@ export function usePanTuneGesture(
         canvas.style.cursor = 'grabbing';
         return;
       }
-      const view = readView();
+      const view = readView(rxId);
       if (!view) return;
       e.preventDefault();
       try {
@@ -346,7 +384,7 @@ export function usePanTuneGesture(
         commitFinal(d.startHz - (dx / rect.width) * d.spanHz);
       } else {
         // click-to-tune: resolve the clicked frequency against the live view.
-        const view = readView();
+        const view = readView(rxId);
         if (!view) return;
         const frac = (e.clientX - rect.left) / rect.width;
         commitFinal(view.centerHz + (frac - 0.5) * view.spanHz);
@@ -410,5 +448,5 @@ export function usePanTuneGesture(
       canvas.removeEventListener('pointercancel', onPointerUp);
       canvas.removeEventListener('wheel', onWheel);
     };
-  }, [canvasRef, wheelActions]);
+  }, [canvasRef, wheelActions, rxId]);
 }

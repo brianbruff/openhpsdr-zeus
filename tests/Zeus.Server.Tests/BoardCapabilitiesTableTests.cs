@@ -41,6 +41,7 @@ public class BoardCapabilitiesTableTests
             Assert.False(caps.HasAmps);
             Assert.False(caps.HasAudioAmplifier);
             Assert.True(caps.SupportsPathIllustrator);
+            Assert.Equal(1, caps.MaxReceivers);
         }
     }
 
@@ -56,6 +57,7 @@ public class BoardCapabilitiesTableTests
         Assert.False(caps.LrAudioSwap);
         Assert.True(caps.HasSteppedAttenuationRx2);
         Assert.True(caps.SupportsPathIllustrator);
+        Assert.Equal(2, caps.MaxReceivers);
     }
 
     [Fact]
@@ -69,6 +71,7 @@ public class BoardCapabilitiesTableTests
         Assert.Equal(50, caps.AdcSupplyMv);
         Assert.True(caps.HasSteppedAttenuationRx2);
         Assert.True(caps.SupportsPathIllustrator);
+        Assert.Equal(2, caps.MaxReceivers);
     }
 
     [Fact]
@@ -86,6 +89,8 @@ public class BoardCapabilitiesTableTests
         Assert.True(caps.HasAudioAmplifier);
         Assert.True(caps.HasSteppedAttenuationRx2);
         Assert.False(caps.SupportsPathIllustrator);
+        // Saturn-class hardware advertises 8 DDCs.
+        Assert.Equal(8, caps.MaxReceivers);
     }
 
     [Fact]
@@ -104,6 +109,7 @@ public class BoardCapabilitiesTableTests
         Assert.True(caps.HasAudioAmplifier);
         Assert.False(caps.HasSteppedAttenuationRx2); // single RX
         Assert.False(caps.SupportsPathIllustrator);
+        Assert.Equal(1, caps.MaxReceivers); // single-RX hardware
     }
 
     [Fact]
@@ -118,6 +124,9 @@ public class BoardCapabilitiesTableTests
         Assert.False(caps.HasAmps);
         Assert.False(caps.HasAudioAmplifier);
         Assert.False(caps.SupportsPathIllustrator);
+        // HL2 protocol allows up to 4 DDCs via C4 bits [5:3] per
+        // docs/references/protocol-1/hermes-lite2-protocol.md:478-485.
+        Assert.Equal(4, caps.MaxReceivers);
     }
 
     [Fact]
@@ -138,6 +147,8 @@ public class BoardCapabilitiesTableTests
         Assert.InRange(caps.RxAdcCount, 1, 2);
         Assert.True(caps.AdcSupplyMv == 33 || caps.AdcSupplyMv == 50,
             $"{board} has unexpected ADC supply {caps.AdcSupplyMv} mV");
+        // MaxReceivers ceiling: documented per-board values fall in [1, 8].
+        Assert.InRange(caps.MaxReceivers, 1, 8);
     }
 
     public static IEnumerable<object[]> EveryBoardKind() =>

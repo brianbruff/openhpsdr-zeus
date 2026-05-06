@@ -107,6 +107,43 @@ public sealed class Protocol1Client : IProtocol1Client
     // mi0bot console.cs:2084 (UI range -28..+31), networkproto1.c:1086-1088
     // (wire encoding).
     private int _hl2TxAttnDb = int.MinValue;
+
+    // ---- Multi-slice / multi-receiver (Phase 1: HL2 only, PS OFF) ----
+    // _multiSliceEnabled = 1 only when the operator has opted in AND the
+    // active board is HL2 AND PS is disarmed. SnapshotState applies the
+    // PS-precedence rule (PS+MOX 4-DDC layout overrides multi-slice). The
+    // single-slice path (Enabled=false OR NumActiveSlices == 1) is bit-
+    // identical to the pre-multi-slice wire format.
+    //
+    // mi0bot networkproto1.c:973 — HL2 nddc bits at C0=0x00 / C4 [5:3] =
+    // (N - 1) << 3. docs/references/protocol-1/hermes-lite2-protocol.md:478-486.
+    private int _multiSliceEnabled;
+    // Clamped to [1, MaxHl2Receivers] in SetMultiSlice.
+    private int _numActiveSlices = 1;
+    // Per-slice NCO frequencies for slices 1..3. Slice 0 reuses _vfoAHz.
+    private long _vfoBHz; // RX2 / DDC1
+    private long _vfoCHz; // RX3 / DDC2
+    private long _vfoDHz; // RX4 / DDC3
+    private long _multiRxPacketCount;
+    /// <summary>
+    /// HL2 protocol ceiling for simultaneous DDCs in the standard (non-PS)
+    /// multi-RX layout. Per docs/references/protocol-1/hermes-lite2-protocol.md
+    /// :478-485, the C4 [5:3] field is 3 bits — values 0..7 — but Phase 1 caps
+    /// at 4 to match the documented HL2 layout and the mi0bot reference.
+    /// BoardCapabilities.MaxReceivers does the higher-level per-board clamp.
+    /// </summary>
+    public const int MaxHl2Receivers = 4;
+    public long MultiRxPacketCount => Interlocked.Read(ref _multiRxPacketCount);
+
+    // Per-slice IQ frame channels for slices 1..MaxHl2Receivers-1. Slice 0
+    // reuses the existing _channel so the single-slice consumer path is
+    // unchanged. Each slice channel uses the same DropOldest policy and
+    // capacity as the primary so a stalled consumer can't back-pressure
+    // the RX thread.
+    private readonly Channel<IqFrame>[] _sliceChannels;
+    /// <summary>Maximum number of non-primary slice channels (3 for HL2).
+    /// Indexes [0..MaxSliceReaders-1] correspond to RxId [1..MaxSliceReaders].</summary>
+    private const int MaxSliceReaders = MaxHl2Receivers - 1;
     private long _droppedFrames;
     private long _totalFrames;
 
@@ -138,6 +175,16 @@ public sealed class Protocol1Client : IProtocol1Client
             SingleReader = true,
             SingleWriter = true,
         });
+        _sliceChannels = new Channel<IqFrame>[MaxSliceReaders];
+        for (int i = 0; i < MaxSliceReaders; i++)
+        {
+            _sliceChannels[i] = Channel.CreateBounded<IqFrame>(new BoundedChannelOptions(DefaultFrameChannelCapacity)
+            {
+                FullMode = BoundedChannelFullMode.DropOldest,
+                SingleReader = true,
+                SingleWriter = true,
+            });
+        }
     }
 
     public ChannelReader<IqFrame> IqFrames => _channel.Reader;
@@ -353,6 +400,95 @@ public sealed class Protocol1Client : IProtocol1Client
         }
     }
 
+    /// <summary>
+    /// Decode a multi-RX EP6 packet (HL2, PS OFF, nddc 2..4) and dispatch
+    /// each DDC's IQ stream into its slice channel. DDC0 → primary
+    /// <see cref="_channel"/> so the existing single-slice IQ pump keeps
+    /// receiving slice-0 audio without modification; DDC1..N → the per-slice
+    /// channels in <see cref="_sliceChannels"/>. Returns false on a parse
+    /// failure (caller falls back to the single-DDC parser).
+    /// </summary>
+    private bool HandleMultiRxPacket(ReadOnlySpan<byte> packet, int nddc)
+    {
+        if (nddc < 2 || nddc > PacketParser.Hl2MaxNddcMultiRx) return false;
+        int samplesPerDdc = PacketParser.Hl2MultiRxSamplesPerPacket(nddc);
+        int needed = 2 * samplesPerDdc;
+
+        // Rent one slot per DDC. Buffers we hand to the IQ channel ride along
+        // until the consumer drops the IqFrame — the client side doesn't
+        // know about the pool so we use plain heap arrays for ownership
+        // simplicity (matches HandlePs4DdcPacket's DDC0 publish path).
+        var rented = new double[nddc][];
+        for (int d = 0; d < nddc; d++)
+        {
+            rented[d] = ArrayPool<double>.Shared.Rent(needed);
+        }
+        bool[] published = new bool[nddc];
+        try
+        {
+            if (!PacketParser.TryParseHl2MultiRxPacket(
+                    packet, nddc, rented,
+                    out uint seq, out int samples,
+                    out var t0, out var t1, out byte overload))
+                return false;
+
+            Interlocked.Increment(ref _multiRxPacketCount);
+            ObserveSequence(seq);
+            Interlocked.Increment(ref _totalFrames);
+
+            // Telemetry + overload fan-out matches the standard parser path.
+            if (t0.C0Address != 0)
+            {
+                try { TelemetryReceived?.Invoke(t0); }
+                catch (Exception ex) { _log.LogWarning(ex, "TelemetryReceived handler threw"); }
+            }
+            if (t1.C0Address != 0)
+            {
+                try { TelemetryReceived?.Invoke(t1); }
+                catch (Exception ex) { _log.LogWarning(ex, "TelemetryReceived handler threw"); }
+            }
+            try { AdcOverloadObserved?.Invoke(AdcOverloadStatus.FromBits(overload)); }
+            catch (Exception ex) { _log.LogWarning(ex, "AdcOverloadObserved handler threw"); }
+
+            int rateHz = (HpsdrSampleRate)Volatile.Read(ref _rate) switch
+            {
+                HpsdrSampleRate.Rate48k => 48_000,
+                HpsdrSampleRate.Rate96k => 96_000,
+                HpsdrSampleRate.Rate192k => 192_000,
+                HpsdrSampleRate.Rate384k => 384_000,
+                _ => 48_000,
+            };
+
+            // Publish each DDC into its destination channel. DDC0 → primary
+            // (existing IQ pump consumer doesn't change). DDC1..N → per-slice.
+            long ts = NowNs();
+            for (int d = 0; d < nddc; d++)
+            {
+                var memory = new ReadOnlyMemory<double>(rented[d], 0, needed);
+                var frame = new IqFrame(memory, samples, rateHz, seq, ts);
+                if (d == 0)
+                {
+                    if (_channel.Writer.TryWrite(frame)) published[0] = true;
+                }
+                else
+                {
+                    int idx = d - 1;
+                    if (idx < _sliceChannels.Length
+                        && _sliceChannels[idx].Writer.TryWrite(frame))
+                        published[d] = true;
+                }
+            }
+            return true;
+        }
+        finally
+        {
+            for (int d = 0; d < nddc; d++)
+            {
+                if (!published[d]) ArrayPool<double>.Shared.Return(rented[d]);
+            }
+        }
+    }
+
     public bool EnableHl2Dither
     {
         get => Volatile.Read(ref _enableHl2Dither) != 0;
@@ -513,6 +649,46 @@ public sealed class Protocol1Client : IProtocol1Client
         Interlocked.Exchange(ref _hl2TxAttnDb, clamped);
     }
 
+    /// <summary>
+    /// Multi-slice (multi-receiver) toggle. Phase 1 is HL2-only with
+    /// PureSignal OFF; SnapshotState enforces PS-precedence so a PS+MOX
+    /// window keeps emitting the existing 4-DDC PS layout regardless of
+    /// this flag. <paramref name="numActiveSlices"/> is clamped to
+    /// [1, <see cref="MaxHl2Receivers"/>]; calling with
+    /// <paramref name="enabled"/>=false or numActiveSlices=1 reverts to
+    /// the standard single-RX wire layout.
+    /// </summary>
+    public void SetMultiSlice(bool enabled, int numActiveSlices)
+    {
+        int clamped = Math.Clamp(numActiveSlices, 1, MaxHl2Receivers);
+        // Treat numActiveSlices == 1 as "off" so a stale Enabled=true with
+        // N=1 doesn't bump the gateware into nddc=0 (an undefined state).
+        bool effective = enabled && clamped > 1;
+        Interlocked.Exchange(ref _multiSliceEnabled, effective ? 1 : 0);
+        Interlocked.Exchange(ref _numActiveSlices, clamped);
+    }
+
+    public void SetVfoSliceHz(int rxId, long hz)
+    {
+        switch (rxId)
+        {
+            case 1: Interlocked.Exchange(ref _vfoBHz, hz); break;
+            case 2: Interlocked.Exchange(ref _vfoCHz, hz); break;
+            case 3: Interlocked.Exchange(ref _vfoDHz, hz); break;
+            // Slice 0 is the primary VFO — callers should use SetVfoAHz.
+            // Any other index is silently ignored (no-throw matches the
+            // tone-deaf forgiveness of the other setters in this class).
+        }
+    }
+
+    public ChannelReader<IqFrame> IqFramesForSlice(int rxId)
+    {
+        if (rxId == 0) return _channel.Reader;
+        if (rxId < 1 || rxId > MaxSliceReaders)
+            throw new ArgumentOutOfRangeException(nameof(rxId), rxId, $"rxId must be in [0, {MaxSliceReaders}]");
+        return _sliceChannels[rxId - 1].Reader;
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -533,6 +709,7 @@ public sealed class Protocol1Client : IProtocol1Client
         bool psOn = Volatile.Read(ref _psEnabled) != 0;
         bool moxOn = Volatile.Read(ref _mox) != 0;
         bool isHl2 = (HpsdrBoardKind)Volatile.Read(ref _boardKind) == HpsdrBoardKind.HermesLite2;
+        long vfoA = Interlocked.Read(ref _vfoAHz);
         // Number of receivers requested in the Config payload (`(N-1) << 3`
         // in C4 bits [5:3]). mi0bot's HL2 path (Thetis console.cs:8186-8265)
         // uses **4 DDCs** during PS+MOX:
@@ -540,12 +717,51 @@ public sealed class Protocol1Client : IProtocol1Client
         //   DDC1 → RX2 (or unused)
         //   DDC2 → PS RX feedback (post-PA tap, NCO=TX freq) — pscc "rx"
         //   DDC3 → PS TX reference (TX-DAC loopback, NCO=TX freq) — pscc "tx"
-        // Outside PS+MOX we stay at single-DDC so the existing 1-DDC EP6
-        // packet shape and parser are bit-exact unchanged.
-        byte numRxMinus1 = (byte)(psOn && isHl2 && moxOn ? 3 : 0);
+        //
+        // PS-precedence rule: if PS+MOX+HL2, force the PS 4-DDC layout
+        // regardless of any multi-slice request — PureSignal coexistence
+        // with multi-RX is a Phase 2 concern. Outside PS+MOX, multi-slice
+        // (HL2 only) widens the layout to N DDCs (N == _numActiveSlices,
+        // clamped 1..4 in SetMultiSlice). When neither is active we stay
+        // at single-DDC so the standard 1-DDC EP6 packet shape and parser
+        // are bit-exact unchanged.
+        bool multiActive = !psOn
+            && isHl2
+            && Volatile.Read(ref _multiSliceEnabled) != 0;
+        int numSlices = multiActive ? Volatile.Read(ref _numActiveSlices) : 1;
+        byte numRxMinus1;
+        long vfoB, vfoC, vfoD;
+        if (psOn && isHl2 && moxOn)
+        {
+            numRxMinus1 = 3;
+            // PS 4-DDC layout: DDC2/DDC3 must tune to TX freq. Zeus has no
+            // separate TX VFO so VfoAHz is the TX freq; DDC1 was historically
+            // also tuned to VfoAHz when PS is armed, preserving that behaviour
+            // here keeps the wire bit-identical.
+            vfoB = vfoA;
+            vfoC = vfoA;
+            vfoD = vfoA;
+        }
+        else if (multiActive && numSlices > 1)
+        {
+            numRxMinus1 = (byte)(numSlices - 1);
+            vfoB = numSlices >= 2 ? Interlocked.Read(ref _vfoBHz) : vfoA;
+            vfoC = numSlices >= 3 ? Interlocked.Read(ref _vfoCHz) : vfoA;
+            vfoD = numSlices >= 4 ? Interlocked.Read(ref _vfoDHz) : vfoA;
+        }
+        else
+        {
+            numRxMinus1 = 0;
+            // Default to VfoAHz so any incidental RxFreqN emission (the
+            // single-slice rotation never selects them) carries an inert
+            // value rather than zero — matches the pre-multi-slice path.
+            vfoB = vfoA;
+            vfoC = vfoA;
+            vfoD = vfoA;
+        }
 
         return new(
-            VfoAHz: Interlocked.Read(ref _vfoAHz),
+            VfoAHz: vfoA,
             Rate: (HpsdrSampleRate)Volatile.Read(ref _rate),
             PreampOn: Volatile.Read(ref _preamp) != 0,
             Atten: new HpsdrAtten(Volatile.Read(ref _attenDb)),
@@ -565,7 +781,10 @@ public sealed class Protocol1Client : IProtocol1Client
             // operator/auto-att has set ATTOnTX, swap C4 source from
             // rx_step_attn to tx_step_attn. Sentinel int.MinValue means
             // untouched, fall through to the RX-side encoding above.
-            Hl2TxAttnDb: Volatile.Read(ref _hl2TxAttnDb));
+            Hl2TxAttnDb: Volatile.Read(ref _hl2TxAttnDb),
+            VfoBHz: vfoB,
+            VfoCHz: vfoC,
+            VfoDHz: vfoD);
     }
 
     private void RxLoop()
@@ -650,6 +869,46 @@ public sealed class Protocol1Client : IProtocol1Client
                         try { _txSignal.Release(); } catch (SemaphoreFullException) { }
                     }
                     continue;
+                }
+
+                // ---- Multi-slice (PS off, HL2, nddc 2..4) -----------------
+                // Same gate as SnapshotState's `multiActive` so the parser
+                // tracks whatever the gateware was last asked to emit.
+                // Single-slice (numSlicesActive == 1) falls through to the
+                // bit-identical standard 1-DDC parse path below.
+                int numSlicesActive = Volatile.Read(ref _multiSliceEnabled) != 0
+                    && (HpsdrBoardKind)Volatile.Read(ref _boardKind) == HpsdrBoardKind.HermesLite2
+                    ? Volatile.Read(ref _numActiveSlices)
+                    : 1;
+                if (numSlicesActive > 1)
+                {
+                    if (HandleMultiRxPacket(buffer.AsSpan(0, n), numSlicesActive))
+                    {
+                        var msRateHz = (HpsdrSampleRate)Volatile.Read(ref _rate) switch
+                        {
+                            HpsdrSampleRate.Rate48k => 48_000,
+                            HpsdrSampleRate.Rate96k => 96_000,
+                            HpsdrSampleRate.Rate192k => 192_000,
+                            HpsdrSampleRate.Rate384k => 384_000,
+                            _ => 48_000,
+                        };
+                        // Pace TX off the multi-RX RX clock. samples/pkt drops
+                        // as nddc grows (nddc=2 → 72, nddc=3 → 48, nddc=4 → 38)
+                        // so the RX-pkt rate climbs proportionally; round to
+                        // hit ~381 TX pkts/s like the standard path.
+                        double samplesPerPkt = PacketParser.Hl2MultiRxSamplesPerPacket(numSlicesActive);
+                        double rxPktsPerSec = msRateHz / samplesPerPkt;
+                        int divider = Math.Max(1, (int)Math.Round(rxPktsPerSec / 381.0));
+                        if ((++rxPktCounter % divider) == 0)
+                        {
+                            try { _txSignal.Release(); } catch (SemaphoreFullException) { }
+                        }
+                        continue;
+                    }
+                    // Parse failed — packet may be a leftover single-DDC
+                    // frame from an in-flight Config bump. Fall through to
+                    // the standard parser so the period during the wire
+                    // transition isn't completely silent.
                 }
 
                 var rented = ArrayPool<double>.Shared.Rent(2 * PacketParser.ComplexSamplesPerPacket);
@@ -755,6 +1014,57 @@ public sealed class Protocol1Client : IProtocol1Client
     // has no separate TX VFO yet.
     internal static (ControlFrame.CcRegister first, ControlFrame.CcRegister second) PhaseRegisters(int phase, bool mox)
         => PhaseRegisters(phase, mox, psArmed: false);
+
+    /// <summary>
+    /// Multi-slice (PS-off) rotation. Widens the existing 4-phase rotation to
+    /// 8 phases so the additional RX-NCO frequency registers (RxFreq2 / RxFreq3
+    /// / RxFreq4) are emitted alongside Config / RxFreq / DriveFilter /
+    /// Attenuator. Only the first <paramref name="numActiveSlices"/> - 1 NCO
+    /// registers are honoured — the others are left as RxFreq (slice 0)
+    /// re-emissions so an unused DDC's NCO doesn't drift to a stale value.
+    /// MOX during multi-slice keeps the Phase-1 scope simple: TX flips
+    /// in TxFreq via the existing single-slice MOX rotation. Per the Phase 1
+    /// design note, TX stays on RxId=0 only.
+    /// </summary>
+    internal static (ControlFrame.CcRegister first, ControlFrame.CcRegister second) PhaseRegistersMultiSlice(
+        int phase, bool mox, int numActiveSlices)
+    {
+        if (numActiveSlices <= 1) return PhaseRegisters(phase, mox, psArmed: false);
+        int p = phase & 0x7;
+        // RX-only path. TX during multi-slice scope-narrows to single-RX
+        // (TX stays on RxId=0); Phase 1 decision per task description.
+        if (mox)
+        {
+            return p switch
+            {
+                0 => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.RxFreq),
+                1 => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.DriveFilter),
+                2 => (ControlFrame.CcRegister.Attenuator, ControlFrame.CcRegister.TxFreq),
+                3 => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.Config),
+                4 => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.RxFreq),
+                5 => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.DriveFilter),
+                6 => (ControlFrame.CcRegister.Attenuator, ControlFrame.CcRegister.TxFreq),
+                _ => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.Config),
+            };
+        }
+        // RX-only: rotate Config / RxFreq / DriveFilter / Attenuator + the
+        // RxFreqN registers needed by the active slice count. Emit each
+        // present per-slice NCO at least once per 8-phase window.
+        var slice2 = numActiveSlices >= 2 ? ControlFrame.CcRegister.RxFreq2 : ControlFrame.CcRegister.RxFreq;
+        var slice3 = numActiveSlices >= 3 ? ControlFrame.CcRegister.RxFreq3 : ControlFrame.CcRegister.RxFreq;
+        var slice4 = numActiveSlices >= 4 ? ControlFrame.CcRegister.RxFreq4 : ControlFrame.CcRegister.RxFreq;
+        return p switch
+        {
+            0 => (ControlFrame.CcRegister.Config,     ControlFrame.CcRegister.RxFreq),
+            1 => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.DriveFilter),
+            2 => (ControlFrame.CcRegister.Attenuator, slice2),
+            3 => (slice3,                              slice4),
+            4 => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.Config),
+            5 => (slice2,                              ControlFrame.CcRegister.DriveFilter),
+            6 => (ControlFrame.CcRegister.Attenuator, slice3),
+            _ => (slice4,                              ControlFrame.CcRegister.RxFreq),
+        };
+    }
 
     /// <summary>
     /// Round-robin register selector. When <paramref name="psArmed"/> is true
@@ -867,23 +1177,48 @@ public sealed class Protocol1Client : IProtocol1Client
                 var state = SnapshotState();
                 // PS-armed rotation widens to 8 phases to fit the
                 // Predistortion (0x2b) register without crowding TxFreq.
-                // The phase counter wraps modulo whichever rotation is in
-                // effect, recomputed every tick so a mid-stream PS toggle
-                // doesn't lose its slot.
+                // Multi-slice (HL2 + PS off + N>1) widens to a parallel
+                // 8-phase rotation that includes RxFreq2/3/4 for the
+                // active slices. Single-slice non-PS keeps the original
+                // 4-phase rotation. The phase counter wraps modulo
+                // whichever rotation is in effect, recomputed every tick
+                // so a mid-stream toggle doesn't lose its slot.
                 bool psArmed = state.PsEnabled && state.Board == HpsdrBoardKind.HermesLite2;
-                var (first, second) = PhaseRegisters(phase, state.Mox, psArmed);
-                phase = (phase + 1) & (psArmed ? 0xF : 0x3);
+                bool multiSlice = !psArmed
+                    && state.Board == HpsdrBoardKind.HermesLite2
+                    && state.NumReceiversMinusOne > 0;
+                int activeSlices = state.NumReceiversMinusOne + 1;
+                ControlFrame.CcRegister first, second;
+                int phaseMask;
+                if (psArmed)
+                {
+                    (first, second) = PhaseRegisters(phase, state.Mox, psArmed: true);
+                    phaseMask = 0xF;
+                }
+                else if (multiSlice)
+                {
+                    (first, second) = PhaseRegistersMultiSlice(phase, state.Mox, activeSlices);
+                    phaseMask = 0x7;
+                }
+                else
+                {
+                    (first, second) = PhaseRegisters(phase, state.Mox);
+                    phaseMask = 0x3;
+                }
+                phase = (phase + 1) & phaseMask;
                 ControlFrame.BuildDataPacket(buf, sendSeq++, first, second, in state, _txIqSource);
                 rateWindowPkts++;
                 var nowUtc = DateTime.UtcNow;
                 var elapsed = nowUtc - rateWindowStart;
                 if (elapsed >= TimeSpan.FromSeconds(1))
                 {
+                    long mrxPkts = Interlocked.Read(ref _multiRxPacketCount);
                     _log.LogInformation(
-                        "p1.tx.rate pkts={Pkts} in {Ms:F0}ms = {Rate:F0} pkt/s (target 381) | wire: peak={Peak}/32767 mean={Mean} firstI={I} firstQ={Q} drv={Drv}",
+                        "p1.tx.rate pkts={Pkts} in {Ms:F0}ms = {Rate:F0} pkt/s (target 381) | wire: peak={Peak}/32767 mean={Mean} firstI={I} firstQ={Q} drv={Drv} | nddc={N} ms={MS} ps={PS} mrx-pkts={MrxPkts}",
                         rateWindowPkts, elapsed.TotalMilliseconds, rateWindowPkts / elapsed.TotalSeconds,
                         ControlFrame.LastPeakAbs, ControlFrame.LastMeanAbs,
-                        ControlFrame.LastFirstI, ControlFrame.LastFirstQ, ControlFrame.LastDriveByte);
+                        ControlFrame.LastFirstI, ControlFrame.LastFirstQ, ControlFrame.LastDriveByte,
+                        state.NumReceiversMinusOne + 1, multiSlice ? 1 : 0, psArmed ? 1 : 0, mrxPkts);
                     rateWindowStart = nowUtc;
                     rateWindowPkts = 0;
                 }

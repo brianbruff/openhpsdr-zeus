@@ -90,7 +90,10 @@ internal static class BoardCapabilitiesTable
         HasAmps: false,
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: false, // single-RX: RX2 doesn't exist
-        SupportsPathIllustrator: true);
+        SupportsPathIllustrator: true,
+        // Hermes / ANAN-10 / ANAN-10E / ANAN-100 / ANAN-100B / ANAN-100B+
+        // (HermesII firmware) all run a single DDC on Protocol 1.
+        MaxReceivers: 1);
 
     private static readonly BoardCapabilities Angelia = new(
         RxAdcCount: 2,
@@ -101,7 +104,9 @@ internal static class BoardCapabilitiesTable
         HasAmps: false,
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: true,
-        SupportsPathIllustrator: true);
+        SupportsPathIllustrator: true,
+        // ANAN-100D — first dual-ADC board, two DDCs in Protocol-1 mode.
+        MaxReceivers: 2);
 
     private static readonly BoardCapabilities Orion = new(
         RxAdcCount: 2,
@@ -112,7 +117,9 @@ internal static class BoardCapabilitiesTable
         HasAmps: false,
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: true,
-        SupportsPathIllustrator: true);
+        SupportsPathIllustrator: true,
+        // ANAN-200D — dual-ADC / two DDCs on Protocol 1.
+        MaxReceivers: 2);
 
     // 0x0A family (G2 / G2-1K / 7000DLE / 8000DLE / OrionMkII / ANVELINA-PRO3 /
     // Red Pitaya). Saturn-class facts.
@@ -125,7 +132,11 @@ internal static class BoardCapabilitiesTable
         HasAmps: true,
         HasAudioAmplifier: true,
         HasSteppedAttenuationRx2: true,
-        SupportsPathIllustrator: false);
+        SupportsPathIllustrator: false,
+        // G2 / G2-1K / 7000DLE / 8000DLE / ANVELINA-PRO3 / Red Pitaya all
+        // advertise up to 8 DDCs on the new-protocol path; Thetis maps the
+        // P1-mode ceiling to the same 8.
+        MaxReceivers: 8);
 
     private static readonly BoardCapabilities HermesC10 = new(
         RxAdcCount: 1,
@@ -136,7 +147,9 @@ internal static class BoardCapabilitiesTable
         HasAmps: true,
         HasAudioAmplifier: true,
         HasSteppedAttenuationRx2: false, // single-RX: RX2 doesn't exist
-        SupportsPathIllustrator: false);
+        SupportsPathIllustrator: false,
+        // ANAN-G2E (N1GP firmware) is single-RX hardware.
+        MaxReceivers: 1);
 
     // Apache OrionMkII original (Orion-MkII firmware, 100 W) — Saturn-class
     // hardware fingerprint but without on-board telemetry / audio amp per
@@ -151,7 +164,10 @@ internal static class BoardCapabilitiesTable
         HasAmps: false,
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: true,
-        SupportsPathIllustrator: false);
+        SupportsPathIllustrator: false,
+        // Apache OrionMkII original is Saturn-class hardware but Thetis
+        // treats it conservatively with only two DDCs in P1 mode.
+        MaxReceivers: 2);
 
     private static readonly BoardCapabilities HermesLite2 = new(
         RxAdcCount: 1,
@@ -162,5 +178,11 @@ internal static class BoardCapabilitiesTable
         HasAmps: false,
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: false,
-        SupportsPathIllustrator: false);
+        SupportsPathIllustrator: false,
+        // HL2 protocol supports up to 4 DDCs via C4 bits [5:3] per
+        // docs/references/protocol-1/hermes-lite2-protocol.md:478-485.
+        // (supported-settings.md:37 mentions "up to 12, gateware-dependent"
+        // but 4 is the conservative documented ceiling and matches the
+        // mi0bot networkproto1.c:973 write loop.)
+        MaxReceivers: 4);
 }

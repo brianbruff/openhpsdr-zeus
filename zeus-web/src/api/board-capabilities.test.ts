@@ -24,12 +24,14 @@ describe('parseBoardCapabilities', () => {
       hasAudioAmplifier: true,
       hasSteppedAttenuationRx2: true,
       supportsPathIllustrator: false,
+      maxReceivers: 8,
     });
     expect(caps.rxAdcCount).toBe(2);
     expect(caps.mkiiBpf).toBe(true);
     expect(caps.adcSupplyMv).toBe(50);
     expect(caps.hasVolts).toBe(true);
     expect(caps.supportsPathIllustrator).toBe(false);
+    expect(caps.maxReceivers).toBe(8);
   });
 
   it('falls back to UNKNOWN_BOARD_CAPABILITIES on garbage input', () => {
@@ -42,5 +44,22 @@ describe('parseBoardCapabilities', () => {
     expect(caps.rxAdcCount).toBe(2);
     expect(caps.adcSupplyMv).toBe(UNKNOWN_BOARD_CAPABILITIES.adcSupplyMv);
     expect(caps.hasVolts).toBe(false);
+    expect(caps.maxReceivers).toBe(UNKNOWN_BOARD_CAPABILITIES.maxReceivers);
+  });
+
+  it('parses HermesLite2 multi-RX capability (4 DDCs)', () => {
+    const caps = parseBoardCapabilities({
+      rxAdcCount: 1,
+      mkiiBpf: false,
+      adcSupplyMv: 33,
+      lrAudioSwap: false,
+      hasVolts: false,
+      hasAmps: false,
+      hasAudioAmplifier: false,
+      hasSteppedAttenuationRx2: false,
+      supportsPathIllustrator: false,
+      maxReceivers: 4,
+    });
+    expect(caps.maxReceivers).toBe(4);
   });
 });

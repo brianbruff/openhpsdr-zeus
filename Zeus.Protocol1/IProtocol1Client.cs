@@ -207,4 +207,45 @@ public interface IProtocol1Client : IDisposable
     /// feedback samples reached the engine" symptom.
     /// </summary>
     long PsPairedPacketCount { get; }
+
+    // ---- Multi-slice / multi-receiver (Phase 1: HL2 only, PS OFF) ----
+    //
+    // Phase 1 scope: HL2 with up to 4 user receivers, PureSignal OFF. The
+    // single-slice path (Enabled=false) is bit-identical to pre-multi-slice
+    // behaviour — no new control bits set, no extra DDCs requested.
+    //
+    // PureSignal coexistence with multi-RX is a Phase 2 concern; if PS is
+    // armed when multi-slice is enabled, the wire layer falls back to the
+    // existing PS layout (the PS+MOX path overrides NumReceiversMinusOne
+    // inside SnapshotState).
+    //
+    // mi0bot networkproto1.c:973 — `C4 |= (nddc - 1) << 3` for HL2.
+    // docs/references/protocol-1/hermes-lite2-protocol.md:478-486.
+
+    /// <summary>
+    /// Enable / disable multi-slice operation and set the number of active
+    /// slices. <paramref name="numActiveSlices"/> is clamped to [1, 4]
+    /// (HL2 ceiling per the protocol reference). When
+    /// <paramref name="enabled"/> is false or <paramref name="numActiveSlices"/>
+    /// is 1, the wire layer reverts to the single-RX layout regardless of
+    /// what was set previously.
+    /// </summary>
+    void SetMultiSlice(bool enabled, int numActiveSlices);
+
+    /// <summary>
+    /// Set the NCO frequency for a non-primary RX slice (rxId 1..3). Slice 0
+    /// reuses the primary VFO via <see cref="SetVfoAHz"/>. Out-of-range rxIds
+    /// are silently ignored. The new value is picked up on the next control
+    /// frame emission for the matching RxFreqN register.
+    /// </summary>
+    void SetVfoSliceHz(int rxId, long hz);
+
+    /// <summary>
+    /// Per-slice IQ stream. <c>rxId == 0</c> returns the primary <see
+    /// cref="IqFrames"/> reader (always populated, single-slice or multi-slice).
+    /// <c>rxId &gt;= 1</c> returns a per-slice channel that is populated only
+    /// while multi-slice is enabled and a packet has been parsed by the
+    /// multi-RX layout decoder. Out-of-range rxIds throw.
+    /// </summary>
+    System.Threading.Channels.ChannelReader<IqFrame> IqFramesForSlice(int rxId);
 }

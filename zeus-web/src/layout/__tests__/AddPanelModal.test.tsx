@@ -10,7 +10,10 @@ import { createElement } from 'react';
 import { render, act } from '../../components/meters/__tests__/harness';
 import { AddPanelModal } from '../AddPanelModal';
 
-function setup(existingPanels: Set<string> = new Set()) {
+function setup(
+  existingPanels: Set<string> = new Set(),
+  panelVisible?: (def: { id: string }) => boolean,
+) {
   const onAdd = vi.fn();
   const onClose = vi.fn();
   const result = render(
@@ -18,6 +21,7 @@ function setup(existingPanels: Set<string> = new Set()) {
       existingPanels,
       onAdd,
       onClose,
+      ...(panelVisible ? { panelVisible } : {}),
     }),
   );
   return { ...result, onAdd, onClose };
@@ -54,8 +58,11 @@ describe('AddPanelModal', () => {
     const cards = container.querySelectorAll(
       '[data-testid="add-panel-cards"] .add-panel-card',
     );
-    // 17 panels in registry.
-    expect(cards.length).toBe(17);
+    // 17 base panels + 3 HL2 multi-slice secondaries (hero-rx1..3) = 20.
+    // The hero-rxN entries are hidden in production by FlexWorkspace's
+    // panelVisible filter when MaxReceivers ≤ 1 / multi-slice is off, but
+    // this test renders the modal without that filter — so all 20 appear.
+    expect(cards.length).toBe(20);
     unmount();
   });
 
@@ -121,6 +128,26 @@ describe('AddPanelModal', () => {
     ) as HTMLElement;
     expect(card).not.toBeNull();
     expect(card.textContent).toContain('Add another');
+    unmount();
+  });
+
+  it('panelVisible filter hides matching panels (HL2 multi-slice gating)', () => {
+    // Mirrors FlexWorkspace's panelVisible: hide hero-rxN when multi-slice
+    // is disabled. Verifies the rest of the registry stays visible.
+    const { container, unmount } = setup(
+      new Set(),
+      (def) => !def.id.startsWith('hero-rx'),
+    );
+    const ids = Array.from(
+      container.querySelectorAll(
+        '[data-testid="add-panel-cards"] .add-panel-card',
+      ),
+    ).map((c) => c.getAttribute('data-panel-id'));
+    expect(ids).not.toContain('hero-rx1');
+    expect(ids).not.toContain('hero-rx2');
+    expect(ids).not.toContain('hero-rx3');
+    expect(ids).toContain('hero');
+    expect(ids).toContain('meters');
     unmount();
   });
 

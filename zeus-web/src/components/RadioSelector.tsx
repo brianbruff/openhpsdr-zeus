@@ -11,6 +11,8 @@ import {
   type OrionMkIIVariant,
 } from '../api/orion-mkii-variant';
 import { useRadioStore } from '../state/radio-store';
+import { useMultiSliceStore } from '../state/multi-slice-store';
+import { useTxStore } from '../state/tx-store';
 
 // Order reflects the Thetis hardware dropdown — newer / more common boards
 // first, then legacy (Metis / HermesII) at the bottom. Matches
@@ -61,10 +63,26 @@ export function RadioSelector() {
   const setPreferred = useRadioStore((s) => s.setPreferred);
   const setOverrideDetection = useRadioStore((s) => s.setOverrideDetection);
   const setVariant = useRadioStore((s) => s.setVariant);
+  const maxReceivers = useRadioStore((s) => s.capabilities.maxReceivers);
+
+  // HL2 multi-slice (issue #251). Loaded once on mount; the toggle is hidden
+  // when the connected board's MaxReceivers ≤ 1. PureSignal master arm gates
+  // the toggle's enabled state — backend will refuse to enable multi-slice
+  // while PS is on, and surfacing it client-side as a tooltip avoids the
+  // round-trip and confusing 409 banner.
+  const multiSliceConfig = useMultiSliceStore((s) => s.config);
+  const multiSliceLoaded = useMultiSliceStore((s) => s.loaded);
+  const multiSliceInflight = useMultiSliceStore((s) => s.inflight);
+  const multiSliceConflict = useMultiSliceStore((s) => s.conflict);
+  const loadMultiSlice = useMultiSliceStore((s) => s.load);
+  const setMultiSliceEnabled = useMultiSliceStore((s) => s.setEnabled);
+  const setMultiSliceCount = useMultiSliceStore((s) => s.setNumActiveSlices);
+  const psEnabled = useTxStore((s) => s.psEnabled);
 
   useEffect(() => {
     load();
-  }, [load]);
+    loadMultiSlice();
+  }, [load, loadMultiSlice]);
 
   const connectedKnown = selection.connected !== 'Unknown';
   const overrideOn = selection.overrideDetection && selection.preferred !== 'Auto';
@@ -82,15 +100,32 @@ export function RadioSelector() {
     connectedKnown &&
     selection.preferred !== selection.connected;
 
+  // Multi-slice surfaces only when the connected board can do >1 DDC.
+  // Hermes-class / G2E radios skip this entire row — bit-identical to the
+  // pre-multi-slice settings for those operators.
+  const showMultiSlice = maxReceivers > 1;
+  const multiSliceDisabled =
+    !multiSliceLoaded || multiSliceInflight || (psEnabled && !multiSliceConfig.enabled);
+  const multiSliceTooltip = psEnabled
+    ? 'PureSignal in use — disable PS to enable multi-slice.'
+    : multiSliceConflict === 'puresignal'
+      ? 'PureSignal in use — disable PS to enable multi-slice.'
+      : `Open up to ${maxReceivers} simultaneous DDC receivers. Phase 1: HL2 only, RX0 audio only.`;
+
   return (
     <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        background: 'var(--bg-0)',
+        borderBottom: '1px solid var(--panel-border)',
+      }}
+    ><div
       style={{
         display: 'flex',
         alignItems: 'center',
         gap: 12,
         padding: '10px 22px',
-        background: 'var(--bg-0)',
-        borderBottom: '1px solid var(--panel-border)',
         fontSize: 12,
         color: 'var(--fg-1)',
       }}
@@ -282,6 +317,117 @@ export function RadioSelector() {
           ? 'Selected board wins for drive / ATT / filters.'
           : 'Seeds PA defaults. Saved calibration is preserved.'}
       </span>
+    </div>
+    {showMultiSlice && (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          padding: '8px 22px 10px',
+          fontSize: 12,
+          color: 'var(--fg-1)',
+          borderTop: '1px solid var(--panel-border)',
+        }}
+      >
+        <label
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: '0.14em',
+            textTransform: 'uppercase',
+            color: 'var(--fg-2)',
+          }}
+        >
+          Multi-Slice (RX)
+        </label>
+        <label
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: 11,
+            color: multiSliceDisabled ? 'var(--fg-3)' : 'var(--fg-1)',
+            cursor: multiSliceDisabled ? 'not-allowed' : 'pointer',
+          }}
+          title={multiSliceTooltip}
+        >
+          <input
+            type="checkbox"
+            checked={multiSliceConfig.enabled}
+            disabled={multiSliceDisabled}
+            onChange={(e) => setMultiSliceEnabled(e.target.checked)}
+          />
+          <span>Enable Multi-Slice (RX)</span>
+        </label>
+
+        {multiSliceConfig.enabled && (
+          <label
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 11,
+              color: 'var(--fg-2)',
+            }}
+            title={`Number of DDC receivers to open (max ${maxReceivers} for this board). Audio mixing is RX0-only in Phase 1.`}
+          >
+            <span>Slices</span>
+            <input
+              type="number"
+              min={1}
+              max={maxReceivers}
+              value={Math.min(multiSliceConfig.numActiveSlices, maxReceivers)}
+              disabled={multiSliceInflight || !multiSliceLoaded}
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                if (!Number.isFinite(next)) return;
+                const clamped = Math.max(1, Math.min(maxReceivers, Math.floor(next)));
+                setMultiSliceCount(clamped);
+              }}
+              style={{
+                width: 56,
+                padding: '4px 6px',
+                fontSize: 12,
+                background: 'var(--bg-2)',
+                color: 'var(--fg-0)',
+                border: '1px solid var(--panel-border)',
+                borderRadius: 'var(--r-sm, 3px)',
+              }}
+            />
+            <span style={{ fontSize: 10, color: 'var(--fg-3)' }}>
+              of {maxReceivers}
+            </span>
+          </label>
+        )}
+
+        {multiSliceConflict === 'puresignal' && (
+          <span
+            style={{
+              fontSize: 10,
+              color: 'var(--tx)',
+              background: 'var(--tx-soft)',
+              padding: '2px 6px',
+              borderRadius: 2,
+            }}
+            title="Backend refused: PureSignal owns DDC slots. Disable PS first, then enable multi-slice."
+          >
+            BLOCKED BY PS
+          </span>
+        )}
+
+        <span
+          style={{
+            marginLeft: 'auto',
+            fontSize: 10,
+            color: 'var(--fg-3)',
+          }}
+          title="Phase 1 limits: HL2 only, audio always from RX0, TX always on RX0. Per-slice AGC/filter UI is deferred."
+        >
+          Phase 1 · HL2 only · RX0 audio + TX
+        </span>
+      </div>
+    )}
     </div>
   );
 }

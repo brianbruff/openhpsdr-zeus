@@ -60,7 +60,19 @@ import { useWorkspace } from '../WorkspaceContext';
 // the ⌥ map-mode hint, the HZ/PX readout, and the close X. Interactive
 // controls inside stop mousedown propagation so a click on a chip / slider /
 // input doesn't initiate a tile drag (mirrors the MetersPanel pattern).
-export function HeroPanel({ onRemove }: { onRemove?: () => void } = {}) {
+//
+// `rxId` defaults to 0 — that path is bit-identical to the pre-multi-slice
+// HeroPanel and is what every existing layout has stored. HL2 multi-slice
+// (issue #251) registers additional panel defs (`hero-rx1` … `hero-rx3`)
+// that pass `rxId={1..3}`; for those, the RX1+ HeroPanel renders a
+// simplified header (no SP/LP/BEAM/⌥-map chips — those are global to RX0)
+// and the title shifts to `Panadapter · RX{N}`. The world-map / image
+// background layers stay RX0-only so the multi-RX panels are pure
+// panadapter+waterfall views.
+export function HeroPanel({
+  rxId = 0,
+  onRemove,
+}: { rxId?: number; onRemove?: () => void } = {}) {
   const {
     terminatorActive,
     imageMode,
@@ -85,6 +97,11 @@ export function HeroPanel({ onRemove }: { onRemove?: () => void } = {}) {
     submitBeam,
   } = useWorkspace();
   const connected = useConnectionStore((s) => s.status === 'Connected');
+  // RX0 keeps the existing world-map / image overlays and rotator chips —
+  // those track the operator's primary slice. RX1..N panels show the
+  // panadapter/waterfall stack only, with a tighter header.
+  const isPrimary = rxId === 0;
+  const tileTitle = isPrimary ? heroTitle : `Panadapter · RX${rxId}`;
 
   const handleRotateToBearing = (brg: number) => {
     const rot = useRotatorStore.getState();
@@ -104,7 +121,7 @@ export function HeroPanel({ onRemove }: { onRemove?: () => void } = {}) {
 
   return (
     <div
-      className={`hero ${bgActive ? 'bg-active' : ''} ${mapInteractive ? 'map-mode' : ''}`}
+      className={`hero ${isPrimary && bgActive ? 'bg-active' : ''} ${isPrimary && mapInteractive ? 'map-mode' : ''}`}
       style={{ display: 'flex', flexDirection: 'column', height: '100%' }}
     >
       <div className="workspace-tile-header hero-tile-header">
@@ -116,8 +133,11 @@ export function HeroPanel({ onRemove }: { onRemove?: () => void } = {}) {
           <GripVertical size={12} />
         </span>
         <span className={`dot ${moxOn || tunOn ? 'tx' : 'on'}`} />
-        <span className="workspace-tile-title" title={typeof heroTitle === 'string' ? heroTitle : undefined}>
-          {heroTitle}
+        <span
+          className="workspace-tile-title"
+          title={typeof tileTitle === 'string' ? tileTitle : undefined}
+        >
+          {tileTitle}
         </span>
         <div
           className="hero-tile-controls"
@@ -125,7 +145,7 @@ export function HeroPanel({ onRemove }: { onRemove?: () => void } = {}) {
           onMouseDown={stopDrag}
         >
           <ZoomControl />
-          {terminatorActive && contact && mapAvailable && (
+          {isPrimary && terminatorActive && contact && mapAvailable && (
             <>
               <button
                 type="button"
@@ -169,7 +189,7 @@ export function HeroPanel({ onRemove }: { onRemove?: () => void } = {}) {
               </form>
             </>
           )}
-          {terminatorActive && mapAvailable && (
+          {isPrimary && terminatorActive && mapAvailable && (
             <span
               className={`chip mono ${mapInteractive ? 'accent' : ''}`}
               title="Hold ⌥ (Alt) to zoom and pan the map (click-to-tune paused)"
@@ -197,48 +217,50 @@ export function HeroPanel({ onRemove }: { onRemove?: () => void } = {}) {
         ) : null}
       </div>
       <div className="hero-body" style={{ flex: 1, position: 'relative' }}>
-        {imageMode && (
+        {isPrimary && imageMode && (
           <div
             className={`image-layer ${backgroundImageFit}`}
             style={{ backgroundImage: `url(${backgroundImage})` }}
           />
         )}
-        <div className={`map-layer ${terminatorActive ? 'visible' : ''}`}>
-          <LeafletMapErrorBoundary
-            onError={(error) => {
-              console.warn('Leaflet map unavailable:', error.message);
-              setMapAvailable(false);
-            }}
-            fallback={null}
-          >
-            {effectiveHome && (
-            <LeafletWorldMap
-              home={{
-                call: effectiveHome.call,
-                lat: effectiveHome.lat,
-                lon: effectiveHome.lon,
-                grid: effectiveHome.grid,
-                imageUrl: effectiveHome.imageUrl,
+        {isPrimary && (
+          <div className={`map-layer ${terminatorActive ? 'visible' : ''}`}>
+            <LeafletMapErrorBoundary
+              onError={(error) => {
+                console.warn('Leaflet map unavailable:', error.message);
+                setMapAvailable(false);
               }}
-              target={
-                contact
-                  ? {
-                      call: contact.callsign,
-                      lat: contact.lat,
-                      lon: contact.lon,
-                      grid: contact.grid,
-                      imageUrl: contact.photoUrl ?? null,
-                    }
-                  : null
-              }
-              beamBearing={rotLiveAz ?? beamOverrideDeg ?? undefined}
-              active={terminatorActive}
-              interactive={mapInteractive}
-              onRotateToBearing={handleRotateToBearing}
-            />
-            )}
-          </LeafletMapErrorBoundary>
-        </div>
+              fallback={null}
+            >
+              {effectiveHome && (
+              <LeafletWorldMap
+                home={{
+                  call: effectiveHome.call,
+                  lat: effectiveHome.lat,
+                  lon: effectiveHome.lon,
+                  grid: effectiveHome.grid,
+                  imageUrl: effectiveHome.imageUrl,
+                }}
+                target={
+                  contact
+                    ? {
+                        call: contact.callsign,
+                        lat: contact.lat,
+                        lon: contact.lon,
+                        grid: contact.grid,
+                        imageUrl: contact.photoUrl ?? null,
+                      }
+                    : null
+                }
+                beamBearing={rotLiveAz ?? beamOverrideDeg ?? undefined}
+                active={terminatorActive}
+                interactive={mapInteractive}
+                onRotateToBearing={handleRotateToBearing}
+              />
+              )}
+            </LeafletMapErrorBoundary>
+          </div>
+        )}
         <div
           data-spectrum-stack
           style={{
@@ -249,11 +271,25 @@ export function HeroPanel({ onRemove }: { onRemove?: () => void } = {}) {
             zIndex: 1,
           }}
         >
-          {connected && <Panadapter />}
-          {connected && <Waterfall transparent={bgActive} />}
+          {connected && <Panadapter rxId={rxId} />}
+          {connected && <Waterfall transparent={isPrimary && bgActive} rxId={rxId} />}
         </div>
       </div>
     </div>
   );
+}
+
+// HL2 multi-slice (issue #251) — fixed-rxId wrappers consumed by panels.ts.
+// Defined here (not inline in panels.ts) because panels.ts is a `.ts` file
+// without JSX; these need to live in a .tsx module and stay co-located with
+// their parent component.
+export function HeroPanelRx1({ onRemove }: { onRemove?: () => void } = {}) {
+  return <HeroPanel rxId={1} onRemove={onRemove} />;
+}
+export function HeroPanelRx2({ onRemove }: { onRemove?: () => void } = {}) {
+  return <HeroPanel rxId={2} onRemove={onRemove} />;
+}
+export function HeroPanelRx3({ onRemove }: { onRemove?: () => void } = {}) {
+  return <HeroPanel rxId={3} onRemove={onRemove} />;
 }
 

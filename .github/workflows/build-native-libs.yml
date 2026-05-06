@@ -93,20 +93,31 @@ jobs:
           # for 'RuntimeLibrary'") because vcpkg's libfftw3-3.lib expects
           # /MT and CMake's MSVC default is /MD. See the FFTW step above
           # for why arm64 needs static CRT in the first place.
-          $extraArgs = if ("${{ matrix.arch }}" -eq "arm64") {
-            @("-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded")
-          } else {
-            @()
+          #
+          # Build the cmake invocation as a single array and splat it
+          # via `& cmake @cmakeArgs`. Earlier attempts used backtick
+          # line-continuation with a trailing `@extraArgs` splat, which
+          # PowerShell on windows-latest mangled — a single-element
+          # array containing "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
+          # arrived at cmake as multiple tokens including a stray "d"
+          # and a bare "-". Building one array end-to-end avoids the
+          # whole continuation-plus-splat parsing footgun.
+          $cmakeArgs = @(
+            '-S', 'native/wdsp',
+            '-B', 'native/build',
+            '-G', 'Visual Studio 17 2022',
+            '-A', $archFlag,
+            '-T', 'ClangCL',
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake",
+            "-DVCPKG_TARGET_TRIPLET=$triplet",
+            '-DWDSP_WITH_NR3=OFF',
+            '-DWDSP_WITH_NR4=ON'
+          )
+          if ("${{ matrix.arch }}" -eq "arm64") {
+            $cmakeArgs += '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded'
           }
-          cmake -S native/wdsp -B native/build `
-            -G "Visual Studio 17 2022" `
-            -A $archFlag `
-            -T ClangCL `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET=$triplet `
-            -DWDSP_WITH_NR3=OFF `
-            -DWDSP_WITH_NR4=ON `
-            @extraArgs
+          Write-Host "cmake args:"; $cmakeArgs | ForEach-Object { Write-Host "  $_" }
+          & cmake @cmakeArgs
 
       - name: Build
         run: |

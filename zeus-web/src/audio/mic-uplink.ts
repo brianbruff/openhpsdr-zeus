@@ -81,7 +81,7 @@ export async function startMicUplink(
     throw new Error('getUserMedia not available in this environment');
   }
   const stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
-  const context = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
+  const context = new AudioContext({ sampleRate: 48000, latencyHint: 0.04 });
 
   const cleanupStream = () => {
     for (const t of stream.getTracks()) {

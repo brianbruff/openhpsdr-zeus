@@ -18,27 +18,59 @@ jobs:
     runs-on: windows-latest
     strategy:
       matrix:
-        # arm64 deferred: upstream channel.c uses _MM_SET_FLUSH_ZERO_MODE
-        # (SSE intrinsic) guarded only for linux/APPLE, so it fails to
-        # compile on Windows-on-ARM. Revisit if a Windows-ARM64 user asks.
-        arch: [x64]
+        # arm64 enabled: the _MM_SET_FLUSH_ZERO_MODE SSE-intrinsic block in
+        # channel.c is now gated out for ARM64 alongside linux/APPLE, so the
+        # rest of WDSP compiles cleanly under VS 2022's ARM64 toolset. CMake
+        # picks `-A ARM64` below, vcpkg uses the `arm64-windows-static-md`
+        # triplet, and dumpbin (a host-arch tool) reads the ARM64 PE fine.
+        arch: [x64, arm64]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install FFTW via vcpkg (static-md triplet, dynamic CRT)
+      - name: Install FFTW via vcpkg
         run: |
-          # static-md = FFTW linked statically into wdsp.dll, but using the
-          # default dynamic CRT (/MD) so no CRT mismatch with CMake defaults.
-          # Result: a single self-contained wdsp.dll, no fftw3.dll needed.
-          # vcpkg's fftw3 port builds all three precisions (fftw3, fftw3f,
-          # fftw3l) by default, so libspecbleach (NR4) gets fftw3f from the
-          # same install.
-          vcpkg install fftw3:${{ matrix.arch }}-windows-static-md
+          # CRT linkage is per-arch:
+          #
+          # x64 uses the static-md triplet — FFTW is linked statically into
+          # wdsp.dll, but the resulting DLL still imports the dynamic CRT
+          # (vcruntime140.dll, ucrtbase.dll). On x64 boxes vcruntime140.dll
+          # is effectively ubiquitous (Office, Steam, .NET SDK, the bulk of
+          # Windows installer programs all ship the VC++ Redistributable),
+          # so this is fine and matches the choice that has been working
+          # for x64 for the entire Zeus 0.x line.
+          #
+          # arm64 uses the static triplet — FFTW *and* the CRT are linked
+          # into wdsp.dll (matched on the CMake side by
+          # CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded). Win-ARM does NOT
+          # ship the ARM64 VC++ Redistributable by default and a fresh
+          # Surface Pro X / Snapdragon X Elite system has no other
+          # ARM64 native software to drag it in. With the static-md
+          # triplet the resulting wdsp.dll loads VCRUNTIME140.dll at
+          # runtime and we ship to a "module could not be found" error
+          # the first time anything in WdspNativeLoader tries to open a
+          # channel. The static-CRT build has zero non-Windows-shipped
+          # imports — verified locally with llvm-objdump.
+          $triplet = if ("${{ matrix.arch }}" -eq "arm64") {
+            "arm64-windows-static"
+          } else {
+            "x64-windows-static-md"
+          }
+          vcpkg install fftw3:$triplet
           echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
 
       - name: Configure CMake
         run: |
           $archFlag = if ("${{ matrix.arch }}" -eq "arm64") { "ARM64" } else { "x64" }
+          # Recompute the triplet here rather than passing it through
+          # GITHUB_ENV. Step-to-step env var hand-off via PowerShell's
+          # `>> $env:GITHUB_ENV` has been finicky on windows-latest (the
+          # var lands but evaluates empty in the next step), and the
+          # derivation is short. Must stay in sync with the FFTW step.
+          $triplet = if ("${{ matrix.arch }}" -eq "arm64") {
+            "arm64-windows-static"
+          } else {
+            "x64-windows-static-md"
+          }
           # ClangCL toolset: the vendored libspecbleach source uses a C99
           # variable-length array in get_rolling_median_spectrum which MSVC
           # does not implement. clang-cl supports VLAs and ships with the
@@ -53,14 +85,39 @@ jobs:
           # WDSP_WITH_NR4=ON pulls in native/libspecbleach/ as a STATIC sub-
           # target embedded into wdsp.dll. NR3 stays OFF (librnnoise not
           # vendored). Both flags are explicit for build-log clarity.
-          cmake -S native/wdsp -B native/build `
-            -G "Visual Studio 17 2022" `
-            -A $archFlag `
-            -T ClangCL `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET=${{ matrix.arch }}-windows-static-md `
-            -DWDSP_WITH_NR3=OFF `
-            -DWDSP_WITH_NR4=ON
+          #
+          # arm64 also passes CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded so
+          # WDSP itself is built with /MT, matching the static-CRT FFTW
+          # produced by the arm64-windows-static vcpkg triplet. Without
+          # this match the link step trips LNK2038 ("mismatch detected
+          # for 'RuntimeLibrary'") because vcpkg's libfftw3-3.lib expects
+          # /MT and CMake's MSVC default is /MD. See the FFTW step above
+          # for why arm64 needs static CRT in the first place.
+          #
+          # Build the cmake invocation as a single array and splat it
+          # via `& cmake @cmakeArgs`. Earlier attempts used backtick
+          # line-continuation with a trailing `@extraArgs` splat, which
+          # PowerShell on windows-latest mangled — a single-element
+          # array containing "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
+          # arrived at cmake as multiple tokens including a stray "d"
+          # and a bare "-". Building one array end-to-end avoids the
+          # whole continuation-plus-splat parsing footgun.
+          $cmakeArgs = @(
+            '-S', 'native/wdsp',
+            '-B', 'native/build',
+            '-G', 'Visual Studio 17 2022',
+            '-A', $archFlag,
+            '-T', 'ClangCL',
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake",
+            "-DVCPKG_TARGET_TRIPLET=$triplet",
+            '-DWDSP_WITH_NR3=OFF',
+            '-DWDSP_WITH_NR4=ON'
+          )
+          if ("${{ matrix.arch }}" -eq "arm64") {
+            $cmakeArgs += '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded'
+          }
+          Write-Host "cmake args:"; $cmakeArgs | ForEach-Object { Write-Host "  $_" }
+          & cmake @cmakeArgs
 
       - name: Build
         run: |
@@ -255,9 +312,10 @@ jobs:
           for artifact_dir in artifacts/wdsp-*; do
             artifact_name=$(basename "$artifact_dir")  # e.g. wdsp-windows-x64
             case "$artifact_name" in
-              wdsp-windows-x64) destDir=Zeus.Dsp/runtimes/win-x64/native ;;
-              wdsp-linux-x64)   destDir=Zeus.Dsp/runtimes/linux-x64/native ;;
-              wdsp-linux-arm64) destDir=Zeus.Dsp/runtimes/linux-arm64/native ;;
+              wdsp-windows-x64)   destDir=Zeus.Dsp/runtimes/win-x64/native ;;
+              wdsp-windows-arm64) destDir=Zeus.Dsp/runtimes/win-arm64/native ;;
+              wdsp-linux-x64)     destDir=Zeus.Dsp/runtimes/linux-x64/native ;;
+              wdsp-linux-arm64)   destDir=Zeus.Dsp/runtimes/linux-arm64/native ;;
               *)
                 echo "Unrecognised artifact $artifact_name — refusing to guess destination" >&2
                 exit 1

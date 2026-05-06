@@ -18,6 +18,14 @@
   #define MyAppVersion "0.0.0"
 #endif
 
+; Target architecture: pass /DArch=arm64 from CI to build the Windows-on-ARM
+; installer. Defaults to x64 so local iscc runs without explicit args still
+; produce the historical x64 installer. Inno Setup 6.3+ accepts both "x64"
+; and "arm64" as ArchitecturesAllowed identifiers.
+#ifndef Arch
+  #define Arch "x64"
+#endif
+
 [Setup]
 ; Distinct AppId from the service-mode installer (8F2E3B1C-... in
 ; zeus-windows.iss) so installing the desktop edition does NOT uninstall
@@ -35,12 +43,12 @@ DefaultGroupName={#MyAppShortName}
 DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE
 OutputDir=.\output
-OutputBaseFilename=Zeus-Desktop-{#MyAppVersion}-win-x64-setup
+OutputBaseFilename=Zeus-Desktop-{#MyAppVersion}-win-{#Arch}-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-ArchitecturesInstallIn64BitMode=x64
-ArchitecturesAllowed=x64
+ArchitecturesInstallIn64BitMode=x64 arm64
+ArchitecturesAllowed={#Arch}
 PrivilegesRequired=lowest
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
@@ -51,7 +59,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-Source: "..\Zeus.Desktop\bin\Release\net10.0\win-x64\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\Zeus.Desktop\bin\Release\net10.0\win-{#Arch}\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 ; Shortcuts launch Zeus.Desktop.exe directly — Photino is the UI, no

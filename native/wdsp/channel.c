@@ -98,7 +98,15 @@ void OpenChannel (int channel, int in_size, int dsp_size, int input_samplerate, 
     InterlockedBitTestAndSet (&ch[channel].exchange, 0);
   }
 
-#if !defined(linux) && !defined(__APPLE__)
+#if !defined(linux) && !defined(__APPLE__) && !defined(_M_ARM64) && !defined(__aarch64__)
+  // _MM_SET_FLUSH_ZERO_MODE is an x86 SSE-only perf hint (denormals→zero in
+  // the MXCSR). It does not exist on ARM64 toolchains (MSVC clang-cl, gcc,
+  // clang) and the header <xmmintrin.h> isn't available there either, so the
+  // call is gated out for Windows-on-ARM and aarch64 in addition to the
+  // pre-existing linux/Apple gates. ARM64 cores have an analogous flush-to-
+  // zero bit in FPCR (FZ); WDSP / HL2 do not depend on FTZ for correctness
+  // and we deliberately leave FPCR at the OS default rather than introducing
+  // an architecture-specific intrinsic here.
   _MM_SET_FLUSH_ZERO_MODE (_MM_FLUSH_ZERO_ON);
 #endif
 }

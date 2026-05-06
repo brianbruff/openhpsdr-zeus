@@ -1,15 +1,20 @@
 name: Release
 
-# Three trigger paths:
-#   1. push of a v*.*.* tag         → full release (build + publish to GitHub Releases)
-#   2. push to a release/** branch  → dry-run build only (artifacts uploaded, no Release)
-#   3. manual workflow_dispatch     → dry-run build only (run from any branch via the
-#                                     Actions tab → Release → Run workflow)
+# Four trigger paths:
+#   1. push of a v*.*.* tag                 → full release (build + publish to GitHub Releases)
+#   2. push to a release/** branch          → dry-run build only (artifacts uploaded, no Release)
+#   3. manual workflow_dispatch (draft=off) → dry-run build only (run from any branch via the
+#                                             Actions tab → Release → Run workflow)
+#   4. manual workflow_dispatch (draft=on)  → DRAFT GitHub Release (maintainers only). Same
+#                                             VersionPrefix as the eventual public release —
+#                                             no -dryrun.<sha> suffix on artifact names — so
+#                                             the bits you smoke-test are byte-for-byte what
+#                                             would ship if you flip the draft to "Published".
 #
-# In all three modes the same matrix builds installers for Windows, Linux,
-# and macOS — both the headless service-mode bundles AND the new Photino
-# desktop bundles. The 'create-release' job is gated on github.ref_type=='tag'
-# so dry-run runs never publish.
+# In all four modes the same matrix builds installers for Windows, Linux,
+# and macOS — both the headless service-mode bundles AND the Photino
+# desktop bundles. 'create-release' is gated on is-release='true', which is
+# set by the determine-version step in modes 1 and 4 only.
 on:
   push:
     tags:
@@ -17,6 +22,12 @@ on:
     branches:
       - 'release/**'
   workflow_dispatch:
+    inputs:
+      draft:
+        description: 'Publish as a DRAFT GitHub Release (visible only to maintainers, version not suffixed with -dryrun.<sha>). Leave unchecked for a regular dry-run that only uploads artifacts to the run page.'
+        type: boolean
+        required: false
+        default: false
 
 jobs:
   determine-version:
@@ -32,6 +43,7 @@ jobs:
       version-prefix: ${{ steps.parse.outputs.version-prefix }}
       version-suffix: ${{ steps.parse.outputs.version-suffix }}
       is-release: ${{ steps.parse.outputs.is-release }}
+      is-draft: ${{ steps.parse.outputs.is-draft }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,7 +51,12 @@ jobs:
 
       - name: Parse version + validate (tag mode only)
         id: parse
+        env:
+          # workflow_dispatch boolean inputs arrive as the strings "true"/"false";
+          # plumb through env so the bash conditional below stays readable.
+          DISPATCH_DRAFT: ${{ github.event.inputs.draft }}
         run: |
+          IS_DRAFT="false"
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             # Tag push — strict release path.
             if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -57,11 +74,24 @@ jobs:
             VERSION="$VERSION_PREFIX"
             IS_RELEASE="true"
             echo "Tagged release $GITHUB_REF_NAME → version $VERSION"
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$DISPATCH_DRAFT" == "true" ]]; then
+            # Manual dispatch with draft=true — produce a DRAFT GitHub Release
+            # using the in-tree VersionPrefix verbatim. No -dryrun.<sha> suffix:
+            # the artifact filenames you smoke-test must match the eventual
+            # published release byte-for-byte. The draft is only visible to
+            # maintainers until someone clicks "Publish release".
+            VERSION_PREFIX=$(sed -n 's:.*<VersionPrefix[^>]*>\([^<]*\)</VersionPrefix>.*:\1:p' Directory.Build.props | head -1)
+            VERSION_PREFIX="${VERSION_PREFIX:-0.0.0}"
+            VERSION_SUFFIX=""
+            VERSION="$VERSION_PREFIX"
+            IS_RELEASE="true"
+            IS_DRAFT="true"
+            echo "Draft release dispatch (ref=$GITHUB_REF) → version $VERSION (draft=true)"
           else
-            # Branch push or manual dispatch — dry-run path. Read VersionPrefix
-            # from Directory.Build.props and ride the dryrun.<sha> tag on
-            # VersionSuffix so .NET's AssemblyVersion (which is built from
-            # VersionPrefix only) stays a valid MAJOR.MINOR.PATCH.
+            # Branch push or manual dispatch (draft=false) — dry-run path. Read
+            # VersionPrefix from Directory.Build.props and ride the dryrun.<sha>
+            # tag on VersionSuffix so .NET's AssemblyVersion (which is built
+            # from VersionPrefix only) stays a valid MAJOR.MINOR.PATCH.
             VERSION_PREFIX=$(sed -n 's:.*<VersionPrefix[^>]*>\([^<]*\)</VersionPrefix>.*:\1:p' Directory.Build.props | head -1)
             VERSION_PREFIX="${VERSION_PREFIX:-0.0.0}"
             SHORT_SHA="${GITHUB_SHA:0:7}"
@@ -74,6 +104,7 @@ jobs:
           echo "version-prefix=${VERSION_PREFIX}" >> "$GITHUB_OUTPUT"
           echo "version-suffix=${VERSION_SUFFIX}" >> "$GITHUB_OUTPUT"
           echo "is-release=${IS_RELEASE}" >> "$GITHUB_OUTPUT"
+          echo "is-draft=${IS_DRAFT}" >> "$GITHUB_OUTPUT"
 
   build-release:
     name: Build (${{ matrix.config.os }})
@@ -86,7 +117,20 @@ jobs:
           - os: windows
             runner: windows-latest
             rid: win-x64
+            arch: x64
             artifact: windows-installer
+            desktop_artifact: windows-desktop-installer
+          # Windows-on-ARM. Cross-published from the x64 windows-latest host —
+          # .NET 10 emits win-arm64 binaries from any host arch, and Inno Setup
+          # iscc on x64 produces an installer that targets ARM64 fine. Keeping
+          # the runner pinned to windows-latest (rather than windows-11-arm)
+          # avoids native-tooling drift between the two arches.
+          - os: windows
+            runner: windows-latest
+            rid: win-arm64
+            arch: arm64
+            artifact: windows-arm64-installer
+            desktop_artifact: windows-arm64-desktop-installer
           - os: linux
             # Pinned to ubuntu-22.04 (glibc 2.35) — the self-contained .NET
             # publish embeds native runtime libs that link against the build
@@ -96,10 +140,12 @@ jobs:
             runner: ubuntu-22.04
             rid: linux-x64
             artifact: linux-tarball
+            desktop_artifact: linux-desktop-appimage
           - os: macos-arm64
             runner: macos-latest  # Apple Silicon
             rid: osx-arm64
             artifact: macos-arm64-dmg
+            desktop_artifact: macos-arm64-desktop-dmg
 
     steps:
       - uses: actions/checkout@v4
@@ -174,14 +220,14 @@ jobs:
         run: |
           choco install innosetup -y
           $env:PATH += ";C:\Program Files (x86)\Inno Setup 6"
-          iscc /DMyAppVersion="${{ steps.version.outputs.version }}" installers\zeus-windows.iss
+          iscc /DMyAppVersion="${{ steps.version.outputs.version }}" /DArch="${{ matrix.config.arch }}" installers\zeus-windows.iss
 
       - name: Upload Windows Installer
         if: matrix.config.os == 'windows'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.config.artifact }}
-          path: installers/output/Zeus-${{ steps.version.outputs.version }}-win-x64-setup.exe
+          path: installers/output/Zeus-${{ steps.version.outputs.version }}-win-${{ matrix.config.arch }}-setup.exe
           if-no-files-found: error
 
       - name: Build Linux Package
@@ -223,14 +269,14 @@ jobs:
           # same runner; this just adds the binary to PATH and runs iscc again
           # against the desktop .iss.
           $env:PATH += ";C:\Program Files (x86)\Inno Setup 6"
-          iscc /DMyAppVersion="${{ steps.version.outputs.version }}" installers\zeus-desktop-windows.iss
+          iscc /DMyAppVersion="${{ steps.version.outputs.version }}" /DArch="${{ matrix.config.arch }}" installers\zeus-desktop-windows.iss
 
       - name: Upload Windows Desktop Installer
         if: matrix.config.os == 'windows'
         uses: actions/upload-artifact@v4
         with:
-          name: windows-desktop-installer
-          path: installers/output/Zeus-Desktop-${{ steps.version.outputs.version }}-win-x64-setup.exe
+          name: ${{ matrix.config.desktop_artifact }}
+          path: installers/output/Zeus-Desktop-${{ steps.version.outputs.version }}-win-${{ matrix.config.arch }}-setup.exe
           if-no-files-found: error
 
       - name: Build Linux Desktop AppImage
@@ -246,7 +292,7 @@ jobs:
         if: matrix.config.os == 'linux'
         uses: actions/upload-artifact@v4
         with:
-          name: linux-desktop-appimage
+          name: ${{ matrix.config.desktop_artifact }}
           path: installers/output/Zeus-Desktop-${{ steps.version.outputs.version }}-linux-x86_64.AppImage
           if-no-files-found: error
 
@@ -261,7 +307,7 @@ jobs:
         if: startsWith(matrix.config.os, 'macos')
         uses: actions/upload-artifact@v4
         with:
-          name: macos-arm64-desktop-dmg
+          name: ${{ matrix.config.desktop_artifact }}
           path: installers/output/Zeus-Desktop-${{ steps.version.outputs.version }}-macos-*.dmg
           if-no-files-found: error
 
@@ -306,6 +352,14 @@ jobs:
           Both bundle the .NET 10 runtime and all dependencies. Distinct AppIds, so
           you can install both side-by-side if you want.
 
+          ### Windows (ARM64)
+          - **Zeus-${{ steps.version.outputs.version }}-win-arm64-setup.exe** - service mode (browser UI)
+          - **Zeus-Desktop-${{ steps.version.outputs.version }}-win-arm64-setup.exe** - desktop edition (native Photino window)
+
+          Windows on ARM (Surface Pro X / Snapdragon X Elite / etc.) — same Zeus,
+          native ARM build. Same AppIds as the x64 installers, so installing the
+          ARM build over an existing x64 install will upgrade in place.
+
           ### macOS (Apple Silicon)
           - **Zeus-${{ steps.version.outputs.version }}-macos-arm64.dmg** - service mode (open Zeus in your browser)
           - **Zeus-Desktop-${{ steps.version.outputs.version }}-macos-arm64.dmg** - desktop edition (native Photino window, no browser)
@@ -341,11 +395,16 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           name: Zeus v${{ steps.version.outputs.version }}
           body_path: release-notes.md
-          draft: false
+          # Draft mode is set by determine-version when triggered via
+          # workflow_dispatch with draft=true. Tag-push releases publish
+          # immediately (is-draft="false" in that path).
+          draft: ${{ needs.determine-version.outputs.is-draft == 'true' }}
           prerelease: false
           files: |
             release-artifacts/windows-installer/*
             release-artifacts/windows-desktop-installer/*
+            release-artifacts/windows-arm64-installer/*
+            release-artifacts/windows-arm64-desktop-installer/*
             release-artifacts/linux-tarball/*
             release-artifacts/linux-desktop-appimage/*
             release-artifacts/macos-arm64-dmg/*

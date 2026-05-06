@@ -1,15 +1,20 @@
 name: Release
 
-# Three trigger paths:
-#   1. push of a v*.*.* tag         → full release (build + publish to GitHub Releases)
-#   2. push to a release/** branch  → dry-run build only (artifacts uploaded, no Release)
-#   3. manual workflow_dispatch     → dry-run build only (run from any branch via the
-#                                     Actions tab → Release → Run workflow)
+# Four trigger paths:
+#   1. push of a v*.*.* tag                 → full release (build + publish to GitHub Releases)
+#   2. push to a release/** branch          → dry-run build only (artifacts uploaded, no Release)
+#   3. manual workflow_dispatch (draft=off) → dry-run build only (run from any branch via the
+#                                             Actions tab → Release → Run workflow)
+#   4. manual workflow_dispatch (draft=on)  → DRAFT GitHub Release (maintainers only). Same
+#                                             VersionPrefix as the eventual public release —
+#                                             no -dryrun.<sha> suffix on artifact names — so
+#                                             the bits you smoke-test are byte-for-byte what
+#                                             would ship if you flip the draft to "Published".
 #
-# In all three modes the same matrix builds installers for Windows, Linux,
-# and macOS — both the headless service-mode bundles AND the new Photino
-# desktop bundles. The 'create-release' job is gated on github.ref_type=='tag'
-# so dry-run runs never publish.
+# In all four modes the same matrix builds installers for Windows, Linux,
+# and macOS — both the headless service-mode bundles AND the Photino
+# desktop bundles. 'create-release' is gated on is-release='true', which is
+# set by the determine-version step in modes 1 and 4 only.
 on:
   push:
     tags:
@@ -17,6 +22,12 @@ on:
     branches:
       - 'release/**'
   workflow_dispatch:
+    inputs:
+      draft:
+        description: 'Publish as a DRAFT GitHub Release (visible only to maintainers, version not suffixed with -dryrun.<sha>). Leave unchecked for a regular dry-run that only uploads artifacts to the run page.'
+        type: boolean
+        required: false
+        default: false
 
 jobs:
   determine-version:
@@ -32,6 +43,7 @@ jobs:
       version-prefix: ${{ steps.parse.outputs.version-prefix }}
       version-suffix: ${{ steps.parse.outputs.version-suffix }}
       is-release: ${{ steps.parse.outputs.is-release }}
+      is-draft: ${{ steps.parse.outputs.is-draft }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,7 +51,12 @@ jobs:
 
       - name: Parse version + validate (tag mode only)
         id: parse
+        env:
+          # workflow_dispatch boolean inputs arrive as the strings "true"/"false";
+          # plumb through env so the bash conditional below stays readable.
+          DISPATCH_DRAFT: ${{ github.event.inputs.draft }}
         run: |
+          IS_DRAFT="false"
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             # Tag push — strict release path.
             if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -57,11 +74,24 @@ jobs:
             VERSION="$VERSION_PREFIX"
             IS_RELEASE="true"
             echo "Tagged release $GITHUB_REF_NAME → version $VERSION"
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$DISPATCH_DRAFT" == "true" ]]; then
+            # Manual dispatch with draft=true — produce a DRAFT GitHub Release
+            # using the in-tree VersionPrefix verbatim. No -dryrun.<sha> suffix:
+            # the artifact filenames you smoke-test must match the eventual
+            # published release byte-for-byte. The draft is only visible to
+            # maintainers until someone clicks "Publish release".
+            VERSION_PREFIX=$(sed -n 's:.*<VersionPrefix[^>]*>\([^<]*\)</VersionPrefix>.*:\1:p' Directory.Build.props | head -1)
+            VERSION_PREFIX="${VERSION_PREFIX:-0.0.0}"
+            VERSION_SUFFIX=""
+            VERSION="$VERSION_PREFIX"
+            IS_RELEASE="true"
+            IS_DRAFT="true"
+            echo "Draft release dispatch (ref=$GITHUB_REF) → version $VERSION (draft=true)"
           else
-            # Branch push or manual dispatch — dry-run path. Read VersionPrefix
-            # from Directory.Build.props and ride the dryrun.<sha> tag on
-            # VersionSuffix so .NET's AssemblyVersion (which is built from
-            # VersionPrefix only) stays a valid MAJOR.MINOR.PATCH.
+            # Branch push or manual dispatch (draft=false) — dry-run path. Read
+            # VersionPrefix from Directory.Build.props and ride the dryrun.<sha>
+            # tag on VersionSuffix so .NET's AssemblyVersion (which is built
+            # from VersionPrefix only) stays a valid MAJOR.MINOR.PATCH.
             VERSION_PREFIX=$(sed -n 's:.*<VersionPrefix[^>]*>\([^<]*\)</VersionPrefix>.*:\1:p' Directory.Build.props | head -1)
             VERSION_PREFIX="${VERSION_PREFIX:-0.0.0}"
             SHORT_SHA="${GITHUB_SHA:0:7}"
@@ -74,6 +104,7 @@ jobs:
           echo "version-prefix=${VERSION_PREFIX}" >> "$GITHUB_OUTPUT"
           echo "version-suffix=${VERSION_SUFFIX}" >> "$GITHUB_OUTPUT"
           echo "is-release=${IS_RELEASE}" >> "$GITHUB_OUTPUT"
+          echo "is-draft=${IS_DRAFT}" >> "$GITHUB_OUTPUT"
 
   build-release:
     name: Build (${{ matrix.config.os }})
@@ -364,7 +395,10 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           name: Zeus v${{ steps.version.outputs.version }}
           body_path: release-notes.md
-          draft: false
+          # Draft mode is set by determine-version when triggered via
+          # workflow_dispatch with draft=true. Tag-push releases publish
+          # immediately (is-draft="false" in that path).
+          draft: ${{ needs.determine-version.outputs.is-draft == 'true' }}
           prerelease: false
           files: |
             release-artifacts/windows-installer/*

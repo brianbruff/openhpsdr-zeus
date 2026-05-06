@@ -56,13 +56,21 @@ jobs:
             "x64-windows-static-md"
           }
           vcpkg install fftw3:$triplet
-          # Persist for the Configure CMake step so we don't re-derive.
-          echo "VCPKG_TRIPLET=$triplet" >> $env:GITHUB_ENV
           echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
 
       - name: Configure CMake
         run: |
           $archFlag = if ("${{ matrix.arch }}" -eq "arm64") { "ARM64" } else { "x64" }
+          # Recompute the triplet here rather than passing it through
+          # GITHUB_ENV. Step-to-step env var hand-off via PowerShell's
+          # `>> $env:GITHUB_ENV` has been finicky on windows-latest (the
+          # var lands but evaluates empty in the next step), and the
+          # derivation is short. Must stay in sync with the FFTW step.
+          $triplet = if ("${{ matrix.arch }}" -eq "arm64") {
+            "arm64-windows-static"
+          } else {
+            "x64-windows-static-md"
+          }
           # ClangCL toolset: the vendored libspecbleach source uses a C99
           # variable-length array in get_rolling_median_spectrum which MSVC
           # does not implement. clang-cl supports VLAs and ships with the
@@ -95,7 +103,7 @@ jobs:
             -A $archFlag `
             -T ClangCL `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET=$env:VCPKG_TRIPLET `
+            -DVCPKG_TARGET_TRIPLET=$triplet `
             -DWDSP_WITH_NR3=OFF `
             -DWDSP_WITH_NR4=ON `
             @extraArgs

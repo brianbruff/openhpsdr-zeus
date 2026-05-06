@@ -42,7 +42,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 
@@ -50,15 +50,17 @@ import { useConnectionStore } from '../state/connection-store';
  * Vertical zoom slider pinned to the right edge of the panadapter on mobile.
  * Allows zooming without finger-dragging on the spectrum (which tunes frequency).
  * Hidden on desktop via CSS.
+ *
+ * Send-on-change (mirrors ZoomControl): every step of the drag pushes via
+ * setZoom with the previous in-flight POST aborted. Optimistic setLocalZoom
+ * means the thumb stays where the operator put it, even if a touchend lands
+ * outside the input element.
  */
 export function MobileZoomSlider() {
   const serverZoom = useConnectionStore((s) => s.zoomLevel);
   const setLocalZoom = useConnectionStore((s) => s.setZoomLevel);
   const applyState = useConnectionStore((s) => s.applyState);
   const connected = useConnectionStore((s) => s.status === 'Connected');
-
-  const [dragValue, setDragValue] = useState<ZoomLevel | null>(null);
-  const value = dragValue ?? serverZoom;
 
   const inflightAbort = useRef<AbortController | null>(null);
   const latestSent = useRef<ZoomLevel>(serverZoom);
@@ -84,11 +86,6 @@ export function MobileZoomSlider() {
 
   useEffect(() => () => inflightAbort.current?.abort(), []);
 
-  const commit = () => {
-    if (dragValue !== null) sendValue(dragValue);
-    setDragValue(null);
-  };
-
   return (
     <div
       className="mobile-zoom-slider"
@@ -112,12 +109,9 @@ export function MobileZoomSlider() {
         min={ZOOM_MIN}
         max={ZOOM_MAX}
         step={1}
-        value={value}
+        value={serverZoom}
         disabled={!connected}
-        onChange={(e) => setDragValue(Number(e.currentTarget.value) as ZoomLevel)}
-        onMouseUp={commit}
-        onTouchEnd={commit}
-        onKeyUp={commit}
+        onChange={(e) => sendValue(Number(e.currentTarget.value) as ZoomLevel)}
         style={{
           writingMode: 'vertical-lr',
           direction: 'rtl',
@@ -141,7 +135,7 @@ export function MobileZoomSlider() {
           textShadow: '0 0 4px rgba(255, 160, 40, 0.6)',
         }}
       >
-        {value}×
+        {serverZoom}×
       </span>
     </div>
   );

@@ -145,16 +145,6 @@ export function AnalogMeterConfig({ open, onClose }: AnalogMeterConfigProps) {
           </header>
           <div className="am-cf-body">
             <Slider
-              label="PA full-scale"
-              value={cfg.poMax}
-              min={10}
-              max={200}
-              step={5}
-              unit=" W"
-              onChange={cfg.setPoMax}
-              hint="Sets the right edge of the PO arc"
-            />
-            <Slider
               label="SWR alarm"
               value={cfg.swrAlarm}
               min={1.5}
@@ -164,13 +154,10 @@ export function AnalogMeterConfig({ open, onClose }: AnalogMeterConfigProps) {
               onChange={cfg.setSwrAlarm}
               hint="Readout turns red above this"
             />
-            <CheckRow
-              checked={cfg.followMox}
-              onChange={cfg.setFollowMox}
-              sub="Auto-switch when MOX/TUN engages"
-            >
-              Follow MOX
-            </CheckRow>
+            <div className="am-slider-hint">
+              PA full-scale tracks the rated PA power from the PA Settings panel
+              (max of 10 W or 120% of rated).
+            </div>
           </div>
         </section>
 

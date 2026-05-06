@@ -13,32 +13,19 @@
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
 
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { CfcBandDto, CfcConfigDto } from '../api/client';
 import { setCfcConfig } from '../api/client';
 import { useTxStore } from '../state/tx-store';
 
-/**
- * 10-band Continuous Frequency Compressor — issue #123. UI mirrors
- * pihpsdr's classic CFC menu (cfc_menu.c): Master section for the
- * frequency-independent toggles + scalar gains, then a per-band table.
- *
- * Visual aesthetics borrowed wholesale from PsSettingsPanel — same
- * Section/Row/NumberInput primitives — and the per-band table layout
- * mirrors PaSettingsPanel rows 191-260. No new tokens; no new
- * components; no amber accents (those are reserved for the panadapter
- * trace per CLAUDE.md).
- *
- * Optimistic-update pattern: each control writes the local store first,
- * then POSTs to the backend. POST failure rolls the entire prior config
- * back so the UI never lies about server state. CFC defaults to OFF —
- * see feedback_user_audio_philosophy.md.
- */
+import './CfcSettingsPanel.css';
 
-// pihpsdr cfc_menu.c bounds. Mirror them so the UI doesn't accept values
-// the engine will silently clamp. WDSP also clamps internally at
-// SetTXACFCOMPprofile time so these are just the operator-visible cap.
+// 10-band Continuous Frequency Compressor — issue #123. Variant A of the
+// Claude Design handoff bundle (CFC Settings.html / cfc-curve.jsx): a
+// log-frequency curve with draggable knots for compression (downward) and
+// post-gain (centred), plus a per-band numerical strip and preset chips.
+
 const FREQ_MIN = 10;
 const FREQ_MAX = 9990;
 const COMP_MIN = 0;
@@ -50,24 +37,213 @@ const PRECOMP_MAX = 16;
 const PREPEQ_MIN = -50;
 const PREPEQ_MAX = 16;
 
+// Curve geometry (viewBox units; rendered with preserveAspectRatio="none"
+// so x stretches to container width but y stays 1:1 with the 280px canvas).
+const W = 760;
+const H = 280;
+const PAD_L = 36;
+const PAD_R = 12;
+const PAD_T = 16;
+const PAD_B = 28;
+const INNER_W = W - PAD_L - PAD_R;
+const INNER_H = H - PAD_T - PAD_B;
+
+// Visual maxima for the curve. Comp axis 0..16 dB (top→bottom);
+// post axis ±8 dB (centred). The DTO bounds (COMP_MAX = 20, POST_MAX = 20)
+// stay authoritative — the curve just clips its visualisation here.
+const VIS_COMP_MAX = 16;
+const VIS_POST_MAX = 8;
+
+const FREQ_TICKS = [50, 100, 200, 500, 1000, 2000, 5000];
+const DB_TICKS = [0, 4, 8, 12, 16];
+
+type DragKind = 'comp' | 'post';
+type DragState = {
+  idx: number;
+  kind: DragKind;
+  startY: number;
+  startV: number;
+};
+
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
+}
+
+function logX(hz: number, lo = 20, hi = 8000): number {
+  const a = Math.log10(lo);
+  const b = Math.log10(hi);
+  const t = (Math.log10(Math.max(lo, hz)) - a) / (b - a);
+  return clamp(t, 0, 1);
+}
+
+function fmtHz(hz: number): string {
+  if (hz >= 1000) {
+    const k = hz / 1000;
+    return `${k % 1 === 0 ? k.toFixed(0) : k.toFixed(1)}k`;
+  }
+  return String(hz);
+}
+
+const xFor = (hz: number) => PAD_L + logX(hz) * INNER_W;
+const yComp = (db: number) =>
+  PAD_T + clamp(db, 0, VIS_COMP_MAX) / VIS_COMP_MAX * INNER_H;
+const yPost = (db: number) =>
+  PAD_T + INNER_H / 2 - clamp(db, -VIS_POST_MAX, VIS_POST_MAX) / VIS_POST_MAX * (INNER_H / 2);
+
+// Catmull-Rom-ish smooth path through a series of points.
+function smoothPath(pts: ReadonlyArray<readonly [number, number]>): string {
+  if (pts.length === 0) return '';
+  const first = pts[0]!;
+  let d = `M ${first[0]} ${first[1]}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i]!;
+    const p1 = pts[i + 1]!;
+    const cx = (p0[0] + p1[0]) / 2;
+    d += ` C ${cx} ${p0[1]}, ${cx} ${p1[1]}, ${p1[0]} ${p1[1]}`;
+  }
+  return d;
+}
+
+function compPath(bands: CfcBandDto[]): string {
+  if (!bands.length) return '';
+  const pts = bands.map((b) => [xFor(b.freqHz), yComp(b.compLevelDb)] as const);
+  const first = pts[0]!;
+  return `M ${PAD_L} ${yComp(0)} L ${first[0]} ${first[1]}` +
+    smoothPath(pts).slice(`M ${first[0]} ${first[1]}`.length) +
+    ` L ${PAD_L + INNER_W} ${yComp(0)}`;
+}
+
+function postPath(bands: CfcBandDto[]): string {
+  if (!bands.length) return '';
+  const pts = bands.map((b) => [xFor(b.freqHz), yPost(b.postGainDb)] as const);
+  return smoothPath(pts);
+}
+
+// "Voice" preset — operator-recognisable starting point that demonstrates
+// the curve. Master pre-comp lifts 3 dB to give the bands something to
+// chew on. Mirrors the design's CFC_BANDS_VOICE.
+const VOICE_BANDS: CfcBandDto[] = [
+  { freqHz: 80,   compLevelDb: 2,  postGainDb: -2 },
+  { freqHz: 150,  compLevelDb: 4,  postGainDb: -1 },
+  { freqHz: 250,  compLevelDb: 6,  postGainDb: 0  },
+  { freqHz: 500,  compLevelDb: 8,  postGainDb: 1  },
+  { freqHz: 900,  compLevelDb: 10, postGainDb: 2  },
+  { freqHz: 1500, compLevelDb: 12, postGainDb: 3  },
+  { freqHz: 2200, compLevelDb: 10, postGainDb: 3  },
+  { freqHz: 2800, compLevelDb: 7,  postGainDb: 2  },
+  { freqHz: 3500, compLevelDb: 4,  postGainDb: 0  },
+  { freqHz: 5000, compLevelDb: 1,  postGainDb: -1 },
+];
+
+const FLAT_BANDS: CfcBandDto[] = [
+  { freqHz: 50,   compLevelDb: 0, postGainDb: 0 },
+  { freqHz: 100,  compLevelDb: 0, postGainDb: 0 },
+  { freqHz: 200,  compLevelDb: 0, postGainDb: 0 },
+  { freqHz: 500,  compLevelDb: 0, postGainDb: 0 },
+  { freqHz: 1000, compLevelDb: 0, postGainDb: 0 },
+  { freqHz: 1500, compLevelDb: 0, postGainDb: 0 },
+  { freqHz: 2000, compLevelDb: 0, postGainDb: 0 },
+  { freqHz: 2500, compLevelDb: 0, postGainDb: 0 },
+  { freqHz: 3000, compLevelDb: 0, postGainDb: 0 },
+  { freqHz: 5000, compLevelDb: 0, postGainDb: 0 },
+];
+
+// Detect which preset (if any) the current bands match, so the chip
+// highlights stay accurate after manual edits + reloads.
+function bandsMatch(a: CfcBandDto[], b: CfcBandDto[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const ai = a[i]!;
+    const bi = b[i]!;
+    if (ai.freqHz !== bi.freqHz) return false;
+    if (ai.compLevelDb !== bi.compLevelDb) return false;
+    if (ai.postGainDb !== bi.postGainDb) return false;
+  }
+  return true;
 }
 
 export function CfcSettingsPanel() {
   const cfc = useTxStore((s) => s.cfcConfig);
   const setLocal = useTxStore((s) => s.setCfcConfig);
 
-  // Push the operator's edit through the optimistic-update gate. Local set
-  // first so the slider/textbox stays responsive; POST kicks in parallel
-  // and rolls back on failure so the radio + UI never drift.
+  const [activeIdx, setActiveIdx] = useState(4);
+  const dragRef = useRef<DragState | null>(null);
+  const dragMovedRef = useRef(false);
+
+  // Optimistic-update gate (used outside of drag). Drag updates local state
+  // every mousemove and only POSTs once on mouseup — POSTing per-pixel
+  // would saturate the radio's serial-config queue.
   const push = useCallback(
     (next: CfcConfigDto) => {
-      const prev = cfc;
+      const prev = useTxStore.getState().cfcConfig;
       setLocal(next);
       setCfcConfig(next).catch(() => setLocal(prev));
     },
-    [cfc, setLocal],
+    [setLocal],
+  );
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      e.preventDefault();
+      const dy = e.clientY - drag.startY;
+      // SVG renders at fixed 280 CSS px height (preserveAspectRatio="none"
+      // stretches only x), so 1 client-px ≈ 1 viewBox-px on the y axis.
+      const range = drag.kind === 'comp' ? VIS_COMP_MAX : VIS_POST_MAX * 2;
+      const scale = range / INNER_H;
+      let v = drag.startV + (drag.kind === 'comp' ? dy : -dy) * scale;
+      v = drag.kind === 'comp'
+        ? clamp(v, COMP_MIN, COMP_MAX)
+        : clamp(v, POST_MIN, POST_MAX);
+      v = Math.round(v * 10) / 10;
+      const cur = useTxStore.getState().cfcConfig;
+      const field = drag.kind === 'comp' ? 'compLevelDb' : 'postGainDb';
+      const bands = cur.bands.map((b, i) =>
+        i === drag.idx ? { ...b, [field]: v } : b,
+      );
+      setLocal({ ...cur, bands });
+      dragMovedRef.current = true;
+    };
+    const onUp = () => {
+      const drag = dragRef.current;
+      dragRef.current = null;
+      if (!drag) return;
+      if (dragMovedRef.current) {
+        dragMovedRef.current = false;
+        const final = useTxStore.getState().cfcConfig;
+        setCfcConfig(final).catch(() => {
+          // Roll back to the pre-drag value on POST failure.
+          const prev = useTxStore.getState().cfcConfig;
+          const field = drag.kind === 'comp' ? 'compLevelDb' : 'postGainDb';
+          const bands = prev.bands.map((b, i) =>
+            i === drag.idx ? { ...b, [field]: drag.startV } : b,
+          );
+          setLocal({ ...prev, bands });
+        });
+      }
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [setLocal]);
+
+  const onKnotDown = useCallback(
+    (idx: number, kind: DragKind, e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setActiveIdx(idx);
+      const cur = useTxStore.getState().cfcConfig;
+      const band = cur.bands[idx];
+      if (!band) return;
+      const startV = kind === 'comp' ? band.compLevelDb : band.postGainDb;
+      dragRef.current = { idx, kind, startY: e.clientY, startV };
+      dragMovedRef.current = false;
+    },
+    [],
   );
 
   const setMaster = useCallback(
@@ -85,232 +261,279 @@ export function CfcSettingsPanel() {
     [cfc, push],
   );
 
+  const applyPreset = useCallback(
+    (preset: 'flat' | 'voice') => {
+      if (preset === 'flat') {
+        push({
+          ...cfc,
+          preCompDb: 0,
+          prePeqDb: 0,
+          bands: FLAT_BANDS.map((b) => ({ ...b })),
+        });
+      } else {
+        push({
+          ...cfc,
+          preCompDb: 3,
+          prePeqDb: 0,
+          bands: VOICE_BANDS.map((b) => ({ ...b })),
+        });
+      }
+    },
+    [cfc, push],
+  );
+
+  const isFlat = bandsMatch(cfc.bands, FLAT_BANDS) && cfc.preCompDb === 0 && cfc.prePeqDb === 0;
+  const isVoice = bandsMatch(cfc.bands, VOICE_BANDS) && cfc.preCompDb === 3 && cfc.prePeqDb === 0;
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      <div
-        style={{
-          padding: 10,
-          border: '1px solid var(--panel-border)',
-          borderRadius: 6,
-          background: 'var(--bg-1)',
-          color: 'var(--fg-2)',
-          fontSize: 11,
-        }}
-      >
-        Continuous Frequency Compressor — multi-band frequency-domain
-        compressor mirroring pihpsdr's classic 10-band design. Defaults to
-        OFF; enabling with neutral settings (compression 0, post-gain 0)
-        is audibly transparent. Operators with an external analog rack
-        will typically leave this disabled.
+    <div className="cfc-panel">
+      <div className="cfc-blurb">
+        <span className="tag">CFC</span>
+        <p>
+          <strong>Continuous Frequency Compressor</strong> — multi-band
+          frequency-domain compressor mirroring pihpsdr's classic 10-band
+          design. Defaults to OFF; enabling with neutral settings (0/0) is
+          audibly transparent.
+        </p>
       </div>
 
-      <Section title="Master">
-        <Row label="Enabled">
+      <div className="cfc-master">
+        <label className={`cfc-power ${cfc.enabled ? '' : 'is-off'}`}>
           <input
             type="checkbox"
             checked={cfc.enabled}
             onChange={(e) => setMaster({ enabled: e.target.checked })}
           />
-        </Row>
-        <Row label="Post-EQ">
-          <input
-            type="checkbox"
-            checked={cfc.postEqEnabled}
-            onChange={(e) => setMaster({ postEqEnabled: e.target.checked })}
-          />
-        </Row>
-        <Row label="Pre-comp (dB)">
-          <NumberInput
-            value={cfc.preCompDb}
-            min={PRECOMP_MIN}
-            max={PRECOMP_MAX}
-            step={0.5}
-            onChange={(v) => setMaster({ preCompDb: clamp(v, PRECOMP_MIN, PRECOMP_MAX) })}
-          />
-        </Row>
-        <Row label="Pre-peq (dB)">
-          <NumberInput
-            value={cfc.prePeqDb}
-            min={PREPEQ_MIN}
-            max={PREPEQ_MAX}
-            step={0.5}
-            onChange={(v) => setMaster({ prePeqDb: clamp(v, PREPEQ_MIN, PREPEQ_MAX) })}
-          />
-        </Row>
-      </Section>
+          <span className="sw" />
+          <span className="lbl">{cfc.enabled ? 'CFC On' : 'Bypass'}</span>
+        </label>
 
-      <Section title="Bands">
-        <div style={{ overflowX: 'auto' }}>
-          <table
-            style={{
-              width: '100%',
-              borderCollapse: 'collapse',
-              fontSize: 11,
-            }}
-          >
-            <thead>
-              <tr style={{ color: 'var(--fg-2)', textAlign: 'left' }}>
-                <th style={th}>Band</th>
-                <th style={th}>Frequency (Hz)</th>
-                <th style={th}>Compression (dB)</th>
-                <th style={th}>Post Gain (dB)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {cfc.bands.map((b, i) => (
-                <tr
-                  key={i}
-                  style={{
-                    borderTop: '1px solid var(--panel-border)',
-                    color: 'var(--fg-1)',
-                  }}
-                >
-                  <td style={td}>{i + 1}</td>
-                  <td style={td}>
-                    <NumberInput
-                      value={b.freqHz}
-                      min={FREQ_MIN}
-                      max={FREQ_MAX}
-                      step={10}
-                      onChange={(v) => setBand(i, { freqHz: clamp(Math.round(v), FREQ_MIN, FREQ_MAX) })}
-                    />
-                  </td>
-                  <td style={td}>
-                    <NumberInput
-                      value={b.compLevelDb}
-                      min={COMP_MIN}
-                      max={COMP_MAX}
-                      step={0.5}
-                      onChange={(v) => setBand(i, { compLevelDb: clamp(v, COMP_MIN, COMP_MAX) })}
-                    />
-                  </td>
-                  <td style={td}>
-                    <NumberInput
-                      value={b.postGainDb}
-                      min={POST_MIN}
-                      max={POST_MAX}
-                      step={0.5}
-                      onChange={(v) => setBand(i, { postGainDb: clamp(v, POST_MIN, POST_MAX) })}
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="m-toggles">
+          <label className="cfc-check">
+            <input
+              type="checkbox"
+              checked={cfc.postEqEnabled}
+              onChange={(e) => setMaster({ postEqEnabled: e.target.checked })}
+            />
+            <span className="box" />
+            <span>Post-EQ chain</span>
+          </label>
         </div>
-      </Section>
-    </div>
-  );
-}
 
-const th: React.CSSProperties = {
-  padding: '6px 8px',
-  fontSize: 10,
-  fontWeight: 700,
-  letterSpacing: '0.08em',
-  textTransform: 'uppercase',
-};
+        <div className="m-trims">
+          <div className="m-trim">
+            <label htmlFor="cfc-precomp">Pre-comp</label>
+            <div className="ninput">
+              <input
+                id="cfc-precomp"
+                type="number"
+                value={cfc.preCompDb}
+                step={0.5}
+                min={PRECOMP_MIN}
+                max={PRECOMP_MAX}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v)) setMaster({ preCompDb: clamp(v, PRECOMP_MIN, PRECOMP_MAX) });
+                }}
+              />
+              <span className="u">dB</span>
+            </div>
+          </div>
+          <div className="m-trim">
+            <label htmlFor="cfc-prepeq">Pre-peq</label>
+            <div className="ninput">
+              <input
+                id="cfc-prepeq"
+                type="number"
+                value={cfc.prePeqDb}
+                step={0.5}
+                min={PREPEQ_MIN}
+                max={PREPEQ_MAX}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v)) setMaster({ prePeqDb: clamp(v, PREPEQ_MIN, PREPEQ_MAX) });
+                }}
+              />
+              <span className="u">dB</span>
+            </div>
+          </div>
+        </div>
 
-const td: React.CSSProperties = {
-  padding: '4px 8px',
-};
-
-// Visual primitives copied verbatim from PsSettingsPanel so this panel
-// reads identically. Kept private to the file — not exported — so they
-// don't accidentally become a "shared" pattern that drifts from
-// PsSettingsPanel's source. If a real shared layout primitive is needed
-// later, lift both copies into a single module then.
-
-function Section({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section
-      style={{
-        border: '1px solid var(--panel-border)',
-        borderRadius: 6,
-        padding: '10px 12px',
-        background: 'var(--bg-1)',
-      }}
-    >
-      <h3
-        style={{
-          margin: 0,
-          marginBottom: 8,
-          fontSize: 11,
-          fontWeight: 700,
-          letterSpacing: '0.12em',
-          textTransform: 'uppercase',
-          color: 'var(--fg-1)',
-        }}
-      >
-        {title}
-      </h3>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {children}
+        <div className="cfc-presets">
+          <span className="lab">Preset</span>
+          <button
+            type="button"
+            className={`chip ${isFlat ? 'on' : ''}`}
+            onClick={() => applyPreset('flat')}
+          >
+            Flat
+          </button>
+          <button
+            type="button"
+            className={`chip ${isVoice ? 'on' : ''}`}
+            onClick={() => applyPreset('voice')}
+          >
+            Voice
+          </button>
+        </div>
       </div>
-    </section>
-  );
-}
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        fontSize: 12,
-      }}
-    >
-      <span style={{ minWidth: 110, color: 'var(--fg-2)' }}>{label}</span>
-      <span style={{ display: 'flex', alignItems: 'center', flex: 1, gap: 6 }}>
-        {children}
-      </span>
+      <div className={`cfc-curve cfc-body ${cfc.enabled ? '' : 'is-bypass'}`}>
+        <div className="canvas">
+          <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="cfc-curve-fill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.45" />
+                <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.02" />
+              </linearGradient>
+            </defs>
+
+            {DB_TICKS.map((d) => (
+              <g key={`db${d}`}>
+                <line
+                  className="gridline"
+                  x1={PAD_L}
+                  x2={PAD_L + INNER_W}
+                  y1={yComp(d)}
+                  y2={yComp(d)}
+                />
+                <text
+                  className="axis-text"
+                  x={PAD_L - 6}
+                  y={yComp(d) + 3}
+                  textAnchor="end"
+                >
+                  −{d}
+                </text>
+              </g>
+            ))}
+
+            <line
+              className="gridmid"
+              x1={PAD_L}
+              x2={PAD_L + INNER_W}
+              y1={PAD_T + INNER_H / 2}
+              y2={PAD_T + INNER_H / 2}
+            />
+
+            {FREQ_TICKS.map((f) => (
+              <g key={`f${f}`}>
+                <line
+                  className="freq-tick"
+                  x1={xFor(f)}
+                  x2={xFor(f)}
+                  y1={PAD_T + INNER_H}
+                  y2={PAD_T + INNER_H + 4}
+                />
+                <text
+                  className="axis-text"
+                  x={xFor(f)}
+                  y={PAD_T + INNER_H + 16}
+                  textAnchor="middle"
+                >
+                  {fmtHz(f)}
+                </text>
+              </g>
+            ))}
+            <text
+              className="axis-text"
+              x={PAD_L + INNER_W}
+              y={PAD_T + INNER_H + 16}
+              textAnchor="end"
+            >
+              Hz
+            </text>
+
+            <path className="band-area" d={compPath(cfc.bands) + ` L ${PAD_L} ${yComp(0)} Z`} />
+            <path className="band-line" d={compPath(cfc.bands)} />
+            <path className="post-line" d={postPath(cfc.bands)} />
+
+            {cfc.bands.map((b, i) => (
+              <g key={`k${i}`}>
+                <text
+                  className="band-label"
+                  x={xFor(b.freqHz)}
+                  y={PAD_T - 4}
+                >
+                  {i + 1}
+                </text>
+                <circle
+                  className={`knot ${activeIdx === i ? 'is-active' : ''}`}
+                  cx={xFor(b.freqHz)}
+                  cy={yComp(b.compLevelDb)}
+                  r={5.5}
+                  onMouseDown={(e) => onKnotDown(i, 'comp', e)}
+                />
+                <circle
+                  className={`knot post ${activeIdx === i ? 'is-active' : ''}`}
+                  cx={xFor(b.freqHz)}
+                  cy={yPost(b.postGainDb)}
+                  r={4}
+                  onMouseDown={(e) => onKnotDown(i, 'post', e)}
+                />
+              </g>
+            ))}
+          </svg>
+        </div>
+
+        <div className="legend">
+          <span className="k">Compression (dB ↓)</span>
+          <span className="k post">Post-gain (±dB)</span>
+          <span className="sp" />
+          <span>Drag knots to edit</span>
+        </div>
+
+        <div className="strip">
+          <div className="col lbl">
+            <em>Band</em>
+            <em className="t">Freq · Hz</em>
+            <em className="t b">Comp · dB</em>
+            <em className="t b">Post · dB</em>
+          </div>
+          {cfc.bands.map((b, i) => (
+            <div
+              key={i}
+              className={`col ${activeIdx === i ? 'is-active' : ''}`}
+              onClick={() => setActiveIdx(i)}
+            >
+              <div className="bnum">{i + 1}</div>
+              <input
+                type="number"
+                value={b.freqHz}
+                min={FREQ_MIN}
+                max={FREQ_MAX}
+                step={10}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v)) setBand(i, { freqHz: clamp(Math.round(v), FREQ_MIN, FREQ_MAX) });
+                }}
+              />
+              <input
+                type="number"
+                value={b.compLevelDb}
+                min={COMP_MIN}
+                max={COMP_MAX}
+                step={0.5}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v)) setBand(i, { compLevelDb: clamp(v, COMP_MIN, COMP_MAX) });
+                }}
+              />
+              <input
+                type="number"
+                value={b.postGainDb}
+                min={POST_MIN}
+                max={POST_MAX}
+                step={0.5}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v)) setBand(i, { postGainDb: clamp(v, POST_MIN, POST_MAX) });
+                }}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
-  );
-}
-
-function NumberInput({
-  value,
-  min,
-  max,
-  step,
-  onChange,
-  disabled,
-}: {
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  onChange: (v: number) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <input
-      type="number"
-      value={value}
-      min={min}
-      max={max}
-      step={step}
-      disabled={disabled}
-      onChange={(e) => {
-        const v = Number(e.target.value);
-        if (Number.isFinite(v)) onChange(v);
-      }}
-      style={{
-        width: 100,
-        padding: '3px 6px',
-        background: 'var(--bg-0)',
-        color: 'var(--fg-1)',
-        border: '1px solid var(--panel-border)',
-        borderRadius: 3,
-        fontSize: 12,
-      }}
-    />
   );
 }

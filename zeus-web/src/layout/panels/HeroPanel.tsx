@@ -42,26 +42,25 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
+import { GripVertical, X } from 'lucide-react';
 import { Panadapter } from '../../components/Panadapter';
 import { Waterfall } from '../../components/Waterfall';
+import { ZoomControl } from '../../components/ZoomControl';
 import { LeafletWorldMap } from '../../components/design/LeafletWorldMap';
 import { LeafletMapErrorBoundary } from '../../components/design/LeafletMapErrorBoundary';
 import { useConnectionStore } from '../../state/connection-store';
 import { useRotatorStore } from '../../state/rotator-store';
-import { useDisplayStore } from '../../state/display-store';
 import { useWorkspace } from '../WorkspaceContext';
 
-function useDisplayHzPerPixel(): string {
-  const v = useDisplayStore((s) => s.hzPerPixel);
-  if (!Number.isFinite(v) || v <= 0) return '—';
-  return v >= 1 ? `${v.toFixed(1)} Hz` : `${(v * 1000).toFixed(0)} mHz`;
-}
-
 // Hero panel: Panadapter + Waterfall with optional Leaflet world-map overlay.
-// Rendered inside a flexlayout tabset — the panel-head chrome is intentionally
-// kept here for Phase 1 so beam controls stay accessible. Phase 2+ can move
-// beam controls to flexlayout's onRenderTabSet header slot.
-export function HeroPanel() {
+// Registered as headerless in panels.ts — this component owns the single
+// .workspace-tile-header strip. The strip carries the RGL drag handle, the
+// zoom slider, rotator chips (SP/LP/BEAM) when terminator+contact are live,
+// the ⌥ map-mode hint, the HZ/PX readout, and the close X. Interactive
+// controls inside stop mousedown propagation so a click on a chip / slider /
+// input doesn't initiate a tile drag (mirrors the MetersPanel pattern).
+export function HeroPanel({ onRemove }: { onRemove?: () => void } = {}) {
   const {
     terminatorActive,
     imageMode,
@@ -86,7 +85,6 @@ export function HeroPanel() {
     submitBeam,
   } = useWorkspace();
   const connected = useConnectionStore((s) => s.status === 'Connected');
-  const hzPerPixel = useDisplayHzPerPixel();
 
   const handleRotateToBearing = (brg: number) => {
     const rot = useRotatorStore.getState();
@@ -98,74 +96,107 @@ export function HeroPanel() {
     }
   };
 
+  // Stop pointerdown/mousedown bubbling so RGL doesn't treat a click on
+  // the zoom slider, an SP/LP chip, the BEAM input, or the close X as a
+  // tile-drag start. The .workspace-tile-header strip itself stays the
+  // drag handle.
+  const stopDrag = (e: ReactPointerEvent | ReactMouseEvent) => e.stopPropagation();
+
   return (
     <div
-      className={`panel hero ${bgActive ? 'bg-active' : ''} ${mapInteractive ? 'map-mode' : ''}`}
+      className={`hero ${bgActive ? 'bg-active' : ''} ${mapInteractive ? 'map-mode' : ''}`}
       style={{ display: 'flex', flexDirection: 'column', height: '100%' }}
     >
-      <div className="panel-head">
-        <span className={`dot ${moxOn || tunOn ? 'tx' : 'on'}`} />
-        <span className="title">{heroTitle}</span>
-        <span className="spacer" style={{ flex: 1 }} />
-        {terminatorActive && contact && mapAvailable && (
-          <>
-            <button
-              type="button"
-              className="chip mono"
-              onClick={() => handleRotateToBearing(sp)}
-              title="Short path — click to rotate"
-            >
-              <span className="k">SP</span>
-              <span className="v">{sp.toFixed(0)}°</span>
-            </button>
-            <button
-              type="button"
-              className="chip mono"
-              onClick={() => handleRotateToBearing(lp)}
-              title="Long path — click to rotate"
-            >
-              <span className="k">LP</span>
-              <span className="v">{lp.toFixed(0)}°</span>
-            </button>
-            <form onSubmit={submitBeam} className="chip mono" style={{ gap: 4 }}>
-              <span className="k">BEAM</span>
-              <input
-                type="text"
-                inputMode="decimal"
-                value={beamInputStr}
-                onChange={(e) => setBeamInputStr(e.target.value)}
-                placeholder={(((rotLiveAz ?? beamOverrideDeg ?? sp) % 360 + 360) % 360).toFixed(0)}
-                style={{
-                  width: 40,
-                  background: 'transparent',
-                  border: '1px solid var(--line)',
-                  color: 'inherit',
-                  fontFamily: 'inherit',
-                  fontSize: 'inherit',
-                  padding: '0 2px',
-                }}
-              />
-              <button type="submit" className="btn sm" style={{ padding: '0 6px' }}>
-                Go
-              </button>
-            </form>
-          </>
-        )}
-        {terminatorActive && mapAvailable && (
-          <span
-            className={`chip mono ${mapInteractive ? 'accent' : ''}`}
-            title="Hold ⌥ (Alt) to zoom and pan the map (click-to-tune paused)"
-          >
-            <span className="k">⌥</span>
-            <span className="v">+ −</span>
-          </span>
-        )}
-        <span className="chip mono">
-          <span className="k">HZ/PX</span>
-          <span className="v">{hzPerPixel}</span>
+      <div className="workspace-tile-header hero-tile-header">
+        <span
+          className="workspace-tile-drag-handle"
+          aria-hidden="true"
+          title="Drag to reposition"
+        >
+          <GripVertical size={12} />
         </span>
+        <span className={`dot ${moxOn || tunOn ? 'tx' : 'on'}`} />
+        <span className="workspace-tile-title" title={typeof heroTitle === 'string' ? heroTitle : undefined}>
+          {heroTitle}
+        </span>
+        <div
+          className="hero-tile-controls"
+          onPointerDown={stopDrag}
+          onMouseDown={stopDrag}
+        >
+          <ZoomControl />
+          {terminatorActive && contact && mapAvailable && (
+            <>
+              <button
+                type="button"
+                className="chip mono"
+                onClick={() => handleRotateToBearing(sp)}
+                title="Short path — click to rotate"
+              >
+                <span className="k">SP</span>
+                <span className="v">{sp.toFixed(0)}°</span>
+              </button>
+              <button
+                type="button"
+                className="chip mono"
+                onClick={() => handleRotateToBearing(lp)}
+                title="Long path — click to rotate"
+              >
+                <span className="k">LP</span>
+                <span className="v">{lp.toFixed(0)}°</span>
+              </button>
+              <form onSubmit={submitBeam} className="chip mono" style={{ gap: 4 }}>
+                <span className="k">BEAM</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={beamInputStr}
+                  onChange={(e) => setBeamInputStr(e.target.value)}
+                  placeholder={(((rotLiveAz ?? beamOverrideDeg ?? sp) % 360 + 360) % 360).toFixed(0)}
+                  style={{
+                    width: 40,
+                    background: 'transparent',
+                    border: '1px solid var(--line)',
+                    color: 'inherit',
+                    fontFamily: 'inherit',
+                    fontSize: 'inherit',
+                    padding: '0 2px',
+                  }}
+                />
+                <button type="submit" className="btn sm" style={{ padding: '0 6px' }}>
+                  Go
+                </button>
+              </form>
+            </>
+          )}
+          {terminatorActive && mapAvailable && (
+            <span
+              className={`chip mono ${mapInteractive ? 'accent' : ''}`}
+              title="Hold ⌥ (Alt) to zoom and pan the map (click-to-tune paused)"
+            >
+              <span className="k">⌥</span>
+              <span className="v">+ −</span>
+            </span>
+          )}
+        </div>
+        {onRemove ? (
+          <button
+            type="button"
+            className="workspace-tile-close"
+            aria-label="Remove panel"
+            title="Remove panel"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <X size={12} />
+          </button>
+        ) : null}
       </div>
-      <div className="panel-body hero-body" style={{ flex: 1, position: 'relative' }}>
+      <div className="hero-body" style={{ flex: 1, position: 'relative' }}>
         {imageMode && (
           <div
             className={`image-layer ${backgroundImageFit}`}

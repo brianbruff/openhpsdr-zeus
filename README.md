@@ -67,7 +67,7 @@ Wiki jump-off points for the most-asked things:
 ## Download
 
 Grab the latest installer from the **[Releases page](https://github.com/brianbruff/openhpsdr-zeus/releases/latest)**
-— Windows `.exe`, macOS `.dmg`, Linux `.tar.gz`. Full install detail (PWA path,
+— Windows x64 `.exe`, Windows on ARM (Snapdragon / Surface Pro X) `.exe`, macOS `.dmg`, Linux `.tar.gz`. Full install detail (PWA path,
 macOS Gatekeeper xattr step, first-run WDSP wisdom wait) is on the wiki's
 [Installation](https://github.com/brianbruff/openhpsdr-zeus/wiki/Installation)
 page.

@@ -112,6 +112,16 @@ export interface PanelDef {
    *  toolbars (Meters has gear / library / settings drawers; Panadapter has
    *  band/zoom/cursor strip; Azimuth has SP/LP toggles). */
   headerless?: boolean;
+  /** Width cap in 12-col grid units. When set, RGL won't let the operator
+   *  drag the tile any wider — the closest analogue to "anchor: top, right"
+   *  in a Windows-Forms-style designer. Right-column stack panels (vfo /
+   *  smeter / dsp / txmeters / azimuth / tx) cap at 3 so they grow only in
+   *  height, never sprawling into the panadapter column. Omit for
+   *  freely-sizable panels. */
+  maxW?: number;
+  /** Height cap in grid rows. Optional ceiling on vertical growth.
+   *  Omit for freely-sizable panels. */
+  maxH?: number;
 }
 
 // Panel registry: maps component-id strings (used in the flexlayout JSON model)
@@ -124,6 +134,11 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'spectrum',
     tags: ['panadapter', 'waterfall', 'spectrum', 'map'],
     component: HeroPanel,
+    // Headerless: HeroPanel draws its own .workspace-tile-header so the
+    // single strip can host the zoom slider, rotator chips (SP/LP/BEAM),
+    // ⌥ map-mode hint, and HZ/PX readout — instead of stacking those on
+    // top of the default TileChrome (the old "double header").
+    headerless: true,
   },
   vfo: {
     id: 'vfo',
@@ -131,6 +146,7 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'vfo',
     tags: ['frequency', 'vfo', 'tuning'],
     component: VfoPanel,
+    maxW: 3,
   },
   smeter: {
     id: 'smeter',
@@ -138,6 +154,7 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'meters',
     tags: ['signal', 'meter', 'rx', 'smeter'],
     component: SMeterPanel,
+    maxW: 3,
   },
   qrz: {
     id: 'qrz',
@@ -152,6 +169,7 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'tools',
     tags: ['azimuth', 'map', 'bearing', 'great-circle'],
     component: AzimuthPanel,
+    maxW: 3,
   },
   dsp: {
     id: 'dsp',
@@ -159,6 +177,7 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'dsp',
     tags: ['dsp', 'noise', 'filter', 'nr', 'anf'],
     component: DspFlexPanel,
+    maxW: 3,
   },
   cw: {
     id: 'cw',
@@ -180,6 +199,7 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'meters',
     tags: ['tx', 'power', 'swr', 'alc', 'meters'],
     component: TxMetersPanel,
+    maxW: 3,
   },
   tx: {
     id: 'tx',
@@ -187,6 +207,7 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'controls',
     tags: ['tx', 'drive', 'tune', 'mic', 'mic-gain', 'power', 'filter', 'bandpass'],
     component: TxPanel,
+    maxW: 3,
   },
   filter: {
     id: 'filter',

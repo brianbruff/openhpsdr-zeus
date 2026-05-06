@@ -14,9 +14,20 @@ import { PANELS } from './panels';
 /** Outer-grid column count. Matches MetersPanel's inner grid so the mental
  *  model is identical at both levels. */
 export const WORKSPACE_GRID_COLS = 12;
-/** Outer-grid row height in CSS pixels. Smaller than MetersPanel's 40 px
- *  inner row so the workspace can do finer pixel-grain placement. */
+/** Fallback row height in CSS pixels, used before the workspace container's
+ *  ResizeObserver fires. The live rowHeight is computed responsively in
+ *  FlexWorkspace (= viewport / WORKSPACE_TARGET_ROWS) so the default layout
+ *  fills the available height. */
 export const WORKSPACE_ROW_HEIGHT_PX = 30;
+/** Target row count the responsive rowHeight calc divides into the
+ *  measured container height. Matches the total y+h of the default layout
+ *  so a fresh radio fills the viewport exactly. Custom layouts taller than
+ *  this row out below the fold (workspace scrolls); shorter layouts leave
+ *  empty space at the bottom. */
+export const WORKSPACE_TARGET_ROWS = 24;
+/** Floor on the responsive rowHeight so tiles stay readable on small
+ *  windows. Below this, the workspace scrolls instead of cramming. */
+export const WORKSPACE_ROW_HEIGHT_MIN_PX = 18;
 /** Default minW/minH for every tile. minW=1 (≈ 1/12 of the workspace
  *  width) lets short-control tiles like Mode / Tuning Step / Band shrink
  *  down to a narrow column when the operator wants to dock them tight,
@@ -70,7 +81,7 @@ export const DEFAULT_TILE_SPAN: Record<string, { w: number; h: number }> = {
   azimuth: { w: 3, h: 8 },
   step: { w: 3, h: 3 },
   cw: { w: 4, h: 4 },
-  tx: { w: 4, h: 5 },
+  tx: { w: 3, h: 5 },
   ps: { w: 4, h: 5 },
   band: { w: 6, h: 2 },
   mode: { w: 4, h: 2 },

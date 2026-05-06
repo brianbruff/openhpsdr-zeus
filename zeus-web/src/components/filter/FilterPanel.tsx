@@ -5,15 +5,15 @@
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 //
 // Unified filter control-strip widget. Three favorite filter-preset buttons
-// + a "⋯" toggle that opens the FilterRibbon (mini-pan + presets + custom).
-// Operators drag any preset chip out of the ribbon onto one of the three
-// buttons here to pin it — same UX as the Mode/Band/Step toolbar groups.
+// + a "⋯" toggle that opens a popover containing every preset (F1..F10 plus
+// VAR1, VAR2). Same UX as the Mode/Band/Step toolbar groups: click any chip
+// to apply, drag any chip onto one of the three favorite buttons to pin.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useConnectionStore } from '../../state/connection-store';
 import {
   setFilter,
-  setFilterAdvancedPaneOpen,
   getFilterPresets,
   type FilterPresetDto,
 } from '../../api/client';
@@ -21,12 +21,11 @@ import { useFilterFavoritesStore, useFavoritesForMode } from '../../state/filter
 import { FILTER_DRAG_MIME } from './FilterRibbon';
 import { getPresetsForMode } from './filterPresets';
 
-const RIBBON_OPEN_KEY = 'zeus.filter.advancedPaneOpen';
-
 export function FilterPanel() {
   const mode = useConnectionStore((s) => s.mode);
   const filterPresetName = useConnectionStore((s) => s.filterPresetName);
-  const ribbonOpen = useConnectionStore((s) => s.filterAdvancedPaneOpen);
+  const filterLow = useConnectionStore((s) => s.filterLowHz);
+  const filterHigh = useConnectionStore((s) => s.filterHighHz);
   const applyState = useConnectionStore((s) => s.applyState);
   const loadFavorites = useFilterFavoritesStore((s) => s.load);
   const updateFavorites = useFilterFavoritesStore((s) => s.update);
@@ -42,7 +41,14 @@ export function FilterPanel() {
     [mode],
   );
   const [presets, setPresets] = useState<FilterPresetDto[]>(localPresets);
-  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+  const [dragOverFav, setDragOverFav] = useState<number | null>(null);
+  const [dragSlot, setDragSlot] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
+
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const toggleRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => { void loadFavorites(mode); }, [mode, loadFavorites]);
 
@@ -58,7 +64,18 @@ export function FilterPanel() {
     return () => { cancelled = true; };
   }, [mode]);
 
+  // Popover preset order: F-slots ascending by passband width, then VAR1, VAR2.
+  // Matches the FilterRibbon panel's grid so operators see the same layout.
+  const sortedPresets = useMemo(() => {
+    const fSlots = presets.filter((p) => !p.isVar).slice().sort((a, b) => {
+      return Math.abs(a.highHz - a.lowHz) - Math.abs(b.highHz - b.lowHz);
+    });
+    const varSlots = presets.filter((p) => p.isVar);
+    return [...fSlots, ...varSlots];
+  }, [presets]);
+
   const activeSlot = filterPresetName ?? null;
+  const currentWidth = Math.abs(filterHigh - filterLow);
 
   const selectPreset = useCallback(
     (slot: FilterPresetDto) => {
@@ -74,16 +91,54 @@ export function FilterPanel() {
     [applyState],
   );
 
-  const toggleRibbon = useCallback(() => {
-    const next = !ribbonOpen;
-    useConnectionStore.setState({ filterAdvancedPaneOpen: next });
-    try { window.localStorage.setItem(RIBBON_OPEN_KEY, next ? '1' : '0'); } catch { /* ok */ }
-    setFilterAdvancedPaneOpen(next).catch(() => { /* next state poll reconciles */ });
-  }, [ribbonOpen]);
+  // Close popover on outside click or Escape. Treats clicks inside either
+  // the trigger row or the portaled popover as "inside" so the menu doesn't
+  // self-dismiss when the operator clicks one of its own chips.
+  useEffect(() => {
+    if (!open) return;
+    const onDocDown = (e: MouseEvent) => {
+      const t = e.target as Node | null;
+      if (!t) return;
+      if (containerRef.current?.contains(t)) return;
+      if (popoverRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
 
-  // Drop a preset chip from the ribbon onto favorite-index `idx`. Swaps if
-  // the dropped slot is already a favorite; otherwise displaces idx.
-  const onDrop = useCallback(
+  // Anchor the portaled popover to the "⋯" toggle. Re-measure on open and on
+  // window resize / scroll so the menu tracks if the layout shifts. The
+  // popover is rendered into document.body to escape `.control-strip`'s
+  // `overflow: hidden` clip.
+  useLayoutEffect(() => {
+    if (!open) {
+      setPopoverPos(null);
+      return;
+    }
+    const measure = () => {
+      const t = toggleRef.current;
+      if (!t) return;
+      const r = t.getBoundingClientRect();
+      setPopoverPos({ top: r.bottom + 6, left: r.left });
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    window.addEventListener('scroll', measure, true);
+    return () => {
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('scroll', measure, true);
+    };
+  }, [open]);
+
+  const dropOnFav = useCallback(
     (idx: number, slotName: string) => {
       const next = [...favoriteSlotNames];
       const existing = next.indexOf(slotName);
@@ -98,25 +153,37 @@ export function FilterPanel() {
     [favoriteSlotNames, mode, updateFavorites],
   );
 
-  const onDragOver = (idx: number) => (e: React.DragEvent) => {
+  const onFavDragOver = (idx: number) => (e: React.DragEvent) => {
     if (!e.dataTransfer.types.includes(FILTER_DRAG_MIME)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
-    if (dragOverIdx !== idx) setDragOverIdx(idx);
+    if (dragOverFav !== idx) setDragOverFav(idx);
   };
-  const onDragLeave = () => setDragOverIdx(null);
-  const onDropEvt = (idx: number) => (e: React.DragEvent) => {
+  const onFavDragLeave = () => setDragOverFav(null);
+  const onFavDrop = (idx: number) => (e: React.DragEvent) => {
     const slotName = e.dataTransfer.getData(FILTER_DRAG_MIME);
     if (!slotName) return;
     e.preventDefault();
-    onDrop(idx, slotName);
-    setDragOverIdx(null);
+    dropOnFav(idx, slotName);
+    setDragOverFav(null);
+    setDragSlot(null);
   };
+
+  const startDrag = (e: React.DragEvent, slotName: string) => {
+    e.dataTransfer.setData(FILTER_DRAG_MIME, slotName);
+    e.dataTransfer.effectAllowed = 'move';
+    setDragSlot(slotName);
+  };
+  const endDrag = () => { setDragSlot(null); setDragOverFav(null); };
 
   if (mode === 'FM') return null;
 
   return (
-    <div className="ctrl-group filter-bar" style={{ minWidth: 220 }}>
+    <div
+      ref={containerRef}
+      className="ctrl-group filter-bar toolbar-fav"
+      style={{ minWidth: 220, position: 'relative' }}
+    >
       <div className="label-xs ctrl-lbl">FILTER</div>
       <div className="btn-row" style={{ gap: 3 }}>
         {favoriteSlotNames.map((slotName, idx) => {
@@ -127,10 +194,10 @@ export function FilterPanel() {
               key={`fav-${idx}`}
               type="button"
               onClick={() => slot && selectPreset(slot)}
-              onDragOver={onDragOver(idx)}
-              onDragLeave={onDragLeave}
-              onDrop={onDropEvt(idx)}
-              className={`btn sm ${isActive ? 'active' : ''} ${dragOverIdx === idx ? 'is-drop-target' : ''}`}
+              onDragOver={onFavDragOver(idx)}
+              onDragLeave={onFavDragLeave}
+              onDrop={onFavDrop(idx)}
+              className={`btn sm ${isActive ? 'active' : ''} ${dragOverFav === idx ? 'is-drop-target' : ''}`}
               title={
                 slot
                   ? `${slot.slotName}: ${slot.lowHz >= 0 ? '+' : ''}${slot.lowHz} / ${slot.highHz >= 0 ? '+' : ''}${slot.highHz} Hz — drag a preset here to replace`
@@ -143,16 +210,56 @@ export function FilterPanel() {
           );
         })}
         <button
+          ref={toggleRef}
           type="button"
-          onClick={toggleRibbon}
-          className={`btn sm ${ribbonOpen ? 'active' : ''}`}
-          title="Open filter panel"
-          aria-expanded={ribbonOpen}
+          onClick={() => setOpen((v) => !v)}
+          className={`btn sm ${open ? 'active' : ''}`}
+          title="All filter presets — drag onto a favorite to pin"
+          aria-expanded={open}
           style={{ marginLeft: 4 }}
         >
           ⋯
         </button>
       </div>
+
+      {open && popoverPos && createPortal(
+        <div
+          ref={popoverRef}
+          className="toolbar-fav__popover"
+          role="dialog"
+          aria-label="Filter presets"
+          style={{ top: popoverPos.top, left: popoverPos.left }}
+        >
+          <div className="toolbar-fav__hint">DRAG ONTO A FAVORITE TO PIN</div>
+          <div className="toolbar-fav__grid">
+            {sortedPresets.map((slot) => {
+              const slotWidth = Math.abs(slot.highHz - slot.lowHz);
+              const isActive = activeSlot === slot.slotName
+                || (Math.abs(slotWidth - currentWidth) <= 20 && !slot.isVar);
+              const isPinned = favoriteSlotNames.includes(slot.slotName);
+              const label = slot.isVar ? slot.slotName : slot.label;
+              return (
+                <button
+                  key={slot.slotName}
+                  type="button"
+                  draggable
+                  onDragStart={(e) => startDrag(e, slot.slotName)}
+                  onDragEnd={endDrag}
+                  onClick={() => {
+                    selectPreset(slot);
+                    setOpen(false);
+                  }}
+                  title={`${slot.slotName}: ${slot.lowHz >= 0 ? '+' : ''}${slot.lowHz} / ${slot.highHz >= 0 ? '+' : ''}${slot.highHz} Hz — drag onto a favorite to pin`}
+                  className={`toolbar-fav__chip ${isActive ? 'is-active' : ''} ${isPinned ? 'is-pinned' : ''} ${dragSlot === slot.slotName ? 'is-dragging' : ''}`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }

@@ -86,7 +86,20 @@ jobs:
           - os: windows
             runner: windows-latest
             rid: win-x64
+            arch: x64
             artifact: windows-installer
+            desktop_artifact: windows-desktop-installer
+          # Windows-on-ARM. Cross-published from the x64 windows-latest host —
+          # .NET 10 emits win-arm64 binaries from any host arch, and Inno Setup
+          # iscc on x64 produces an installer that targets ARM64 fine. Keeping
+          # the runner pinned to windows-latest (rather than windows-11-arm)
+          # avoids native-tooling drift between the two arches.
+          - os: windows
+            runner: windows-latest
+            rid: win-arm64
+            arch: arm64
+            artifact: windows-arm64-installer
+            desktop_artifact: windows-arm64-desktop-installer
           - os: linux
             # Pinned to ubuntu-22.04 (glibc 2.35) — the self-contained .NET
             # publish embeds native runtime libs that link against the build
@@ -96,10 +109,12 @@ jobs:
             runner: ubuntu-22.04
             rid: linux-x64
             artifact: linux-tarball
+            desktop_artifact: linux-desktop-appimage
           - os: macos-arm64
             runner: macos-latest  # Apple Silicon
             rid: osx-arm64
             artifact: macos-arm64-dmg
+            desktop_artifact: macos-arm64-desktop-dmg
 
     steps:
       - uses: actions/checkout@v4
@@ -174,14 +189,14 @@ jobs:
         run: |
           choco install innosetup -y
           $env:PATH += ";C:\Program Files (x86)\Inno Setup 6"
-          iscc /DMyAppVersion="${{ steps.version.outputs.version }}" installers\zeus-windows.iss
+          iscc /DMyAppVersion="${{ steps.version.outputs.version }}" /DArch="${{ matrix.config.arch }}" installers\zeus-windows.iss
 
       - name: Upload Windows Installer
         if: matrix.config.os == 'windows'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.config.artifact }}
-          path: installers/output/Zeus-${{ steps.version.outputs.version }}-win-x64-setup.exe
+          path: installers/output/Zeus-${{ steps.version.outputs.version }}-win-${{ matrix.config.arch }}-setup.exe
           if-no-files-found: error
 
       - name: Build Linux Package
@@ -223,14 +238,14 @@ jobs:
           # same runner; this just adds the binary to PATH and runs iscc again
           # against the desktop .iss.
           $env:PATH += ";C:\Program Files (x86)\Inno Setup 6"
-          iscc /DMyAppVersion="${{ steps.version.outputs.version }}" installers\zeus-desktop-windows.iss
+          iscc /DMyAppVersion="${{ steps.version.outputs.version }}" /DArch="${{ matrix.config.arch }}" installers\zeus-desktop-windows.iss
 
       - name: Upload Windows Desktop Installer
         if: matrix.config.os == 'windows'
         uses: actions/upload-artifact@v4
         with:
-          name: windows-desktop-installer
-          path: installers/output/Zeus-Desktop-${{ steps.version.outputs.version }}-win-x64-setup.exe
+          name: ${{ matrix.config.desktop_artifact }}
+          path: installers/output/Zeus-Desktop-${{ steps.version.outputs.version }}-win-${{ matrix.config.arch }}-setup.exe
           if-no-files-found: error
 
       - name: Build Linux Desktop AppImage
@@ -246,7 +261,7 @@ jobs:
         if: matrix.config.os == 'linux'
         uses: actions/upload-artifact@v4
         with:
-          name: linux-desktop-appimage
+          name: ${{ matrix.config.desktop_artifact }}
           path: installers/output/Zeus-Desktop-${{ steps.version.outputs.version }}-linux-x86_64.AppImage
           if-no-files-found: error
 
@@ -261,7 +276,7 @@ jobs:
         if: startsWith(matrix.config.os, 'macos')
         uses: actions/upload-artifact@v4
         with:
-          name: macos-arm64-desktop-dmg
+          name: ${{ matrix.config.desktop_artifact }}
           path: installers/output/Zeus-Desktop-${{ steps.version.outputs.version }}-macos-*.dmg
           if-no-files-found: error
 
@@ -306,6 +321,14 @@ jobs:
           Both bundle the .NET 10 runtime and all dependencies. Distinct AppIds, so
           you can install both side-by-side if you want.
 
+          ### Windows (ARM64)
+          - **Zeus-${{ steps.version.outputs.version }}-win-arm64-setup.exe** - service mode (browser UI)
+          - **Zeus-Desktop-${{ steps.version.outputs.version }}-win-arm64-setup.exe** - desktop edition (native Photino window)
+
+          Windows on ARM (Surface Pro X / Snapdragon X Elite / etc.) — same Zeus,
+          native ARM build. Same AppIds as the x64 installers, so installing the
+          ARM build over an existing x64 install will upgrade in place.
+
           ### macOS (Apple Silicon)
           - **Zeus-${{ steps.version.outputs.version }}-macos-arm64.dmg** - service mode (open Zeus in your browser)
           - **Zeus-Desktop-${{ steps.version.outputs.version }}-macos-arm64.dmg** - desktop edition (native Photino window, no browser)
@@ -346,6 +369,8 @@ jobs:
           files: |
             release-artifacts/windows-installer/*
             release-artifacts/windows-desktop-installer/*
+            release-artifacts/windows-arm64-installer/*
+            release-artifacts/windows-arm64-desktop-installer/*
             release-artifacts/linux-tarball/*
             release-artifacts/linux-desktop-appimage/*
             release-artifacts/macos-arm64-dmg/*

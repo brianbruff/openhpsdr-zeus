@@ -20,6 +20,22 @@ IQ / audio / meter data to a React + WebGL frontend over WebSocket.
 > and the **ANAN G2 / G2 MkII** to date. If you have another OpenHPSDR board
 > and can help bring it up, a PR would be lovely.
 
+### Per-board capability snapshot
+
+| Board | Protocol | Max Panadapters |
+|---|---|---|
+| Hermes Lite 2 | P1 | 4 |
+| Hermes / ANAN-10 / 10E / 100 / 100B | P1 | 1 |
+| ANAN-G2E (HermesC10) | P1 | 1 |
+| ANAN-100D (Angelia) | P1 / P2 | 2 |
+| ANAN-200D (Orion) | P1 / P2 | 2 |
+| ANAN-7000DLE / 8000DLE / G2 / G2 MkII / G2-1K / Red Pitaya / ANVELINA-PRO3 | P2 | 8 |
+| Apache OrionMkII (100 W original) | P1 / P2 | 2 |
+
+`Max Panadapters` = the per-board ceiling exposed via
+`/api/radio/capabilities` (`BoardCapabilities.MaxReceivers`). Phase 1
+multi-RX is wired on HL2; full per-panel guidance lives in the wiki.
+
 ## About the name
 
 **Zeus** — king of the gods. It doesn't really get more regal than that. The

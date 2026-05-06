@@ -6,18 +6,42 @@ This document describes the multi-receiver (multi-slice) capabilities of HPSDR r
 
 ## Protocol 1 Radios (Original Protocol)
 
-Protocol 1 radios use a single DDC and do not support true multi-slice operation in the protocol itself.
+Protocol 1 supports **multiple DDCs** on boards that advertise it — the
+host writes the DDC count into C4 bits [5:3] of the C0=0x00 command word
+(see HL2 reference below). The number of independent slices is set by the
+board's gateware, not by the protocol itself, so per-board limits vary.
 
 | Board | Max Receivers | Notes |
 |-------|--------------|-------|
-| Hermes | 1 | Single DDC at RX sample rate |
+| Hermes / ANAN-10 / 10E / 100 / 100B | 1 | Single DDC (`HermesClass` fingerprint) |
 | Mercury/Penelope/Metis | 1 | Single DDC |
 | Griffin | 1 | Single DDC |
-| Angelia | 1 | Protocol 1 limitation |
-| HermesLite 2 (HL2) | 1 | Protocol 1 only; hardware has 1 ADC |
-| Orion | 1 | Protocol 1 mode, single DDC |
+| ANAN-100D (Angelia) | 2 | Dual ADC, two DDCs in P1 mode |
+| ANAN-200D (Orion) | 2 | Dual ADC, two DDCs in P1 mode |
+| HermesLite 2 (HL2) | 4 | Up to 4 DDCs via C4 bits [5:3] — see note |
+| ANAN-G2E (HermesC10) | 1 | Single-RX hardware |
+| Apache OrionMkII original | 2 | Saturn-class hardware, treated conservatively |
+| Saturn-class 0x0A family (G2 / G2-1K / 7000DLE / 8000DLE / ANVELINA-PRO3 / Red Pitaya) | 8 | Up to 8 DDCs |
 
-**Note:** HL2 firmware does NOT support multiple receivers. Despite some confusion in the issue, HL2 has a single ADC and runs Protocol 1 exclusively. The "2 slices" mentioned in the issue appears to be a misunderstanding—HL2 is a single-receiver board.
+**HL2 multi-DDC note:** HL2 hardware has a single ADC, but the HL2
+gateware multiplexes that ADC into up to 4 independent DDC slices. The
+host selects the slice count by writing `(nddc - 1)` into C4 bits [5:3]
+of the C0=0x00 command word. References:
+
+- `docs/references/protocol-1/hermes-lite2-protocol.md:478-485` —
+  authoritative description of C0=0x00 / C4[5:3]; bare HL2 RX uses 1
+  receiver (Zeus default), HL2 PureSignal in the 2-DDC layout requires 2,
+  4-DDC layout uses 4. Conservative default is 4 (the documented ceiling
+  in the protocol reference).
+- `docs/references/protocol-1/supported-settings.md:37` — mentions "up to
+  12, HL2 gateware-dependent"; not all gateware variants honour that, so
+  4 is the safer cross-version cap.
+- mi0bot Thetis `networkproto1.c:973` — host write loop:
+  `C4 |= (nddc - 1) << 3;`. This is the reference C implementation.
+
+Earlier revisions of this document claimed HL2 was single-receiver only;
+that was wrong and has been corrected. HL2 is a Protocol-1 board that
+supports multi-DDC.
 
 ## Protocol 2 Radios (New Protocol / ETH)
 
@@ -52,16 +76,39 @@ The `NumReceivers` field is populated from the Protocol 2 discovery reply:
 - **Usage:** Reported in `/api/radio/discovered` endpoint
 - **Reference:** `Zeus.Protocol2/Discovery/DiscoveredRadio.cs:63`
 
-## Current Zeus Implementation (v1.0)
+## Current Zeus Implementation
 
-As of this writing, Zeus supports **single-receiver operation only**:
-- `DspPipelineService` maintains one `_channelId` (int, not array)
-- `DisplayFrame.RxId` field exists but is hardcoded to `0`
-- Frontend `useDisplayStore` has single `panDb`/`wfDb` pair
-- Only DDC2 is opened on Protocol 2 radios
-- No UI for enabling/configuring additional slices
+**Phase 1 (shipped on `claude/support-multiple-panadapters`, 2026-05-06):**
 
-This document supports the multi-panadapter feature implementation (issue #XX) which will extend Zeus to support multiple simultaneous receivers on capable hardware.
+- **HL2 (Protocol 1):** multi-RX wired end-to-end. Default OFF;
+  `POST /api/multi-slice` `{ Enabled: true, NumActiveSlices: N }` opens
+  N DDCs (1..4) with the gateware bits at C0=0x00 / C4 [5:3]. Per-slice
+  VFO via `POST /api/vfo` `{ Hz, RxId }`. Per-RxId panadapter / waterfall
+  panels (`hero-rx1`..`hero-rx3`) appear in the Add Panel modal once
+  multi-slice is enabled. Audio + TX stay on `RxId=0`.
+- **PS-precedence:** if PureSignal is armed, multi-slice requests are
+  refused (see `RadioService.SetMultiSlice`). PS+multi-RX coexistence is
+  Phase 2.
+- **Single-slice path is bit-identical** to v0.6.x — operators who don't
+  toggle multi-slice on see no behavioural change.
+- **Protocol 2 (Saturn-class G2 / G2-MkII / 7000DLE / 8000DLE) — NOT YET.**
+  The capability table reports `MaxReceivers=8` for these boards and the
+  P2 client opens DDC2 only. P2 multi-DDC is deferred to Phase 2.
+- **Frontend:** `zeus-web/src/state/display-store.ts` is a per-RxId map;
+  `Panadapter` / `Waterfall` / `FreqAxis` / `PassbandOverlay` accept an
+  `rxId` config; `RadioSelector` exposes a multi-slice control on capable
+  boards (currently HL2 only).
+
+**Phase 2 (deferred, future PR):**
+
+- Per-slice DSP / AGC / mode / filter state.
+- Audio mixing across slices (RxId=0 audio only today).
+- PS+multi-RX coexistence — the 4-DDC HL2 layout with 2 user RX + 2 PS
+  feedback DDCs. The wire layer carries it; the policy gate in
+  `SetMultiSlice` is the seam.
+- Per-slice VFO optimistic-UI dial-marker on the FreqAxis (the wire is
+  correct; only the dial visualisation lags one update).
+- Protocol-2 multi-DDC for Saturn-class boards.
 
 ## References
 

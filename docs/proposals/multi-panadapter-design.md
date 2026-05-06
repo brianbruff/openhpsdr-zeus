@@ -1,11 +1,64 @@
 # Multi-Panadapter Support — Design Proposal
 
-## Problem Statement
+## Implementation Status (2026-05-06)
 
-Zeus currently supports only a single panadapter/slice per radio connection, even though some Protocol 2 hardware (G2 MkII, ANAN-7000DLE/8000DLE) supports up to 8 simultaneous DDC receivers. This limits operators who want to monitor multiple frequencies simultaneously.
+> **Phase 1 has shipped on the `claude/support-multiple-panadapters` branch.**
+> The doc below was written before the work landed; status flags here reflect
+> what's actually in the worktree.
+
+### ✅ Phase 1 — In this PR
+
+Shipped on HL2 (Protocol 1, the one board with hardware multi-DDC support
+and an authoritative on-the-wire spec we can lean on). The 0x0A Saturn-class
+boards advertise 8 DDCs in the new-protocol path, but Phase 1 stays Protocol-1
+only — Protocol-2 multi-DDC is Phase 2.
+
+- `BoardCapabilities.MaxReceivers` field + per-board values
+  (`Zeus.Contracts/BoardCapabilities.cs`, `BoardCapabilitiesTable.cs`).
+  Surfaced via `/api/radio/capabilities`. Frontend reads it once at connect.
+- HL2 wire layer for nddc 1..4 (`Zeus.Protocol1/Protocol1Client.cs`,
+  `PacketParser.Hl2MultiRx*`). EP6 IQ slots laid out as `(6N+2)` bytes
+  per slot when nddc=N; gateware bits at C0=0x00 / C4 [5:3] = `(nddc - 1)`
+  per `docs/references/protocol-1/hermes-lite2-protocol.md:478-485`.
+- `DspPipelineService` opens / configures / tears down per-slice WDSP RXA
+  channels using the `state=0 → configure → SetChannelState(id, 1, 0)`
+  sequence already pinned in `docs/lessons/wdsp-init-gotchas.md`.
+- Per-RxId `DisplayFrame` routing (the `RxId` field that's been on the wire
+  but pinned to 0 since v0.1).
+- `POST /api/multi-slice` to enable / disable / size the multi-RX configuration.
+- `POST /api/vfo` with optional `RxId` for per-slice tuning. `RxId=0` is
+  bit-identical to the pre-Phase-1 path.
+- Frontend per-RxId display store (`zeus-web/src/state/display-store.ts`),
+  `hero-rx1` / `hero-rx2` / `hero-rx3` panel definitions in the Add Panel
+  modal, and a multi-slice control in the Radio Selector (HL2 only).
+- **PS-precedence rule.** When PureSignal is armed, `RadioService.SetMultiSlice`
+  refuses to enable multi-RX, logs a warning, and returns `Enabled=false`
+  on the response. PS+multi-RX coexistence is Phase 2; Phase 1 deliberately
+  doesn't try to thread that needle.
+- Single-slice path is bit-identical to v0.6.x — no change for operators
+  who don't toggle multi-slice on.
+
+### ⏸ Phase 2 — Deferred
+
+Explicitly out of scope for this PR; the maintainer's stance is that v1
+ships shared-state, audio-on-RX0-only, and HL2-only. Phase 2 candidates:
+
+- Per-slice DSP / AGC / mode / filter state (today every slice inherits the
+  primary's settings).
+- Audio mixing for non-primary slices (RxId=0 audio only in Phase 1).
+- PureSignal + multi-RX coexistence — the 4-DDC HL2 layout with 2 user RX +
+  2 PS feedback DDCs. The wire layer can already carry it; the policy gate
+  in `RadioService.SetMultiSlice` is the seam where this would unlock.
+- Per-slice VFO optimistic UI on the FreqAxis dial marker (today the marker
+  follows the master VFO; the per-slice VFO is correctly applied on the wire
+  but the dial visualisation lags one update).
+- Protocol-2 multi-DDC for Saturn-class boards (G2 / G2-MkII / 7000DLE /
+  8000DLE / Red Pitaya / ANVELINA-PRO3). The capability matrix already
+  carries `MaxReceivers=8` for these boards; the P2 client and the layout
+  selector still gate to single-slice.
 
 **Issue:** #[TBD]
-**Status:** Proposal — awaiting maintainer review
+**Status:** Phase 1 shipped; Phase 2 deferred
 **Author:** Agent implementation based on issue request
 
 ## Goals
@@ -18,10 +71,12 @@ Zeus currently supports only a single panadapter/slice per radio connection, eve
 
 ## Non-Goals
 
-- Protocol 1 multi-slice support (P1 radios are single-DDC only)
 - Independent TX on non-primary slices (TX remains tied to RxId=0)
 - Per-slice AGC/DSP/NR state (all slices share radio state initially; can be extended later)
 - Slice synchronization/lock features (advanced feature for future consideration)
+- ~~Protocol 1 multi-slice support~~ — *originally listed here; HL2 turned out
+  to be Protocol 1 with documented multi-DDC support, so Phase 1 ships P1
+  multi-RX on HL2. P2 multi-DDC (Saturn-class boards) is now the deferred item.*
 
 ## Architecture Changes
 
@@ -186,48 +241,74 @@ Add to Radio Settings panel (or new Advanced Settings):
 
 ## Implementation Phases
 
+> Status as of 2026-05-06. The four phases below were the original PR plan;
+> see "Implementation Status" at the top for the trimmed scope that actually
+> shipped (HL2 only; Protocol-2 deferred).
+
 ### Phase 1: Backend Multi-Slice Foundation (this PR)
-- [ ] Add `MultiSliceConfig` to `StateDto` and persist in state store
-- [ ] Refactor `DspPipelineService._channelId` → `_slices[]` array
-- [ ] Open N WDSP RXA channels when multi-slice enabled
-- [ ] Broadcast per-RxId `DisplayFrame` and `AudioFrame` (audio on RxId=0 only initially)
-- [ ] Add `/api/radio/capabilities` endpoint exposing `NumReceivers`
+- [x] Add `MultiSliceConfig` to `StateDto` and persist in state store
+- [x] Refactor `DspPipelineService._channelId` → `_slices[]` array
+- [x] Open N WDSP RXA channels when multi-slice enabled
+- [x] Broadcast per-RxId `DisplayFrame` (audio on RxId=0 only — Phase 2 mixer)
+- [x] `/api/radio/capabilities` exposes `MaxReceivers` (the per-board ceiling
+      sourced from the documented protocol limits, not a runtime probe)
 
 ### Phase 2: Frontend Per-RxId Display (this PR)
-- [ ] Convert `useDisplayStore` to per-RxId map
-- [ ] Update `Panadapter.tsx` to accept `rxId` prop
-- [ ] Add `hero-rx1` through `hero-rx7` to panel registry
-- [ ] Filter "Add Panel" modal by active slice count
+- [x] Convert `useDisplayStore` to per-RxId map
+- [x] Update `Panadapter.tsx` (and `Waterfall.tsx`, `FreqAxis.tsx`,
+      `PassbandOverlay.tsx`) to accept `rxId` config
+- [x] Add `hero-rx1` / `hero-rx2` / `hero-rx3` to panel registry (HL2 ceiling)
+- [x] Filter "Add Panel" modal by active slice count + `MaxReceivers`
 
 ### Phase 3: Multi-Slice UI Controls (this PR)
-- [ ] Add multi-slice toggle to settings panel
-- [ ] Fetch `/api/radio/capabilities` at connect
-- [ ] Show/hide per-slice VFO controls
-- [ ] Update default layout for multi-slice mode (optional preset)
+- [x] Add multi-slice control to RadioSelector (HL2 only in Phase 1)
+- [x] Fetch `/api/radio/capabilities` at connect
+- [x] Per-slice VFO via `POST /api/vfo` `{ Hz, RxId }`
+- [ ] Update default layout for multi-slice mode (deferred — manual add per
+      maintainer decision in Open Questions §3)
 
 ### Phase 4: Testing & Documentation (this PR)
-- [ ] Test single-slice backward compatibility
-- [ ] Test 2-slice simulation (synthetic engine)
-- [ ] Test on G2 MkII hardware (if available)
-- [ ] Update `flex-layout-widgets.md` with multi-panadapter info
-- [ ] Add user guide: "Using Multiple Slices"
+- [x] Single-slice backward compatibility — bit-identical wire / DSP path
+- [x] 2-slice / 3-slice / 4-slice unit tests
+      (`tests/Zeus.Protocol1.Tests/MultiSliceWireFormatTests.cs`,
+      `tests/Zeus.Server.Tests/PerRxVfoTests.cs`)
+- [ ] On-air bench test on operator HL2 (post-merge — Brian's HL2)
+- [ ] User guide: "Using Multiple Slices" (wiki, post-merge)
 
-## Open Questions for Maintainer Review
+## Open Questions for Maintainer Review — Resolved
+
+> Decisions taken during the Phase 1 implementation session (2026-05-06).
+> The recommendations stand; stances below are the ones actually wired in
+> the shipped code.
 
 1. **Per-slice state:** Should each slice have independent AGC/NR/Filter settings, or share radio state initially?
-   - **Recommendation:** Share state in v1 (simpler), add per-slice state in v2 if needed
+   - **Decision (v1): Share state.** Every active slice inherits the
+     primary's AGC / NR / filter / mode. Per-slice DSP state is a Phase 2
+     concern — see "Implementation Status" above.
 
 2. **Audio routing:** Should we support audio from non-primary slices (requires multi-channel WebAudio)?
-   - **Recommendation:** RxId=0 audio only in v1, add mixer in v2
+   - **Decision (v1): RxId=0 audio only.** Non-primary slices stream IQ +
+     panadapter / waterfall data only. TX is also tied to RxId=0. Multi-channel
+     audio mixing is Phase 2.
 
 3. **Default layout:** Should enabling multi-slice auto-add RX1 panadapter, or require manual "Add Panel"?
-   - **Recommendation:** Manual add (operator choice), document in settings tooltip
+   - **Decision: Manual add.** Toggling multi-slice does not mutate the
+     operator's saved layout. The Add Panel modal exposes `hero-rx1` /
+     `hero-rx2` / `hero-rx3` once multi-slice is enabled and the connected
+     board's `MaxReceivers` is high enough. This avoids surprising layout
+     mutations on operators who flip the toggle to experiment.
 
 4. **Protocol 1 compat:** Should P1 UI hide multi-slice controls entirely, or show grayed-out with tooltip?
-   - **Recommendation:** Hide entirely (avoid clutter)
+   - **Decision: Show on capable P1 boards.** HL2 is a Protocol-1 board
+     with multi-DDC support, so a blanket "P1 hides multi-slice" rule was
+     wrong. The control is gated on `BoardCapabilities.MaxReceivers > 1`,
+     not on protocol. Single-RX boards (Hermes / G2E) hide it.
 
 5. **Slice naming:** "RX0/RX1/RX2" vs "Slice A/B/C" vs "Panadapter 1/2/3"?
-   - **Recommendation:** "RX0/RX1/RX2" (matches pihpsdr/Thetis convention)
+   - **Decision: RX0/RX1/RX2/RX3.** Matches pihpsdr / Thetis convention.
+     Panel labels read "Panadapter · RX0 (Primary)" / "Panadapter · RX1"
+     etc. The wire-format `RxId` is 0-indexed and that's what surfaces in
+     the UI.
 
 ## Risk Assessment
 
@@ -273,14 +354,12 @@ Add to Radio Settings panel (or new Advanced Settings):
 
 ## Maintainer Decision
 
-**Status:** ⏸️ Pending Review
+**Status:** ✅ Phase 1 approved & implemented (2026-05-06)
 **Reviewer:** Brian (EI6LF)
 
-**Decision Options:**
-- ✅ **Approve:** Proceed with implementation as proposed
-- 🔄 **Revise:** Request changes to design (comment below)
-- ❌ **Defer:** Not ready for v1, revisit in future release
-- 🔀 **Alternative:** Propose different approach
+Phase 1 shipped on the `claude/support-multiple-panadapters` branch with the
+scope described in "Implementation Status" above. Phase 2 items remain open
+for a future PR.
 
 ---
 

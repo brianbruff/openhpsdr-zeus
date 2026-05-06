@@ -18,10 +18,12 @@ jobs:
     runs-on: windows-latest
     strategy:
       matrix:
-        # arm64 deferred: upstream channel.c uses _MM_SET_FLUSH_ZERO_MODE
-        # (SSE intrinsic) guarded only for linux/APPLE, so it fails to
-        # compile on Windows-on-ARM. Revisit if a Windows-ARM64 user asks.
-        arch: [x64]
+        # arm64 enabled: the _MM_SET_FLUSH_ZERO_MODE SSE-intrinsic block in
+        # channel.c is now gated out for ARM64 alongside linux/APPLE, so the
+        # rest of WDSP compiles cleanly under VS 2022's ARM64 toolset. CMake
+        # picks `-A ARM64` below, vcpkg uses the `arm64-windows-static-md`
+        # triplet, and dumpbin (a host-arch tool) reads the ARM64 PE fine.
+        arch: [x64, arm64]
     steps:
       - uses: actions/checkout@v4
 
@@ -255,9 +257,10 @@ jobs:
           for artifact_dir in artifacts/wdsp-*; do
             artifact_name=$(basename "$artifact_dir")  # e.g. wdsp-windows-x64
             case "$artifact_name" in
-              wdsp-windows-x64) destDir=Zeus.Dsp/runtimes/win-x64/native ;;
-              wdsp-linux-x64)   destDir=Zeus.Dsp/runtimes/linux-x64/native ;;
-              wdsp-linux-arm64) destDir=Zeus.Dsp/runtimes/linux-arm64/native ;;
+              wdsp-windows-x64)   destDir=Zeus.Dsp/runtimes/win-x64/native ;;
+              wdsp-windows-arm64) destDir=Zeus.Dsp/runtimes/win-arm64/native ;;
+              wdsp-linux-x64)     destDir=Zeus.Dsp/runtimes/linux-x64/native ;;
+              wdsp-linux-arm64)   destDir=Zeus.Dsp/runtimes/linux-arm64/native ;;
               *)
                 echo "Unrecognised artifact $artifact_name — refusing to guess destination" >&2
                 exit 1

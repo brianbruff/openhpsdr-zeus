@@ -34,22 +34,33 @@
   position: relative;
 }
 
-/* Each grid item — a workspace tile wrapper. Snappy transitions on
- * place/resize so drags read crisply. */
+/* Each grid item — a workspace tile wrapper. The upstream
+ * react-grid-layout/css/styles.css sets `will-change: transform` and
+ * `transition: all 200ms ease` on .react-grid-item, which permanently
+ * promotes every tile to its own GPU compositor layer. With a WebGL
+ * panadapter inside that subtree, every frame triggers a layer
+ * re-composite up to the root — visible on macOS as WindowServer +
+ * Chrome GPU pinning. We override both: only promote / animate while
+ * the operator is actively dragging or resizing. */
 .all-panels-grid .react-grid-item {
   background: transparent;
-  transition: transform var(--dur-fast) var(--ease-out),
-    width var(--dur-fast) var(--ease-out),
-    height var(--dur-fast) var(--ease-out);
+  will-change: auto;
+  transition: none;
 }
 
 /* Item being dragged / resized — RGL adds .react-draggable-dragging or
  * .resizing while the operator's pointer is live. Lift z so the drag
- * preview doesn't disappear under siblings. */
+ * preview doesn't disappear under siblings, and re-enable the snappy
+ * transform/size transitions + GPU promotion only for the duration of
+ * the gesture. */
 .all-panels-grid .react-grid-item.react-draggable-dragging,
 .all-panels-grid .react-grid-item.resizing {
   z-index: 4;
   opacity: 0.92;
+  will-change: transform;
+  transition: transform var(--dur-fast) var(--ease-out),
+    width var(--dur-fast) var(--ease-out),
+    height var(--dur-fast) var(--ease-out);
 }
 
 /* Drop placeholder — accent-blue ghost where the dragged tile will land. */

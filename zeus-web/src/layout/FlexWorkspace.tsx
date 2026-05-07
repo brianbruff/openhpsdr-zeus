@@ -17,12 +17,13 @@
 //   - "+ Add Panel" is a single workspace-level button at the top-right,
 //     opening the categorized AddPanelModal.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ResponsiveGridLayout,
   useContainerWidth,
   type Layout,
 } from 'react-grid-layout';
+import { absoluteStrategy } from 'react-grid-layout/core';
 import { useWorkspace } from './WorkspaceContext';
 import { useLayoutStore } from '../state/layout-store';
 import { PANELS } from './panels';
@@ -203,6 +204,17 @@ function WorkspaceCanvas({
           rowHeight={rowHeight}
           margin={[6, 6]}
           containerPadding={[6, 6]}
+          // Position tiles via top/left rather than transform: translate3d.
+          // RGL's default `transformStrategy` uses CSS transforms, which
+          // (combined with the upstream stylesheet's `will-change: transform`)
+          // forces every tile to be its own permanent GPU compositor layer.
+          // With a WebGL panadapter inside one of those tiles, every WebGL
+          // frame produces a chain re-composite up the tree — visible on
+          // macOS as WindowServer + Chrome GPU pinning. `absoluteStrategy`
+          // avoids the promotion for static tiles. The only cost is slightly
+          // less smooth dragging, and operators rarely re-arrange the
+          // workspace.
+          positionStrategy={absoluteStrategy}
           // Drag from anywhere in the tile header (the grip + title strip),
           // EXCEPT the close button. A tiny grip-only handle is too small to
           // grab — and panels that have their own pointer logic in the body
@@ -220,7 +232,7 @@ function WorkspaceCanvas({
         >
           {tiles.map((tile) => (
             <div key={tile.uid} data-tile-uid={tile.uid}>
-              <PanelTile tile={tile} onRemove={() => onRemoveTile(tile.uid)} />
+              <PanelTile tile={tile} onRemoveTile={onRemoveTile} />
             </div>
           ))}
         </ResponsiveGridLayout>
@@ -231,10 +243,21 @@ function WorkspaceCanvas({
 
 interface PanelTileProps {
   tile: WorkspaceTile;
-  onRemove: () => void;
+  onRemoveTile: (uid: string) => void;
 }
 
-function PanelTile({ tile, onRemove }: PanelTileProps) {
+// Memoised so a parent re-render (e.g. another tile's drag updating the
+// store) doesn't reconcile every panel's subtree. Effective only because
+// the store preserves per-tile object identity across unrelated mutations
+// and `onRemoveTile` is the stable zustand action reference.
+const PanelTile = memo(function PanelTile({
+  tile,
+  onRemoveTile,
+}: PanelTileProps) {
+  const handleRemove = useCallback(
+    () => onRemoveTile(tile.uid),
+    [onRemoveTile, tile.uid],
+  );
   const def = PANELS[tile.panelId];
   if (!def) return null;
   // Headerless panels own their entire tile surface and draw their own
@@ -244,19 +267,19 @@ function PanelTile({ tile, onRemove }: PanelTileProps) {
   if (def.headerless) {
     return (
       <div className="workspace-tile workspace-tile--headerless">
-        <PanelBody tile={tile} onRemove={onRemove} />
+        <PanelBody tile={tile} onRemove={handleRemove} />
       </div>
     );
   }
   return (
     <div className="workspace-tile">
-      <TileChrome title={def.name} onRemove={onRemove} />
+      <TileChrome title={def.name} onRemove={handleRemove} />
       <div className="workspace-tile-body">
         <PanelBody tile={tile} />
       </div>
     </div>
   );
-}
+});
 
 function PanelBody({
   tile,

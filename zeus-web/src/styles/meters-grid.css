@@ -12,13 +12,16 @@
   background: transparent;
 }
 
-/* Each grid item — frame around an individual MeterWidget. */
+/* Each grid item — frame around an individual MeterWidget.
+ * Override upstream RGL defaults that permanently promote every tile to
+ * a GPU compositor layer (`will-change: transform`) and run a 200 ms
+ * transition on every property — both compound badly with canvas-heavy
+ * children. We re-enable both only while the operator is dragging /
+ * resizing. */
 .meters-grid .react-grid-item {
   background: transparent;
-  /* RGL hides items via top/left transitions; keep them snappy. */
-  transition: transform var(--dur-fast) var(--ease-out),
-    width var(--dur-fast) var(--ease-out),
-    height var(--dur-fast) var(--ease-out);
+  will-change: auto;
+  transition: none;
 }
 
 /* Hover affordance — soft outline so the operator sees the cell bounds
@@ -32,12 +35,20 @@
   z-index: 4;
   cursor: grabbing;
   opacity: 0.9;
+  will-change: transform;
+  transition: transform var(--dur-fast) var(--ease-out),
+    width var(--dur-fast) var(--ease-out),
+    height var(--dur-fast) var(--ease-out);
 }
 
 /* Item being resized. */
 .meters-grid .react-grid-item.resizing {
   z-index: 4;
   opacity: 0.9;
+  will-change: transform;
+  transition: transform var(--dur-fast) var(--ease-out),
+    width var(--dur-fast) var(--ease-out),
+    height var(--dur-fast) var(--ease-out);
 }
 
 /* Drop placeholder — the dotted ghost RGL renders where the item will land. */

@@ -93,6 +93,13 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     let lastSeqDrawn = -1;
     let tickCounter = 0;
     let lastColormap: ColormapId = useDisplaySettingsStore.getState().colormap;
+    // Visibility gating: skip the rAF redraw when the waterfall tile is
+    // scrolled offscreen or the tab is hidden. We still push frames into
+    // the history texture so when visibility resumes the operator sees a
+    // continuous timeline; we just don't paint to the visible surface.
+    let inViewport = true;
+    let pageVisible = !document.hidden;
+    const isActive = () => inViewport && pageVisible;
 
     const redraw = () => {
       rafHandle = 0;
@@ -106,12 +113,18 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       renderer.draw(dbMin, dbMax);
     };
     const requestRedraw = () => {
+      if (!isActive()) return;
       if (rafHandle === 0) rafHandle = requestAnimationFrame(redraw);
     };
 
     const resize = () => {
       const { width, height } = container.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
+      // Clamp the WebGL backing store at DPR=1. Waterfall is typically the
+      // largest GPU surface in the workspace; running it at native Retina
+      // DPR pushes 4× pixel data through every composite for no visible
+      // gain (the colormap is a smooth gradient and the per-row history
+      // shift is integer-pixel). Same rationale as Panadapter.
+      const dpr = Math.min(1, window.devicePixelRatio || 1);
       const w = Math.max(1, Math.round(width * dpr));
       const h = Math.max(1, Math.round(height * dpr));
       canvas.width = w;
@@ -123,6 +136,22 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     const ro = new ResizeObserver(resize);
     ro.observe(container);
     resize();
+
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          inViewport = e.isIntersecting;
+        }
+        if (isActive()) requestRedraw();
+      },
+      { threshold: 0 },
+    );
+    io.observe(container);
+    const onVisibilityChange = () => {
+      pageVisible = !document.hidden;
+      if (isActive()) requestRedraw();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     const unsub = useDisplayStore.subscribe((state) => {
       if (state.lastSeq === lastSeqDrawn) return;
@@ -161,6 +190,8 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       unsubSettings();
       unsubTx();
       ro.disconnect();
+      io.disconnect();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       if (rafHandle !== 0) cancelAnimationFrame(rafHandle);
       renderer.dispose();
       rendererRef.current = null;

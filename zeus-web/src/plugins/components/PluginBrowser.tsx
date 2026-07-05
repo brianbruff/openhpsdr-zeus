@@ -8,38 +8,11 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { usePluginsStore } from '../state/plugins-store';
-import type {
-  RegistryPluginEntry,
-  RegistryPluginVersion,
-} from '../api/plugins';
+import type { RegistryPluginEntry } from '../api/plugins';
 import { createPluginCheckout, registryEntryToManagedPlugin } from '../api/plugins';
+import { latestRegistryVersion } from '../updates';
 import { RestartRequiredModal } from '../../components/RestartRequiredModal';
 import { pluginAccessFor, useUserAccessStore } from '../../state/user-access-store';
-
-function latestVersion(
-  entry: RegistryPluginEntry,
-): RegistryPluginVersion | null {
-  if (entry.versions.length === 0) return null;
-  // The registry is curator-controlled — schema guarantees `versions`
-  // are sorted newest-first when published, but we don't rely on that.
-  // Pick the highest SemVer triple to be safe.
-  const sorted = [...entry.versions].sort((a, b) =>
-    compareSemver(b.version, a.version),
-  );
-  return sorted[0] ?? null;
-}
-
-function compareSemver(a: string, b: string): number {
-  const ap = a.split('.').map((x) => parseInt(x, 10) || 0);
-  const bp = b.split('.').map((x) => parseInt(x, 10) || 0);
-  const n = Math.max(ap.length, bp.length);
-  for (let i = 0; i < n; i++) {
-    const av = ap[i] ?? 0;
-    const bv = bp[i] ?? 0;
-    if (av !== bv) return av - bv;
-  }
-  return 0;
-}
 
 function VerifiedBadge() {
   return (
@@ -97,7 +70,7 @@ function RegistryCard({
   const install = usePluginsStore((s) => s.install);
   const installing = usePluginsStore((s) => s.installInflight);
   const refreshUserSession = useUserAccessStore((s) => s.refreshSession);
-  const latest = useMemo(() => latestVersion(entry), [entry]);
+  const latest = useMemo(() => latestRegistryVersion(entry), [entry]);
   const alreadyInstalled = installedIds.has(entry.id);
   const registryManagedPlugin = useMemo(() => registryEntryToManagedPlugin(entry), [entry]);
   const pluginAccess = pluginAccessFor(entry.id, false, registryManagedPlugin);

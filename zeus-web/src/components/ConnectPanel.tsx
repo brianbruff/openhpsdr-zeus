@@ -91,6 +91,7 @@ import {
 const DISCOVERY_INTERVAL_MS = 10_000;
 const DEFAULT_DATA_PORT = 1024;
 const DEFAULT_SAMPLE_RATE = 192_000;
+const PROTOCOL3_SAMPLE_RATE: SampleRate = 1_536_000;
 const RETRY_THRESHOLD = 2;
 const IPV4_RE = /^(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d?\d)$/;
 // 768/1536 kHz need a wide DDC transport (P2/P3); the select below filters
@@ -529,6 +530,48 @@ function errorMessage(err: unknown): string {
   return String(err);
 }
 
+function endpointHost(endpoint: string | null | undefined): string | null {
+  const raw = endpoint?.trim();
+  if (!raw) return null;
+  const idx = raw.lastIndexOf(':');
+  return idx > 0 ? raw.slice(0, idx) : raw;
+}
+
+function sameRadioHost(a: string | null | undefined, b: string): boolean {
+  const left = endpointHost(a);
+  const right = endpointHost(b);
+  return left !== null && right !== null && left === right;
+}
+
+function isAlreadyConnectedError(err: unknown): boolean {
+  return errorMessage(err).includes('Already connected');
+}
+
+function isReusableProtocol3State(state: RadioStateDto, endpoint: string): boolean {
+  return state.status === 'Connected' &&
+    state.connectedProtocol === 'P3' &&
+    sameRadioHost(state.endpoint, endpoint);
+}
+
+async function connectP3OrReuse(endpoint: string, force = false): Promise<RadioStateDto> {
+  let fresh: RadioStateDto | null = null;
+  try {
+    await apiConnectP3({
+      endpoint,
+      sampleRate: PROTOCOL3_SAMPLE_RATE,
+      ...(force ? { force } : {}),
+    });
+  } catch (err) {
+    if (!isAlreadyConnectedError(err)) throw err;
+    fresh = await fetchState();
+    if (!isReusableProtocol3State(fresh, endpoint)) {
+      throw err;
+    }
+  }
+  if (fresh) return fresh;
+  return fetchState();
+}
+
 // Discovery surfaces rawBoardId as a hex string like "0x01" (Hermes) /
 // "0x0A" (OrionMkII). Parse it back to a byte so we can hand it to the
 // connect endpoint — issue #171.
@@ -761,24 +804,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
         if (p3SidecarUnavailable) {
           throw new Error(PROTOCOL3_SIDECAR_UNCONFIGURED_TITLE);
         }
-        let fresh: RadioStateDto | null = null;
-        try {
-          await apiConnectP3({
-            endpoint: ep,
-            sampleRate: 1_536_000,
-          });
-        } catch (err) {
-          if (!errorMessage(err).includes('Already connected')) throw err;
-          fresh = await fetchState();
-          if (
-            fresh.status !== 'Connected' ||
-            fresh.connectedProtocol !== 'P3' ||
-            fresh.endpoint !== ep
-          ) {
-            throw err;
-          }
-        }
-        fresh ??= await fetchState();
+        const fresh = await connectP3OrReuse(ep);
         applyState(fresh);
         hydrateTxFromState(fresh);
       } else if (isP2) {
@@ -882,7 +908,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
       }
 
       const ep = `${ip}:${port}`;
-      const effectiveSampleRate: SampleRate = protocol === 'P3' ? 1_536_000 : sampleRate;
+      const effectiveSampleRate: SampleRate = protocol === 'P3' ? PROTOCOL3_SAMPLE_RATE : sampleRate;
       if (protocol === 'P3' && p3SidecarUnavailable) {
         setManualError(PROTOCOL3_SIDECAR_UNCONFIGURED_TITLE);
         return;
@@ -906,8 +932,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
         }
 
         if (protocol === 'P3') {
-          await apiConnectP3({ endpoint: ep, sampleRate: effectiveSampleRate, force });
-          const fresh = await fetchState();
+          const fresh = await connectP3OrReuse(ep, force);
           applyState(fresh);
           hydrateTxFromState(fresh);
         } else if (protocol === 'P2') {

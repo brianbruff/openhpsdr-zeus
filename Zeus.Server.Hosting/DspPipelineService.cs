@@ -79,6 +79,8 @@ public class DspPipelineService : BackgroundService,
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<DspPipelineService> _log;
     private double _displayMaxFrameRateHz;
+    private int _displayDecimation = DisplayPerformanceOptions.DefaultDisplayDecimation;
+    private int _waterfallUpdatePeriod = DisplayPerformanceOptions.DefaultWaterfallUpdatePeriod;
 
     /// <summary>
     /// Raised when an RX S-meter reading is available (approximately 5 Hz).
@@ -785,6 +787,8 @@ public class DspPipelineService : BackgroundService,
         new short[Zeus.Protocol2.Protocol2Client.WidebandFrameSamples];
     private readonly float[] _widebandPanBuf = new float[Width];
     private readonly float[] _widebandWfBuf = new float[Width];
+    private readonly float[] _widebandPanDecimatedBuf = new float[Width];
+    private readonly float[] _widebandWfDecimatedBuf = new float[Width];
     private bool _widebandFramePending;
     private int _widebandPendingSampleRateHz = Zeus.Protocol2.Protocol2Client.WidebandAdcSampleRateHz;
     private long _p3WidebandDisplayMissingLogMs;
@@ -1116,9 +1120,10 @@ public class DspPipelineService : BackgroundService,
     // The pipeline now owns its hot path via IRxPacketSink: when a radio
     // connects we AttachRxSink to the protocol client and every IQ/PS-feedback
     // packet flows synchronously into OnIqFrame/OnPsFeedbackFrame on the RX
-    // OS thread. WDSP calls happen inline on that thread. The 30 Hz display
+    // OS thread. WDSP calls happen inline on that thread. The display
     // Tick is piggybacked: OnIqFrame checks Stopwatch.GetTimestamp() and
-    // fires Tick inline when >= 33.33 ms have elapsed since the last tick.
+    // fires Tick inline when the configured interval has elapsed since the
+    // last tick.
     //
     // While a sink is attached the ExecuteAsync PeriodicTimer skips Tick
     // (the "watcher" pauses). With no sink attached (synthetic mode, pre-
@@ -1152,16 +1157,18 @@ public class DspPipelineService : BackgroundService,
     private Zeus.Protocol2.Protocol2Client? _attachedSinkP2;
     private long _lastTickStopwatchTicks;
     private long _lastInlineTickStopwatchTicks;
+    private long _lastInlineDisplayStopwatchTicks;
     private static readonly long TickPeriodStopwatchTicks =
         (long)(Stopwatch.Frequency / 30.0);
 
     // #1148 inline-tick cadence telemetry. The active RX packet thread drives
-    // Tick inline (one audio block per tick, nominally 30 Hz / 33.33 ms). If the
-    // radio-speaker UDP burst perturbs RX-IQ delivery, ticks slip from ~33 ms
-    // toward longer intervals and the host soundcard ring underruns (the #1148
-    // symptom). Emit mean / p99 / max interval + a count of intervals > 1.5×
-    // nominal (> 50 ms) at ~1 Hz. Single-threaded — only the active RX thread
-    // calls MaybeTickInline — so plain fields + a fixed ring suffice.
+    // the full audio/DSP Tick inline (one audio block per tick, normally 30 Hz /
+    // 33.33 ms). If the radio-speaker UDP burst perturbs RX-IQ delivery, ticks
+    // slip toward longer intervals and the host soundcard ring underruns (the
+    // #1148 symptom). Emit mean / p99 / max interval + a count of intervals
+    // beyond the historical 50 ms underrun threshold at ~1 Hz. Single-threaded
+    // — only the active RX thread calls MaybeTickInline — so plain fields + a
+    // fixed ring suffice.
     private long _tickDiagLastEmitTicks;
     private long _tickDiagCount;
     private long _tickDiagSumTicks;
@@ -1183,9 +1190,12 @@ public class DspPipelineService : BackgroundService,
     // ExecuteAsync), so no synchronisation is needed.
     private readonly float[] _panBuf = new float[Width];
     private readonly float[] _wfBuf = new float[Width];
+    private readonly float[] _panDecimatedBuf = new float[Width];
+    private readonly float[] _wfDecimatedBuf = new float[Width];
     private readonly object _displayFrameRateLock = new();
     private long _displayFrameBudgetLastTicks;
     private double _displayFrameBudget = 1.0;
+    private int _waterfallFrameCounter;
     // Per-receiver display/audio probe: 1 Hz tally of how often each receiver's
     // pan/wf pixout reports fresh data. If a secondary's wf advances but pan stays
     // ~0, the freeze is backend (pan pixout never goes fresh); if both advance like
@@ -1330,11 +1340,17 @@ public class DspPipelineService : BackgroundService,
         _displayMaxFrameRateHz =
             persistedDisplaySettings?.DisplayMaxFrameRateHz ??
             DisplayPerformanceOptions.Resolve(configuration).MaxFrameRateHz;
+        _displayDecimation =
+            DisplayPerformanceOptions.NormalizeDisplayDecimation(persistedDisplaySettings?.DisplayDecimation);
+        _waterfallUpdatePeriod =
+            DisplayPerformanceOptions.NormalizeWaterfallUpdatePeriod(persistedDisplaySettings?.WaterfallUpdatePeriod);
         if (_displayMaxFrameRateHz < DisplayPerformanceOptions.DefaultFrameRateHz)
         {
             _log.LogInformation(
-                "display.performance maxFrameRateHz={MaxFrameRateHz:F1}",
-                _displayMaxFrameRateHz);
+                "display.performance maxFrameRateHz={MaxFrameRateHz:F1} decimation={Decimation} waterfallUpdatePeriod={WaterfallUpdatePeriod}",
+                _displayMaxFrameRateHz,
+                _displayDecimation,
+                _waterfallUpdatePeriod);
         }
         Volatile.Write(ref _widebandDisplayEnabled,
             (persistedDisplaySettings?.WidebandDisplayEnabled ?? false) ? 1 : 0);
@@ -1502,28 +1518,47 @@ public class DspPipelineService : BackgroundService,
     {
         ApplyTxDisplaySettings(dto);
         SetWidebandDisplayEnabled(dto.WidebandDisplayEnabled);
-        SetDisplayMaxFrameRateHz(dto.DisplayMaxFrameRateHz);
+        SetDisplayPerformance(
+            dto.DisplayMaxFrameRateHz,
+            dto.DisplayDecimation,
+            dto.WaterfallUpdatePeriod);
     }
 
-    private void SetDisplayMaxFrameRateHz(double frameRateHz)
+    private void SetDisplayPerformance(
+        double frameRateHz,
+        int displayDecimation,
+        int waterfallUpdatePeriod)
     {
-        var next = DisplayPerformanceOptions.NormalizeFrameRate(frameRateHz);
+        var nextFrameRate = DisplayPerformanceOptions.NormalizeFrameRate(frameRateHz);
+        var nextDecimation = DisplayPerformanceOptions.NormalizeDisplayDecimation(displayDecimation);
+        var nextWaterfallUpdatePeriod =
+            DisplayPerformanceOptions.NormalizeWaterfallUpdatePeriod(waterfallUpdatePeriod);
         var changed = false;
         lock (_displayFrameRateLock)
         {
-            if (Math.Abs(_displayMaxFrameRateHz - next) < 0.0001)
+            if (Math.Abs(_displayMaxFrameRateHz - nextFrameRate) < 0.0001 &&
+                _displayDecimation == nextDecimation &&
+                _waterfallUpdatePeriod == nextWaterfallUpdatePeriod)
+            {
                 return;
-            _displayMaxFrameRateHz = next;
+            }
+            _displayMaxFrameRateHz = nextFrameRate;
+            _displayDecimation = nextDecimation;
+            _waterfallUpdatePeriod = nextWaterfallUpdatePeriod;
             _displayFrameBudgetLastTicks = 0;
             _displayFrameBudget = 1.0;
+            _waterfallFrameCounter = 0;
+            Volatile.Write(ref _lastInlineDisplayStopwatchTicks, 0);
             changed = true;
         }
 
         if (changed)
         {
             _log.LogInformation(
-                "display.performance maxFrameRateHz={MaxFrameRateHz:F1}",
-                next);
+                "display.performance maxFrameRateHz={MaxFrameRateHz:F1} decimation={Decimation} waterfallUpdatePeriod={WaterfallUpdatePeriod}",
+                nextFrameRate,
+                nextDecimation,
+                nextWaterfallUpdatePeriod);
         }
     }
 
@@ -1577,33 +1612,136 @@ public class DspPipelineService : BackgroundService,
 
     private uint NextDisplaySeq() => unchecked((uint)Interlocked.Increment(ref _seq));
 
-    private bool ShouldProcessDisplayFrame(long nowTicks)
+    private readonly record struct DisplayFramePlan(int Decimation, bool IncludeWaterfall);
+
+    private bool TryBeginDisplayFrame(long nowTicks, out DisplayFramePlan plan)
     {
         lock (_displayFrameRateLock)
         {
             var frameRateHz = _displayMaxFrameRateHz;
-            if (frameRateHz >= DisplayPerformanceOptions.DefaultFrameRateHz)
-                return true;
-
-            if (_displayFrameBudgetLastTicks == 0)
+            if (frameRateHz < DisplayPerformanceOptions.DefaultFrameRateHz)
             {
-                _displayFrameBudgetLastTicks = nowTicks;
-                _displayFrameBudget = 0.0;
-                return true;
+                if (_displayFrameBudgetLastTicks == 0)
+                {
+                    _displayFrameBudgetLastTicks = nowTicks;
+                    _displayFrameBudget = 0.0;
+                }
+                else
+                {
+                    var elapsedTicks = Math.Max(0, nowTicks - _displayFrameBudgetLastTicks);
+                    _displayFrameBudgetLastTicks = nowTicks;
+                    _displayFrameBudget = Math.Min(
+                        1.0,
+                        _displayFrameBudget + (elapsedTicks / (double)Stopwatch.Frequency * frameRateHz));
+
+                    if (_displayFrameBudget + 1.0e-9 < 1.0)
+                    {
+                        plan = default;
+                        return false;
+                    }
+
+                    _displayFrameBudget -= 1.0;
+                }
             }
 
-            var elapsedTicks = Math.Max(0, nowTicks - _displayFrameBudgetLastTicks);
-            _displayFrameBudgetLastTicks = nowTicks;
-            _displayFrameBudget = Math.Min(
-                1.0,
-                _displayFrameBudget + (elapsedTicks / (double)Stopwatch.Frequency * frameRateHz));
-
-            if (_displayFrameBudget + 1.0e-9 < 1.0)
-                return false;
-
-            _displayFrameBudget -= 1.0;
+            var waterfallPeriod = Math.Max(1, _waterfallUpdatePeriod);
+            var includeWaterfall = _waterfallFrameCounter == 0;
+            _waterfallFrameCounter = (_waterfallFrameCounter + 1) % waterfallPeriod;
+            plan = new DisplayFramePlan(_displayDecimation, includeWaterfall);
             return true;
         }
+    }
+
+    private long CurrentInlineDisplayPeriodTicks()
+    {
+        lock (_displayFrameRateLock)
+        {
+            return InlineDisplayPeriodTicks(
+                _displayMaxFrameRateHz,
+                TickPeriodStopwatchTicks,
+                Stopwatch.Frequency);
+        }
+    }
+
+    internal static long InlineDisplayPeriodTicks(
+        double displayMaxFrameRateHz,
+        long defaultPeriodTicks,
+        long stopwatchFrequency)
+    {
+        if (double.IsFinite(displayMaxFrameRateHz) &&
+            displayMaxFrameRateHz > DisplayPerformanceOptions.DefaultFrameRateHz &&
+            stopwatchFrequency > 0)
+        {
+            return Math.Max(1, (long)Math.Round(stopwatchFrequency / displayMaxFrameRateHz));
+        }
+
+        return defaultPeriodTicks;
+    }
+
+    internal static int DecimatedDisplayWidth(int sourceWidth, int displayDecimation)
+    {
+        var decimation = DisplayPerformanceOptions.NormalizeDisplayDecimation(displayDecimation);
+        return Math.Max(1, sourceWidth / decimation);
+    }
+
+    internal static int DownsampleDisplayBins(
+        ReadOnlySpan<float> source,
+        Span<float> destination,
+        int displayDecimation)
+    {
+        var decimation = DisplayPerformanceOptions.NormalizeDisplayDecimation(displayDecimation);
+        var width = DecimatedDisplayWidth(source.Length, decimation);
+        if (destination.Length < width)
+            throw new ArgumentException("Destination is smaller than the decimated display width.", nameof(destination));
+
+        if (decimation == 1)
+        {
+            source.CopyTo(destination);
+            return width;
+        }
+
+        for (int i = 0; i < width; i++)
+        {
+            var start = i * decimation;
+            var end = Math.Min(source.Length, start + decimation);
+            var max = float.NegativeInfinity;
+            for (int j = start; j < end; j++)
+            {
+                var v = source[j];
+                if (v > max) max = v;
+            }
+            destination[i] = max;
+        }
+
+        return width;
+    }
+
+    private static ReadOnlyMemory<float> FrameBins(
+        float[] source,
+        float[] decimated,
+        int displayDecimation,
+        out ushort width)
+    {
+        var decimation = DisplayPerformanceOptions.NormalizeDisplayDecimation(displayDecimation);
+        if (decimation == 1)
+        {
+            width = Width;
+            return source;
+        }
+
+        var decimatedWidth = DownsampleDisplayBins(source, decimated, decimation);
+        width = checked((ushort)decimatedWidth);
+        return decimated.AsMemory(0, decimatedWidth);
+    }
+
+    private static ReadOnlyMemory<float> InvalidFrameBins(
+        float[] scratch,
+        int displayDecimation,
+        out ushort width)
+    {
+        var decimatedWidth = DecimatedDisplayWidth(Width, displayDecimation);
+        width = checked((ushort)decimatedWidth);
+        return scratch.AsMemory(0, decimatedWidth);
     }
 
     private async Task RunWidebandDisplayAnalyzerAsync(CancellationToken ct)
@@ -1623,40 +1761,59 @@ public class DspPipelineService : BackgroundService,
 
             if (Volatile.Read(ref _widebandDisplayEnabled) == 0 || !_hub.DisplayStreamRequested)
                 continue;
-            if (!ShouldProcessDisplayFrame(Stopwatch.GetTimestamp()))
+            if (!TryBeginDisplayFrame(Stopwatch.GetTimestamp(), out var displayPlan))
                 continue;
 
             _widebandAnalyzer.Analyze(_widebandAnalysisSamples, sampleRateHz, _widebandPanBuf, _widebandWfBuf);
             SanitizeDisplayBuffer(_widebandPanBuf);
-            SanitizeDisplayBuffer(_widebandWfBuf);
+            if (displayPlan.IncludeWaterfall)
+                SanitizeDisplayBuffer(_widebandWfBuf);
+
+            var panBins = FrameBins(
+                _widebandPanBuf,
+                _widebandPanDecimatedBuf,
+                displayPlan.Decimation,
+                out var frameWidth);
+            var wfBins = displayPlan.IncludeWaterfall
+                ? FrameBins(
+                    _widebandWfBuf,
+                    _widebandWfDecimatedBuf,
+                    displayPlan.Decimation,
+                    out _)
+                : InvalidFrameBins(_widebandWfDecimatedBuf, displayPlan.Decimation, out _);
+            var bodyFlags = DisplayBodyFlags.PanValid;
+            if (displayPlan.IncludeWaterfall)
+                bodyFlags |= DisplayBodyFlags.WfValid;
 
             double nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var frame = new DisplayFrame(
                 Seq: NextDisplaySeq(),
                 TsUnixMs: nowMs,
                 RxId: 0,
-                BodyFlags: DisplayBodyFlags.PanValid | DisplayBodyFlags.WfValid,
-                Width: Width,
+                BodyFlags: bodyFlags,
+                Width: frameWidth,
                 CenterHz: WidebandSpectrumAnalyzer.DisplayCenterHz,
-                HzPerPixel: WidebandSpectrumAnalyzer.HzPerPixel,
-                PanDb: _widebandPanBuf,
-                WfDb: _widebandWfBuf);
+                HzPerPixel: WidebandSpectrumAnalyzer.HzPerPixel * displayPlan.Decimation,
+                PanDb: panBins,
+                WfDb: wfBins);
 
             lock (_calPanLock)
             {
                 Array.Copy(_widebandPanBuf, _calPanSnapshot, Width);
-                Array.Copy(_widebandWfBuf, _diagWfSnapshot, Width);
+                if (displayPlan.IncludeWaterfall)
+                    Array.Copy(_widebandWfBuf, _diagWfSnapshot, Width);
                 _calPanHzPerPixel = WidebandSpectrumAnalyzer.HzPerPixel;
                 _calPanCenterHz = WidebandSpectrumAnalyzer.DisplayCenterHz;
                 _calPanSnapshotMs = (long)nowMs;
-                _diagWfSnapshotMs = (long)nowMs;
+                if (displayPlan.IncludeWaterfall)
+                    _diagWfSnapshotMs = (long)nowMs;
                 _diagDisplayFrameMs = (long)nowMs;
                 _diagDisplaySeq = frame.Seq;
                 _diagDisplayFrameCount++;
                 _diagLastPanValid = true;
-                _diagLastWfValid = true;
+                _diagLastWfValid = displayPlan.IncludeWaterfall;
                 _diagLastPanSource = "wideband";
-                _diagLastWfSource = "wideband";
+                _diagLastWfSource = displayPlan.IncludeWaterfall ? "wideband" : "waterfall-decimated";
                 _diagLastKeyed = _keyed;
                 _diagLastPsMonitorRequested = false;
                 _diagLastPsFeedbackCorrecting = false;
@@ -1674,7 +1831,7 @@ public class DspPipelineService : BackgroundService,
         while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
         {
             if (!ShouldPollP3WidebandDisplay()) continue;
-            if (!ShouldProcessDisplayFrame(Stopwatch.GetTimestamp())) continue;
+            if (!TryBeginDisplayFrame(Stopwatch.GetTimestamp(), out var displayPlan)) continue;
 
             Protocol3SidecarDisplayFrame? sidecarFrame;
             try
@@ -1696,7 +1853,7 @@ public class DspPipelineService : BackgroundService,
             }
             if (!ShouldPollP3WidebandDisplay()) continue;
 
-            PublishP3WidebandDisplayFrame(sidecarFrame);
+            PublishP3WidebandDisplayFrame(sidecarFrame, displayPlan);
         }
     }
 
@@ -1706,40 +1863,61 @@ public class DspPipelineService : BackgroundService,
         Volatile.Read(ref _widebandDisplayEnabled) != 0 &&
         _hub.DisplayStreamRequested;
 
-    private void PublishP3WidebandDisplayFrame(Protocol3SidecarDisplayFrame source)
+    private void PublishP3WidebandDisplayFrame(
+        Protocol3SidecarDisplayFrame source,
+        DisplayFramePlan displayPlan)
     {
         if (source.PanDb.Length != Width || source.WfDb.Length != Width) return;
 
         SanitizeDisplayBuffer(source.PanDb);
-        SanitizeDisplayBuffer(source.WfDb);
+        if (displayPlan.IncludeWaterfall)
+            SanitizeDisplayBuffer(source.WfDb);
+
+        var panBins = FrameBins(
+            source.PanDb,
+            _widebandPanDecimatedBuf,
+            displayPlan.Decimation,
+            out var frameWidth);
+        var wfBins = displayPlan.IncludeWaterfall
+            ? FrameBins(
+                source.WfDb,
+                _widebandWfDecimatedBuf,
+                displayPlan.Decimation,
+                out _)
+            : InvalidFrameBins(_widebandWfDecimatedBuf, displayPlan.Decimation, out _);
+        var bodyFlags = source.BodyFlags | DisplayBodyFlags.PanValid;
+        if (!displayPlan.IncludeWaterfall)
+            bodyFlags &= ~DisplayBodyFlags.WfValid;
 
         double nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var frame = new DisplayFrame(
             Seq: NextDisplaySeq(),
             TsUnixMs: nowMs,
             RxId: source.RxId,
-            BodyFlags: source.BodyFlags,
-            Width: Width,
+            BodyFlags: bodyFlags,
+            Width: frameWidth,
             CenterHz: source.CenterHz,
-            HzPerPixel: source.HzPerPixel,
-            PanDb: source.PanDb,
-            WfDb: source.WfDb);
+            HzPerPixel: source.HzPerPixel * displayPlan.Decimation,
+            PanDb: panBins,
+            WfDb: wfBins);
 
         lock (_calPanLock)
         {
             Array.Copy(source.PanDb, _calPanSnapshot, Width);
-            Array.Copy(source.WfDb, _diagWfSnapshot, Width);
+            if (displayPlan.IncludeWaterfall)
+                Array.Copy(source.WfDb, _diagWfSnapshot, Width);
             _calPanHzPerPixel = source.HzPerPixel;
             _calPanCenterHz = source.CenterHz;
             _calPanSnapshotMs = (long)nowMs;
-            _diagWfSnapshotMs = (long)nowMs;
+            if (displayPlan.IncludeWaterfall)
+                _diagWfSnapshotMs = (long)nowMs;
             _diagDisplayFrameMs = (long)nowMs;
             _diagDisplaySeq = frame.Seq;
             _diagDisplayFrameCount++;
             _diagLastPanValid = true;
-            _diagLastWfValid = true;
+            _diagLastWfValid = displayPlan.IncludeWaterfall;
             _diagLastPanSource = "p3-wideband";
-            _diagLastWfSource = "p3-wideband";
+            _diagLastWfSource = displayPlan.IncludeWaterfall ? "p3-wideband" : "waterfall-decimated";
             _diagLastKeyed = _keyed;
             _diagLastPsMonitorRequested = false;
             _diagLastPsFeedbackCorrecting = false;
@@ -5707,8 +5885,9 @@ public class DspPipelineService : BackgroundService,
     //      sub-receiver inside the same captured window),
     //   4) fire the RxIqAvailable test seam,
     //   5) return the ArrayPool buffer that Protocol1Client.RxLoop rented,
-    //   6) check whether 33.33 ms have elapsed since the last Tick and, if
-    //      so, run Tick INLINE on this thread (no PeriodicTimer involvement).
+    //   6) check whether the configured inline display interval has elapsed
+    //      since the last Tick and, if so, run Tick INLINE on this thread (no
+    //      PeriodicTimer involvement).
     //
     // Exceptions cannot propagate — the protocol client catches and logs at
     // p1.rx.sink_threw, then continues. Sink-thrown exceptions still leak the
@@ -5767,7 +5946,7 @@ public class DspPipelineService : BackgroundService,
         // stream — the normal tick pacer — stops entirely for the keyed burst,
         // and without this the panadapter/waterfall freeze for the whole
         // transmission. Same RX-loop thread as OnIqFrame; the elapsed-time
-        // throttle inside keeps the cadence at ~30 Hz when both streams flow
+        // throttle inside keeps the configured cadence when both streams flow
         // (HL2 4-DDC keeps DDC0 user RX alive during PS, so this is a no-op
         // there in practice).
         MaybeTickInline();
@@ -5837,7 +6016,8 @@ public class DspPipelineService : BackgroundService,
         // during the burst — the same UX as the dual-ADC G2/Orion family.
         // Same RX-loop thread as OnIqFrame (HandlePsPairedPacket runs on the
         // RxLoop thread), and MaybeTickInline's elapsed-time gate throttles to
-        // ~30 Hz on dual-ADC boards where IQ and feedback frames both flow.
+        // the configured cadence on dual-ADC boards where IQ and feedback
+        // frames both flow.
         MaybeTickInline();
     }
 
@@ -5906,7 +6086,25 @@ public class DspPipelineService : BackgroundService,
                 if (last != 0) RecordTickInterval(now - last, now);
                 Volatile.Write(ref _lastTickStopwatchTicks, now);
                 Volatile.Write(ref _lastInlineTickStopwatchTicks, now);
+                Volatile.Write(ref _lastInlineDisplayStopwatchTicks, now);
             }
+            return;
+        }
+
+        var displayPeriod = CurrentInlineDisplayPeriodTicks();
+        if (displayPeriod >= TickPeriodStopwatchTicks ||
+            !_hub.DisplayStreamRequested ||
+            Volatile.Read(ref _widebandDisplayEnabled) != 0)
+        {
+            return;
+        }
+
+        var lastDisplay = Volatile.Read(ref _lastInlineDisplayStopwatchTicks);
+        if (!ShouldTickInline(now, lastDisplay, displayPeriod)) return;
+
+        if (Tick(_panBuf, _wfBuf, _audioBuf, displayOnly: true))
+        {
+            Volatile.Write(ref _lastInlineDisplayStopwatchTicks, now);
         }
     }
 
@@ -5914,7 +6112,7 @@ public class DspPipelineService : BackgroundService,
     /// Pure inline-tick throttle: tick on the very first call, then at most
     /// once per <paramref name="periodTicks"/>. Extracted static + internal so
     /// the cadence contract is unit-testable — it is what keeps the display at
-    /// ~30 Hz no matter how many producers call <see cref="MaybeTickInline"/>
+    /// the configured interval no matter how many producers call <see cref="MaybeTickInline"/>
     /// (user-RX IQ frames AND PS-feedback frames both pace it; on a single-ADC
     /// time-mux board the feedback frames are the ONLY pacer during a keyed
     /// burst — see the P2 <c>OnPsFeedbackFrame</c> sink).
@@ -6126,13 +6324,13 @@ public class DspPipelineService : BackgroundService,
         return count;
     }
 
-    private bool Tick(float[] panBuf, float[] wfBuf, float[] audioBuf)
+    private bool Tick(float[] panBuf, float[] wfBuf, float[] audioBuf, bool displayOnly = false)
     {
         // issue #1167: the timer thread and the RX inline-tick thread can both
         // be live during the sink attach/detach window. FloatSpscRing is strict
         // single-producer; this gate guarantees only one Tick runs at a time so
-        // the producer side stays single-threaded. ~30 Hz, so the CompareExchange
-        // is free. A skipped tick is harmless — the holder is ticking ~now.
+        // the producer side stays single-threaded. A skipped tick is harmless
+        // — the holder is ticking ~now.
         if (!_tickGate.TryEnter()) { Interlocked.Increment(ref _tickReentrySkips); return false; }
         try
         {
@@ -6184,10 +6382,11 @@ public class DspPipelineService : BackgroundService,
         // appropriate; they just do not pin the high-rate display stream on.
         bool widebandDisplayActive = RefreshWidebandDisplayState();
         bool displayStreamRequested = _hub.DisplayStreamRequested;
+        DisplayFramePlan displayPlan = default;
         bool hasDisplaySubscribers =
             displayStreamRequested &&
             !widebandDisplayActive &&
-            ShouldProcessDisplayFrame(Stopwatch.GetTimestamp());
+            TryBeginDisplayFrame(Stopwatch.GetTimestamp(), out displayPlan);
         // Audio path uses nowMs too (it runs even when no clients are connected,
         // for in-process RxAudioAvailable subscribers like TCI). Hoisted above
         // the display gate to keep one timestamp call per tick.
@@ -6223,7 +6422,8 @@ public class DspPipelineService : BackgroundService,
                     && (psFeedbackCorrecting = engine.GetPsStageMeters().Correcting))
                 {
                     pan = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Panadapter, panBuf);
-                    wf = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Waterfall, wfBuf);
+                    if (displayPlan.IncludeWaterfall)
+                        wf = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Waterfall, wfBuf);
                     psFbPanUsed = pan;
                     psFbWfUsed = wf;
                     if (pan) panSource = "ps-feedback";
@@ -6234,7 +6434,7 @@ public class DspPipelineService : BackgroundService,
                     pan = engine.TryGetTxDisplayPixels(DisplayPixout.Panadapter, panBuf);
                     if (pan) panSource = "tx";
                 }
-                if (!wf)
+                if (displayPlan.IncludeWaterfall && !wf)
                 {
                     wf = engine.TryGetTxDisplayPixels(DisplayPixout.Waterfall, wfBuf);
                     if (wf) wfSource = "tx";
@@ -6259,7 +6459,7 @@ public class DspPipelineService : BackgroundService,
                 pan = engine.TryGetDisplayPixels(channel, DisplayPixout.Panadapter, panBuf);
                 if (pan) panSource = "rx";
             }
-            if (!wf)
+            if (displayPlan.IncludeWaterfall && !wf)
             {
                 wf = engine.TryGetDisplayPixels(channel, DisplayPixout.Waterfall, wfBuf);
                 if (wf) wfSource = "rx";
@@ -6283,7 +6483,7 @@ public class DspPipelineService : BackgroundService,
                     pan = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Panadapter, panBuf);
                     if (pan) { panSource = "ps-feedback"; psFbPanUsed = true; }
                 }
-                if (!wf)
+                if (displayPlan.IncludeWaterfall && !wf)
                 {
                     wf = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Waterfall, wfBuf);
                     if (wf) { wfSource = "ps-feedback"; psFbWfUsed = true; }
@@ -6345,6 +6545,8 @@ public class DspPipelineService : BackgroundService,
             var flags = DisplayBodyFlags.None;
             if (pan) flags |= DisplayBodyFlags.PanValid;
             if (wf) flags |= DisplayBodyFlags.WfValid;
+            if (!displayPlan.IncludeWaterfall && !wf)
+                wfSource = "waterfall-decimated";
 
             // Zoom narrows the analyzer's display span to sampleRate/level around
             // the VFO, so hzPerPixel shrinks by the same factor. Client re-uses
@@ -6394,21 +6596,27 @@ public class DspPipelineService : BackgroundService,
                     _diagWfSnapshotMs = (long)nowMs;
                 }
             }
+            var panFrameBins = pan
+                ? FrameBins(panBuf, _panDecimatedBuf, displayPlan.Decimation, out var frameWidth)
+                : InvalidFrameBins(_panDecimatedBuf, displayPlan.Decimation, out frameWidth);
+            var wfFrameBins = wf
+                ? FrameBins(wfBuf, _wfDecimatedBuf, displayPlan.Decimation, out _)
+                : InvalidFrameBins(_wfDecimatedBuf, displayPlan.Decimation, out _);
 
             var frame = new DisplayFrame(
                 Seq: NextDisplaySeq(),
                 TsUnixMs: nowMs,
                 RxId: 0,
                 BodyFlags: flags,
-                Width: Width,
+                Width: frameWidth,
                 // Panadapter centres on the radio's actual LO, which equals
                 // VfoHz outside CW and VfoHz ∓ cw_pitch in CWU/CWL. The CW filter
                 // (audio passband centred on cw_pitch) then renders on top of
                 // the dial line via PassbandOverlay's `centerHz + filterLow..high`.
                 CenterHz: centerHz,
-                HzPerPixel: hzPerPixel,
-                PanDb: panBuf,
-                WfDb: wfBuf);
+                HzPerPixel: hzPerPixel * displayPlan.Decimation,
+                PanDb: panFrameBins,
+                WfDb: wfFrameBins);
 
             lock (_calPanLock)
             {
@@ -6440,13 +6648,20 @@ public class DspPipelineService : BackgroundService,
                 anySecondary = true;
 
                 bool secPan = engine.TryGetDisplayPixels(secChan, DisplayPixout.Panadapter, rx.PanBuf);
-                bool secWf = engine.TryGetDisplayPixels(secChan, DisplayPixout.Waterfall, rx.WfBuf);
+                bool secWf = displayPlan.IncludeWaterfall &&
+                    engine.TryGetDisplayPixels(secChan, DisplayPixout.Waterfall, rx.WfBuf);
                 if (secPan) { Array.Reverse(rx.PanBuf); SanitizeDisplayBuffer(rx.PanBuf); rx.PanCnt++; }
                 if (secWf) { Array.Reverse(rx.WfBuf); SanitizeDisplayBuffer(rx.WfBuf); rx.WfCnt++; }
 
                 var secFlags = DisplayBodyFlags.None;
                 if (secPan) secFlags |= DisplayBodyFlags.PanValid;
                 if (secWf) secFlags |= DisplayBodyFlags.WfValid;
+                var secPanBins = secPan
+                    ? FrameBins(rx.PanBuf, _panDecimatedBuf, displayPlan.Decimation, out var secFrameWidth)
+                    : InvalidFrameBins(_panDecimatedBuf, displayPlan.Decimation, out secFrameWidth);
+                var secWfBins = secWf
+                    ? FrameBins(rx.WfBuf, _wfDecimatedBuf, displayPlan.Decimation, out _)
+                    : InvalidFrameBins(_wfDecimatedBuf, displayPlan.Decimation, out _);
 
                 UpdateRxLo(ri, state);
                 var secFrame = new DisplayFrame(
@@ -6454,11 +6669,11 @@ public class DspPipelineService : BackgroundService,
                     TsUnixMs: nowMs,
                     RxId: (byte)ri,
                     BodyFlags: secFlags,
-                    Width: Width,
+                    Width: secFrameWidth,
                     CenterHz: rx.LoHz,
-                    HzPerPixel: hzPerPixel,
-                    PanDb: rx.PanBuf,
-                    WfDb: rx.WfBuf);
+                    HzPerPixel: hzPerPixel * displayPlan.Decimation,
+                    PanDb: secPanBins,
+                    WfDb: secWfBins);
                 _hub.Broadcast(secFrame);
             }
 
@@ -6490,6 +6705,9 @@ public class DspPipelineService : BackgroundService,
             // fresh client doesn't pick up a stale gate counter.
             if (!displayStreamRequested) _psMonitorTickCount = 0;
         }
+
+        if (displayOnly)
+            return true;
 
         // Audio broadcast — when TX monitor is on, replace RX audio with the
         // monitor channel's demodulated TX audio so the operator hears the

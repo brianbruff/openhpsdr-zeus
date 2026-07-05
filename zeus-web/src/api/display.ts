@@ -34,11 +34,15 @@ export type DisplaySettings = {
   txDisplayAvgTauMs: number | null;
   widebandDisplayEnabled: boolean;
   displayMaxFrameRateHz: number;
+  displayDecimation: number;
+  waterfallUpdatePeriod: number;
 };
 
 // Matches backend DisplaySettingsStore.DefaultRxTraceColor.
 const DEFAULT_RX_TRACE_COLOR = '#FFA028';
 const DEFAULT_DISPLAY_MAX_FRAME_RATE_HZ = 30;
+const DEFAULT_DISPLAY_DECIMATION = 1;
+const DEFAULT_WATERFALL_UPDATE_PERIOD = 1;
 
 type DisplaySettingsDtoRaw = {
   mode?: string;
@@ -60,6 +64,8 @@ type DisplaySettingsDtoRaw = {
   txDisplayAvgTauMs?: number | null;
   widebandDisplayEnabled?: boolean | null;
   displayMaxFrameRateHz?: number | null;
+  displayDecimation?: number | null;
+  waterfallUpdatePeriod?: number | null;
 };
 
 function normalizeRxTraceColor(raw: string | null | undefined): string {
@@ -73,7 +79,12 @@ function normalizeDbValue(raw: number | null | undefined): number | null {
 
 function normalizeDisplayMaxFrameRateHz(raw: number | null | undefined): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return DEFAULT_DISPLAY_MAX_FRAME_RATE_HZ;
-  return Math.min(DEFAULT_DISPLAY_MAX_FRAME_RATE_HZ, Math.max(1, raw));
+  return Math.min(640, Math.max(1, raw));
+}
+
+function normalizeIntRange(raw: number | null | undefined, min: number, max: number, fallback: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(raw)));
 }
 
 function normalize(raw: DisplaySettingsDtoRaw): DisplaySettings {
@@ -105,6 +116,8 @@ function normalize(raw: DisplaySettingsDtoRaw): DisplaySettings {
     txDisplayAvgTauMs: normalizeDbValue(raw.txDisplayAvgTauMs),
     widebandDisplayEnabled: raw.widebandDisplayEnabled === true,
     displayMaxFrameRateHz: normalizeDisplayMaxFrameRateHz(raw.displayMaxFrameRateHz),
+    displayDecimation: normalizeIntRange(raw.displayDecimation, 1, 16, DEFAULT_DISPLAY_DECIMATION),
+    waterfallUpdatePeriod: normalizeIntRange(raw.waterfallUpdatePeriod, 1, 1000, DEFAULT_WATERFALL_UPDATE_PERIOD),
   };
 }
 
@@ -134,6 +147,8 @@ export async function updateDisplaySettings(
   },
   widebandDisplayEnabled?: boolean | null,
   displayMaxFrameRateHz?: number | null,
+  displayDecimation?: number | null,
+  waterfallUpdatePeriod?: number | null,
   signal?: AbortSignal,
 ): Promise<DisplaySettings> {
   const res = await fetch('/api/display-settings', {
@@ -157,6 +172,8 @@ export async function updateDisplaySettings(
       txDisplayAvgTauMs: txDisplay?.avgTauMs,
       widebandDisplayEnabled,
       displayMaxFrameRateHz,
+      displayDecimation,
+      waterfallUpdatePeriod,
     }),
     signal,
   });

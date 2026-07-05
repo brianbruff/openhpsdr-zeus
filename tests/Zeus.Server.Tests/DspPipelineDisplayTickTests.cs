@@ -13,7 +13,8 @@ namespace Zeus.Server.Tests;
 /// <see cref="DspPipelineService.ShouldTickInline"/>, so this predicate is
 /// what guarantees (a) the panadapter/waterfall keep updating during a G2E PS
 /// transmission instead of freezing, and (b) dual-ADC boards — where IQ and
-/// feedback frames flow simultaneously — still tick at ~30 Hz, not 60.
+/// feedback frames flow simultaneously — still tick only once per configured
+/// interval, not once per producer.
 /// </summary>
 public sealed class DspPipelineDisplayTickTests
 {
@@ -102,5 +103,39 @@ public sealed class DspPipelineDisplayTickTests
             lastInlineTicks: 1000,
             lastAnyTickTicks: 1000 + Period * 2,
             periodTicks: Period));
+    }
+
+    [Fact]
+    public void InlineDisplayPeriod_UsesDisplayFpsAboveDefault()
+    {
+        Assert.Equal(Period, DspPipelineService.InlineDisplayPeriodTicks(
+            displayMaxFrameRateHz: 30,
+            defaultPeriodTicks: Period,
+            stopwatchFrequency: 1200));
+
+        Assert.Equal(10, DspPipelineService.InlineDisplayPeriodTicks(
+            displayMaxFrameRateHz: 120,
+            defaultPeriodTicks: Period,
+            stopwatchFrequency: 1200));
+    }
+
+    [Fact]
+    public void DownsampleDisplayBins_UsesMaxPerDecimatedBucket()
+    {
+        var source = new float[] { -100, -80, -95, -70, -120, -110, -90, -60 };
+        var dest = new float[8];
+
+        var width = DspPipelineService.DownsampleDisplayBins(source, dest, displayDecimation: 2);
+
+        Assert.Equal(4, width);
+        Assert.Equal(new[] { -80f, -70f, -110f, -60f }, dest.AsSpan(0, width).ToArray());
+    }
+
+    [Fact]
+    public void DecimatedDisplayWidth_ClampsFactorAndNeverReturnsZero()
+    {
+        Assert.Equal(2048, DspPipelineService.DecimatedDisplayWidth(2048, 1));
+        Assert.Equal(128, DspPipelineService.DecimatedDisplayWidth(2048, 16));
+        Assert.Equal(1, DspPipelineService.DecimatedDisplayWidth(8, 99));
     }
 }

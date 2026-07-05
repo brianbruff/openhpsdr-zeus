@@ -2308,7 +2308,9 @@ public sealed record DisplaySettingsDto(
     int? TxDisplayWindow = null,
     double? TxDisplayAvgTauMs = null,
     bool WidebandDisplayEnabled = false,
-    double DisplayMaxFrameRateHz = 30.0);
+    double DisplayMaxFrameRateHz = 30.0,
+    int DisplayDecimation = 1,
+    int WaterfallUpdatePeriod = 1);
 
 public sealed record DisplaySettingsSetRequest(
     string Mode,
@@ -2327,7 +2329,9 @@ public sealed record DisplaySettingsSetRequest(
     int? TxDisplayWindow = null,
     double? TxDisplayAvgTauMs = null,
     bool? WidebandDisplayEnabled = null,
-    double? DisplayMaxFrameRateHz = null);
+    double? DisplayMaxFrameRateHz = null,
+    int? DisplayDecimation = null,
+    int? WaterfallUpdatePeriod = null);
 
 // Server-side mirror of the frontend Signal Intelligence weak-signal display
 // controls. The DSP math remains in zeus-web's signal-estimator; this DTO lets

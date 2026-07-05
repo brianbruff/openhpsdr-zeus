@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// Runtime display-performance knobs. These are process-level startup options,
-// not persisted operator preferences, so a constrained host can be dialed down
-// without rebuilding or changing the radio/DSP/audio tick cadence.
+// Runtime display-performance defaults and normalization bounds. Startup
+// options provide the initial cap; persisted operator preferences can tune the
+// same display path without rebuilding.
 
 using System.Globalization;
 using Microsoft.Extensions.Configuration;
@@ -20,7 +20,13 @@ public static class DisplayPerformanceOptions
     public const double DefaultFrameRateHz = 30.0;
     public const double LowPowerFrameRateHz = 15.0;
     public const double MinFrameRateHz = 1.0;
-    public const double MaxFrameRateHz = 30.0;
+    public const double MaxFrameRateHz = 640.0;
+    public const int DefaultDisplayDecimation = 1;
+    public const int MinDisplayDecimation = 1;
+    public const int MaxDisplayDecimation = 16;
+    public const int DefaultWaterfallUpdatePeriod = 1;
+    public const int MinWaterfallUpdatePeriod = 1;
+    public const int MaxWaterfallUpdatePeriod = 1000;
 
     public static DisplayPerformanceSnapshot Resolve(
         IConfiguration? configuration = null,
@@ -33,7 +39,7 @@ public static class DisplayPerformanceOptions
             TryParseFrameRate(configuration?["Zeus:Display:FrameRateHz"], out envFps))
         {
             return new DisplayPerformanceSnapshot(
-                Profile: envFps < DefaultFrameRateHz ? "custom" : "normal",
+                Profile: Math.Abs(envFps - DefaultFrameRateHz) < 0.0001 ? "normal" : "custom",
                 MaxFrameRateHz: envFps,
                 LowPower: envFps < DefaultFrameRateHz,
                 PreferWebglWaterfall: envFps < DefaultFrameRateHz);
@@ -90,6 +96,16 @@ public static class DisplayPerformanceOptions
         raw.HasValue && double.IsFinite(raw.Value)
             ? NormalizeFrameRate(raw.Value)
             : NormalizeFrameRate(fallback);
+
+    public static int NormalizeDisplayDecimation(int? raw) =>
+        raw.HasValue
+            ? Math.Clamp(raw.Value, MinDisplayDecimation, MaxDisplayDecimation)
+            : DefaultDisplayDecimation;
+
+    public static int NormalizeWaterfallUpdatePeriod(int? raw) =>
+        raw.HasValue
+            ? Math.Clamp(raw.Value, MinWaterfallUpdatePeriod, MaxWaterfallUpdatePeriod)
+            : DefaultWaterfallUpdatePeriod;
 
     private static string? FirstNonBlank(params string?[] values)
     {

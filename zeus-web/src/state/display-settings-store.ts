@@ -178,13 +178,33 @@ export const WATERFALL_SCROLL_SPEED_MIN = 0.25;
 export const WATERFALL_SCROLL_SPEED_MAX = 2.5;
 export const WATERFALL_SCROLL_SPEED_STEP = 0.05;
 export const DEFAULT_WF_SCROLL_SPEED = 1;
-export const DISPLAY_FRAME_RATES = [10, 15, 20, 30] as const;
+export const DISPLAY_FRAME_RATES = [15, 30, 60, 120, 144, 240] as const;
 export const DEFAULT_DISPLAY_MAX_FRAME_RATE_HZ = 30;
+export const DISPLAY_MAX_FRAME_RATE_HZ_MIN = 1;
+export const DISPLAY_MAX_FRAME_RATE_HZ_MAX = 640;
+export const DEFAULT_DISPLAY_DECIMATION = 1;
+export const DISPLAY_DECIMATION_MIN = 1;
+export const DISPLAY_DECIMATION_MAX = 16;
+export const DEFAULT_WATERFALL_UPDATE_PERIOD = 1;
+export const WATERFALL_UPDATE_PERIOD_MIN = 1;
+export const WATERFALL_UPDATE_PERIOD_MAX = 1000;
 
 export function normalizeDisplayMaxFrameRateHz(raw: unknown): number {
   const n = typeof raw === 'number' ? raw : Number(raw);
   if (!Number.isFinite(n)) return DEFAULT_DISPLAY_MAX_FRAME_RATE_HZ;
-  return Math.min(DEFAULT_DISPLAY_MAX_FRAME_RATE_HZ, Math.max(1, n));
+  return Math.min(DISPLAY_MAX_FRAME_RATE_HZ_MAX, Math.max(DISPLAY_MAX_FRAME_RATE_HZ_MIN, n));
+}
+
+export function normalizeDisplayDecimation(raw: unknown): number {
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_DISPLAY_DECIMATION;
+  return Math.min(DISPLAY_DECIMATION_MAX, Math.max(DISPLAY_DECIMATION_MIN, Math.round(n)));
+}
+
+export function normalizeWaterfallUpdatePeriod(raw: unknown): number {
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_WATERFALL_UPDATE_PERIOD;
+  return Math.min(WATERFALL_UPDATE_PERIOD_MAX, Math.max(WATERFALL_UPDATE_PERIOD_MIN, Math.round(n)));
 }
 
 function normalizeWaterfallScrollSpeed(raw: unknown): number {
@@ -374,6 +394,8 @@ function scheduleDbRangeSave(): void {
       undefined,
       s.widebandDisplayEnabled,
       s.displayMaxFrameRateHz,
+      s.displayDecimation,
+      s.waterfallUpdatePeriod,
     );
   }, 1000);
 }
@@ -408,6 +430,8 @@ function scheduleTxDisplaySave(): void {
       },
       s.widebandDisplayEnabled,
       s.displayMaxFrameRateHz,
+      s.displayDecimation,
+      s.waterfallUpdatePeriod,
     );
   }, 500);
 }
@@ -494,9 +518,12 @@ export type DisplaySettingsState = {
   // the bounded wideband ADC stream only while a display client is mounted and
   // renders RX0 panadapter/waterfall as a 0-60 MHz view.
   widebandDisplayEnabled: boolean;
-  // Backend display/analyzer frame cap. Audio and DSP ticks keep their native
-  // cadence; this only gates generated panadapter/waterfall frames.
+  // Backend display/analyzer frame cap. Values below the legacy 30 Hz cadence
+  // gate generated frames; values above it let the connected-radio inline
+  // display path run faster on hosts that can keep up.
   displayMaxFrameRateHz: number;
+  displayDecimation: number;
+  waterfallUpdatePeriod: number;
   colormap: ColormapId;
   waterfallScrollSpeed: number;
   // Panadapter background overlay mode + (optional) user image. See the
@@ -558,6 +585,8 @@ export type DisplaySettingsState = {
   setTxAutoRange: (v: boolean) => void;
   setWidebandDisplayEnabled: (v: boolean) => Promise<void>;
   setDisplayMaxFrameRateHz: (v: number) => Promise<void>;
+  setDisplayDecimation: (v: number) => Promise<void>;
+  setWaterfallUpdatePeriod: (v: number) => Promise<void>;
   // Fit the TX windows to a frame of live TX pixels (no-op when off / empty).
   // Driven from the waterfall ingest while keyed.
   updateTxAutoRange: (pixels: Float32Array) => void;
@@ -650,6 +679,8 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   txAutoRange: DEFAULT_TX_AUTO_RANGE,
   widebandDisplayEnabled: false,
   displayMaxFrameRateHz: DEFAULT_DISPLAY_MAX_FRAME_RATE_HZ,
+  displayDecimation: DEFAULT_DISPLAY_DECIMATION,
+  waterfallUpdatePeriod: DEFAULT_WATERFALL_UPDATE_PERIOD,
   colormap: 'blue',
   waterfallScrollSpeed: initialWaterfallScrollSpeed,
   // Defaults until the server-side fetch lands (see hydrateFromServer at the
@@ -864,6 +895,8 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
         undefined,
         widebandDisplayEnabled,
         s.displayMaxFrameRateHz,
+        s.displayDecimation,
+        s.waterfallUpdatePeriod,
       );
       if (result.widebandDisplayEnabled !== widebandDisplayEnabled) {
         set({ widebandDisplayEnabled: result.widebandDisplayEnabled });
@@ -893,12 +926,76 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
         undefined,
         s.widebandDisplayEnabled,
         next,
+        s.displayDecimation,
+        s.waterfallUpdatePeriod,
       );
       if (result.displayMaxFrameRateHz !== next) {
         set({ displayMaxFrameRateHz: result.displayMaxFrameRateHz });
       }
     } catch {
       set({ displayMaxFrameRateHz: prev });
+    }
+  },
+  setDisplayDecimation: async (value) => {
+    const next = normalizeDisplayDecimation(value);
+    const prev = get().displayDecimation;
+    set({ displayDecimation: next });
+    try {
+      const s = get();
+      const result = await updateDisplaySettings(
+        s.panBackground,
+        s.backgroundImageFit,
+        s.rxTraceColor,
+        s.dbMin,
+        s.dbMax,
+        s.txDbMin,
+        s.txDbMax,
+        s.wfDbMin,
+        s.wfDbMax,
+        s.wfTxDbMin,
+        s.wfTxDbMax,
+        undefined,
+        s.widebandDisplayEnabled,
+        s.displayMaxFrameRateHz,
+        next,
+        s.waterfallUpdatePeriod,
+      );
+      if (result.displayDecimation !== next) {
+        set({ displayDecimation: result.displayDecimation });
+      }
+    } catch {
+      set({ displayDecimation: prev });
+    }
+  },
+  setWaterfallUpdatePeriod: async (value) => {
+    const next = normalizeWaterfallUpdatePeriod(value);
+    const prev = get().waterfallUpdatePeriod;
+    set({ waterfallUpdatePeriod: next });
+    try {
+      const s = get();
+      const result = await updateDisplaySettings(
+        s.panBackground,
+        s.backgroundImageFit,
+        s.rxTraceColor,
+        s.dbMin,
+        s.dbMax,
+        s.txDbMin,
+        s.txDbMax,
+        s.wfDbMin,
+        s.wfDbMax,
+        s.wfTxDbMin,
+        s.wfTxDbMax,
+        undefined,
+        s.widebandDisplayEnabled,
+        s.displayMaxFrameRateHz,
+        s.displayDecimation,
+        next,
+      );
+      if (result.waterfallUpdatePeriod !== next) {
+        set({ waterfallUpdatePeriod: result.waterfallUpdatePeriod });
+      }
+    } catch {
+      set({ waterfallUpdatePeriod: prev });
     }
   },
   restoreSavedTxWindows: () => {
@@ -1147,6 +1244,8 @@ async function hydrateFromServer(): Promise<void> {
     rxTraceColor: server.rxTraceColor,
     widebandDisplayEnabled: server.widebandDisplayEnabled,
     displayMaxFrameRateHz: normalizeDisplayMaxFrameRateHz(server.displayMaxFrameRateHz),
+    displayDecimation: normalizeDisplayDecimation(server.displayDecimation),
+    waterfallUpdatePeriod: normalizeWaterfallUpdatePeriod(server.waterfallUpdatePeriod),
     ...(serverHasDbRange
       ? {
           dbMin: panRange!.min,

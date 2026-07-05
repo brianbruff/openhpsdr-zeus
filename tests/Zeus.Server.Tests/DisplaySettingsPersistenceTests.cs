@@ -53,6 +53,8 @@ public class DisplaySettingsPersistenceTests : IDisposable
         Assert.Null(dto.WfTxDbMax);
         Assert.False(dto.WidebandDisplayEnabled);
         Assert.Equal(DisplayPerformanceOptions.DefaultFrameRateHz, dto.DisplayMaxFrameRateHz);
+        Assert.Equal(DisplayPerformanceOptions.DefaultDisplayDecimation, dto.DisplayDecimation);
+        Assert.Equal(DisplayPerformanceOptions.DefaultWaterfallUpdatePeriod, dto.WaterfallUpdatePeriod);
     }
 
     [Fact]
@@ -167,7 +169,8 @@ public class DisplaySettingsPersistenceTests : IDisposable
 
     [Theory]
     [InlineData(0, DisplayPerformanceOptions.MinFrameRateHz)]
-    [InlineData(60, DisplayPerformanceOptions.MaxFrameRateHz)]
+    [InlineData(60, 60)]
+    [InlineData(1000, DisplayPerformanceOptions.MaxFrameRateHz)]
     public void SaveMode_DisplayMaxFrameRateHz_ClampsToSupportedRange(double raw, double expected)
     {
         using var store = BuildStore();
@@ -175,6 +178,57 @@ public class DisplaySettingsPersistenceTests : IDisposable
         store.SaveMode("basic", "fill", "#FFA028", displayMaxFrameRateHz: raw);
 
         Assert.Equal(expected, store.Get().DisplayMaxFrameRateHz);
+    }
+
+    [Fact]
+    public void SaveMode_DisplayPerformanceKnobs_PersistAndNullPreserves()
+    {
+        using (var store = BuildStore())
+        {
+            store.SaveMode(
+                "basic",
+                "fill",
+                "#FFA028",
+                displayMaxFrameRateHz: 120,
+                displayDecimation: 4,
+                waterfallUpdatePeriod: 3);
+        }
+
+        using (var update = BuildStore())
+        {
+            update.SaveMode("beam-map", "fit", "#FF8800");
+        }
+
+        using var check = BuildStore();
+        var dto = check.Get();
+        Assert.Equal(120, dto.DisplayMaxFrameRateHz);
+        Assert.Equal(4, dto.DisplayDecimation);
+        Assert.Equal(3, dto.WaterfallUpdatePeriod);
+        Assert.Equal("beam-map", dto.Mode);
+        Assert.Equal("fit", dto.Fit);
+    }
+
+    [Theory]
+    [InlineData(0, DisplayPerformanceOptions.MinDisplayDecimation, 0, DisplayPerformanceOptions.MinWaterfallUpdatePeriod)]
+    [InlineData(99, DisplayPerformanceOptions.MaxDisplayDecimation, 5000, DisplayPerformanceOptions.MaxWaterfallUpdatePeriod)]
+    public void SaveMode_DisplayPerformanceKnobs_ClampToSupportedRanges(
+        int rawDecimation,
+        int expectedDecimation,
+        int rawWaterfallUpdatePeriod,
+        int expectedWaterfallUpdatePeriod)
+    {
+        using var store = BuildStore();
+
+        store.SaveMode(
+            "basic",
+            "fill",
+            "#FFA028",
+            displayDecimation: rawDecimation,
+            waterfallUpdatePeriod: rawWaterfallUpdatePeriod);
+
+        var dto = store.Get();
+        Assert.Equal(expectedDecimation, dto.DisplayDecimation);
+        Assert.Equal(expectedWaterfallUpdatePeriod, dto.WaterfallUpdatePeriod);
     }
 
     // Regression for the "white waterfall" symptom: dragging the waterfall dB

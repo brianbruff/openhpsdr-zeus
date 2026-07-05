@@ -123,7 +123,9 @@ public sealed class DisplaySettingsStore : IDisposable
                     TxDisplayWindow: null,
                     TxDisplayAvgTauMs: null,
                     WidebandDisplayEnabled: false,
-                    DisplayMaxFrameRateHz: _defaultDisplayMaxFrameRateHz);
+                    DisplayMaxFrameRateHz: _defaultDisplayMaxFrameRateHz,
+                    DisplayDecimation: DisplayPerformanceOptions.DefaultDisplayDecimation,
+                    WaterfallUpdatePeriod: DisplayPerformanceOptions.DefaultWaterfallUpdatePeriod);
             }
             return new DisplaySettingsDto(
                 Mode: NormalizeMode(e.Mode),
@@ -146,7 +148,9 @@ public sealed class DisplaySettingsStore : IDisposable
                 WidebandDisplayEnabled: e.WidebandDisplayEnabled,
                 DisplayMaxFrameRateHz: DisplayPerformanceOptions.NormalizeFrameRate(
                     e.DisplayMaxFrameRateHz,
-                    _defaultDisplayMaxFrameRateHz));
+                    _defaultDisplayMaxFrameRateHz),
+                DisplayDecimation: DisplayPerformanceOptions.NormalizeDisplayDecimation(e.DisplayDecimation),
+                WaterfallUpdatePeriod: DisplayPerformanceOptions.NormalizeWaterfallUpdatePeriod(e.WaterfallUpdatePeriod));
         }
     }
 
@@ -161,7 +165,9 @@ public sealed class DisplaySettingsStore : IDisposable
         double? txDisplayCalOffsetDb = null, int? txDisplayFftSize = null,
         int? txDisplayWindow = null, double? txDisplayAvgTauMs = null,
         bool? widebandDisplayEnabled = null,
-        double? displayMaxFrameRateHz = null)
+        double? displayMaxFrameRateHz = null,
+        int? displayDecimation = null,
+        int? waterfallUpdatePeriod = null)
     {
         lock (_sync)
         {
@@ -189,6 +195,10 @@ public sealed class DisplaySettingsStore : IDisposable
             {
                 e.DisplayMaxFrameRateHz = DisplayPerformanceOptions.NormalizeFrameRate(displayMaxFrameRateHz.Value);
             }
+            if (displayDecimation.HasValue)
+                e.DisplayDecimation = DisplayPerformanceOptions.NormalizeDisplayDecimation(displayDecimation);
+            if (waterfallUpdatePeriod.HasValue)
+                e.WaterfallUpdatePeriod = DisplayPerformanceOptions.NormalizeWaterfallUpdatePeriod(waterfallUpdatePeriod);
             e.UpdatedUtc = DateTime.UtcNow;
             if (e.Id == 0) _docs.Insert(e);
             else _docs.Update(e);
@@ -308,5 +318,11 @@ public sealed class DisplaySettingsEntry
     // Max generated panadapter/waterfall display frames per second. Null on
     // legacy rows means "use the process/profile default".
     public double? DisplayMaxFrameRateHz { get; set; }
+    // Horizontal display-bin decimation. 1 preserves the full analyzer width;
+    // higher values lower display resolution and websocket payload size.
+    public int? DisplayDecimation { get; set; }
+    // Waterfall row decimation, expressed like Thetis: scroll/update one row
+    // every N generated display frames. 1 preserves the current Zeus behavior.
+    public int? WaterfallUpdatePeriod { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

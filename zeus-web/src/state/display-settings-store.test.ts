@@ -46,11 +46,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_DISPLAY_MAX_FRAME_RATE_HZ,
+  DEFAULT_DISPLAY_DECIMATION,
   DEFAULT_TX_AUTO_RANGE,
   DEFAULT_TX_DISPLAY_AVG_TAU_MS,
   DEFAULT_TX_DISPLAY_CAL_OFFSET_DB,
   DEFAULT_TX_DISPLAY_FFT_SIZE,
   DEFAULT_TX_DISPLAY_WINDOW,
+  DEFAULT_WATERFALL_UPDATE_PERIOD,
   DEFAULT_WF_SCROLL_SPEED,
   FIXED_DB_MAX,
   FIXED_DB_MIN,
@@ -78,6 +80,8 @@ function resetStore() {
     waterfallScrollSpeed: DEFAULT_WF_SCROLL_SPEED,
     widebandDisplayEnabled: false,
     displayMaxFrameRateHz: DEFAULT_DISPLAY_MAX_FRAME_RATE_HZ,
+    displayDecimation: DEFAULT_DISPLAY_DECIMATION,
+    waterfallUpdatePeriod: DEFAULT_WATERFALL_UPDATE_PERIOD,
   });
 }
 
@@ -126,6 +130,38 @@ describe('display-settings-store', () => {
       expect(useDisplaySettingsStore.getState().displayMaxFrameRateHz).toBe(15);
       const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? '{}'));
       expect(body.displayMaxFrameRateHz).toBe(15);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('persists display decimation', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      json: async () => ({ displayDecimation: 4 }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await useDisplaySettingsStore.getState().setDisplayDecimation(4);
+      expect(useDisplaySettingsStore.getState().displayDecimation).toBe(4);
+      const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? '{}'));
+      expect(body.displayDecimation).toBe(4);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('persists the waterfall update period', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      json: async () => ({ waterfallUpdatePeriod: 3 }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await useDisplaySettingsStore.getState().setWaterfallUpdatePeriod(3);
+      expect(useDisplaySettingsStore.getState().waterfallUpdatePeriod).toBe(3);
+      const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body ?? '{}'));
+      expect(body.waterfallUpdatePeriod).toBe(3);
     } finally {
       vi.unstubAllGlobals();
     }

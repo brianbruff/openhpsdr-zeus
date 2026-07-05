@@ -7,46 +7,150 @@
 
 import type { CSSProperties } from 'react';
 import {
+  DISPLAY_DECIMATION_MAX,
+  DISPLAY_DECIMATION_MIN,
   DISPLAY_FRAME_RATES,
+  DISPLAY_MAX_FRAME_RATE_HZ_MAX,
+  DISPLAY_MAX_FRAME_RATE_HZ_MIN,
+  WATERFALL_UPDATE_PERIOD_MAX,
+  WATERFALL_UPDATE_PERIOD_MIN,
   useDisplaySettingsStore,
 } from '../state/display-settings-store';
 
+const DECIMATION_PRESETS = [1, 2, 4, 8, 16] as const;
+const WATERFALL_INTERVAL_PRESETS = [1, 2, 3, 4, 8] as const;
+
 export function DisplayPerformancePanel() {
   const displayMaxFrameRateHz = useDisplaySettingsStore((s) => s.displayMaxFrameRateHz);
+  const displayDecimation = useDisplaySettingsStore((s) => s.displayDecimation);
+  const waterfallUpdatePeriod = useDisplaySettingsStore((s) => s.waterfallUpdatePeriod);
   const setDisplayMaxFrameRateHz = useDisplaySettingsStore((s) => s.setDisplayMaxFrameRateHz);
+  const setDisplayDecimation = useDisplaySettingsStore((s) => s.setDisplayDecimation);
+  const setWaterfallUpdatePeriod = useDisplaySettingsStore((s) => s.setWaterfallUpdatePeriod);
+  const waterfallDelayMs =
+    (1000 / Math.max(1, displayMaxFrameRateHz)) * Math.max(1, waterfallUpdatePeriod);
 
   return (
     <section>
       <div style={sectionHead}>
         <h3 style={sectionH3}>Display Refresh</h3>
-        <p style={sectionP}>Panadapter and waterfall analyzer cadence.</p>
+        <p style={sectionP}>Panadapter cadence, bin decimation, and waterfall row interval.</p>
       </div>
 
       <div style={card}>
-        <div style={rateGroup} role="group" aria-label="Display refresh rate">
-          {DISPLAY_FRAME_RATES.map((rate) => {
-            const active = Math.abs(displayMaxFrameRateHz - rate) < 0.5;
-            return (
-              <button
-                key={rate}
-                type="button"
-                aria-pressed={active}
-                onClick={() => void setDisplayMaxFrameRateHz(rate)}
-                style={{
-                  ...rateButton,
-                  ...(active ? activeRateButton : null),
-                }}
-              >
-                {rate} Hz
-              </button>
-            );
-          })}
+        <div style={controlRow}>
+          <label style={label} htmlFor="display-max-fps">Main display FPS</label>
+          <input
+            id="display-max-fps"
+            type="number"
+            min={DISPLAY_MAX_FRAME_RATE_HZ_MIN}
+            max={DISPLAY_MAX_FRAME_RATE_HZ_MAX}
+            step={1}
+            value={displayMaxFrameRateHz}
+            onChange={(ev) => {
+              const next = ev.currentTarget.valueAsNumber;
+              if (Number.isFinite(next)) void setDisplayMaxFrameRateHz(next);
+            }}
+            style={numberInput}
+          />
+        </div>
+        <div style={presetGroup} role="group" aria-label="Display refresh rate presets">
+          {DISPLAY_FRAME_RATES.map((rate) => (
+            <PresetButton
+              key={rate}
+              active={Math.abs(displayMaxFrameRateHz - rate) < 0.5}
+              label={`${rate}`}
+              suffix="Hz"
+              onClick={() => void setDisplayMaxFrameRateHz(rate)}
+            />
+          ))}
+        </div>
+
+        <div style={controlRow}>
+          <label style={label} htmlFor="display-decimation">Display decimation</label>
+          <input
+            id="display-decimation"
+            type="number"
+            min={DISPLAY_DECIMATION_MIN}
+            max={DISPLAY_DECIMATION_MAX}
+            step={1}
+            value={displayDecimation}
+            onChange={(ev) => {
+              const next = ev.currentTarget.valueAsNumber;
+              if (Number.isFinite(next)) void setDisplayDecimation(next);
+            }}
+            style={numberInput}
+          />
+        </div>
+        <div style={presetGroup} role="group" aria-label="Display decimation presets">
+          {DECIMATION_PRESETS.map((value) => (
+            <PresetButton
+              key={value}
+              active={displayDecimation === value}
+              label={`${value}x`}
+              onClick={() => void setDisplayDecimation(value)}
+            />
+          ))}
+        </div>
+
+        <div style={controlRow}>
+          <label style={label} htmlFor="waterfall-update-period">Waterfall every</label>
+          <input
+            id="waterfall-update-period"
+            type="number"
+            min={WATERFALL_UPDATE_PERIOD_MIN}
+            max={WATERFALL_UPDATE_PERIOD_MAX}
+            step={1}
+            value={waterfallUpdatePeriod}
+            onChange={(ev) => {
+              const next = ev.currentTarget.valueAsNumber;
+              if (Number.isFinite(next)) void setWaterfallUpdatePeriod(next);
+            }}
+            style={numberInput}
+          />
+          <span style={inlineUnit}>frames</span>
+        </div>
+        <div style={presetGroup} role="group" aria-label="Waterfall update interval presets">
+          {WATERFALL_INTERVAL_PRESETS.map((value) => (
+            <PresetButton
+              key={value}
+              active={waterfallUpdatePeriod === value}
+              label={`${value}`}
+              onClick={() => void setWaterfallUpdatePeriod(value)}
+            />
+          ))}
         </div>
         <span style={hint}>
-          Lower values reduce browser compositor load; radio audio and DSP processing stay unchanged.
+          Waterfall delay: {waterfallDelayMs.toFixed(1)} ms. Higher FPS and lower decimation increase display load.
         </span>
       </div>
     </section>
+  );
+}
+
+function PresetButton({
+  active,
+  label,
+  suffix,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  suffix?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      style={{
+        ...rateButton,
+        ...(active ? activeRateButton : null),
+      }}
+    >
+      {label}{suffix ? ` ${suffix}` : ''}
+    </button>
   );
 }
 
@@ -62,7 +166,7 @@ const sectionH3: CSSProperties = {
   margin: 0,
   fontSize: 11,
   fontWeight: 700,
-  letterSpacing: '0.18em',
+  letterSpacing: 0,
   textTransform: 'uppercase',
   color: 'var(--fg-0)',
 };
@@ -84,9 +188,40 @@ const card: CSSProperties = {
   background: 'linear-gradient(180deg, var(--bg-1), var(--bg-0))',
 };
 
-const rateGroup: CSSProperties = {
+const controlRow: CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+  gridTemplateColumns: 'minmax(120px, 1fr) 86px auto',
+  alignItems: 'center',
+  gap: 8,
+};
+
+const label: CSSProperties = {
+  minWidth: 0,
+  fontSize: 11,
+  fontWeight: 700,
+  color: 'var(--fg-1)',
+};
+
+const numberInput: CSSProperties = {
+  width: '100%',
+  height: 30,
+  border: '1px solid var(--line)',
+  borderRadius: 6,
+  background: 'var(--bg-0)',
+  color: 'var(--fg-0)',
+  fontSize: 12,
+  fontWeight: 800,
+  padding: '0 8px',
+};
+
+const inlineUnit: CSSProperties = {
+  fontSize: 11,
+  color: 'var(--fg-3)',
+};
+
+const presetGroup: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(54px, 1fr))',
   gap: 6,
 };
 
@@ -99,7 +234,7 @@ const rateButton: CSSProperties = {
   color: 'var(--fg-1)',
   fontSize: 11,
   fontWeight: 800,
-  letterSpacing: '0.04em',
+  letterSpacing: 0,
   cursor: 'pointer',
 };
 

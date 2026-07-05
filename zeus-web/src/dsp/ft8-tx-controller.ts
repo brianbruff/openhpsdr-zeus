@@ -257,6 +257,11 @@ export class Ft8TxController {
     void this.postArm(false);
   }
 
+  /** Mirror a backend-authoritative disarm locally without writing /arm. */
+  forceLocalDisarm(): void {
+    this.state = { ...this.state, enableTx: false };
+  }
+
   /** Operator Halt: abort, disarm, reset the machine, POST /halt. */
   halt(): void {
     const res = seqHalt(this.state);

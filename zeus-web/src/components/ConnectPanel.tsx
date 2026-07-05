@@ -553,6 +553,12 @@ function isReusableProtocol3State(state: RadioStateDto, endpoint: string): boole
     sameRadioHost(state.endpoint, endpoint);
 }
 
+function isReusableProtocol2State(state: RadioStateDto, endpoint: string): boolean {
+  return state.status === 'Connected' &&
+    state.connectedProtocol === 'P2' &&
+    sameRadioHost(state.endpoint, endpoint);
+}
+
 async function connectP3OrReuse(endpoint: string, force = false): Promise<RadioStateDto> {
   let fresh: RadioStateDto | null = null;
   try {
@@ -565,6 +571,26 @@ async function connectP3OrReuse(endpoint: string, force = false): Promise<RadioS
     if (!isAlreadyConnectedError(err)) throw err;
     fresh = await fetchState();
     if (!isReusableProtocol3State(fresh, endpoint)) {
+      throw err;
+    }
+  }
+  if (fresh) return fresh;
+  return fetchState();
+}
+
+async function connectP2OrReuse(req: {
+  endpoint: string;
+  sampleRate: number;
+  boardId?: number;
+  force?: boolean;
+}): Promise<RadioStateDto> {
+  let fresh: RadioStateDto | null = null;
+  try {
+    await apiConnectP2(req);
+  } catch (err) {
+    if (!isAlreadyConnectedError(err)) throw err;
+    fresh = await fetchState();
+    if (!isReusableProtocol2State(fresh, req.endpoint)) {
       throw err;
     }
   }
@@ -812,7 +838,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
         // Without this the server falls back to OrionMkII for every P2
         // connection — issue #171.
         const rawBoardId = parseRawBoardId(r.details?.rawBoardId);
-        await apiConnectP2({
+        const fresh = await connectP2OrReuse({
           endpoint: ep,
           sampleRate: DEFAULT_SAMPLE_RATE,
           boardId: rawBoardId ?? undefined,
@@ -822,7 +848,6 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
           // lingering Busy status doesn't re-block the re-connect.
           force,
         });
-        const fresh = await fetchState();
         applyState(fresh);
         hydrateTxFromState(fresh);
       } else {
@@ -876,6 +901,18 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
       setError(null);
       setFailureCount(0);
       try {
+        if (isP2) {
+          const fresh = await fetchState();
+          if (isReusableProtocol2State(fresh, ep)) {
+            applyState(fresh);
+            hydrateTxFromState(fresh);
+            setBoardId(r.boardId || null);
+            setConnectedProtocol('P2');
+            setLastConnectedEndpoint(ep || null);
+            applyPostConnectEffects();
+            return;
+          }
+        }
         await reclaimRadio(ep, isP2 ? 'P2' : 'P1');
         await performConnect(r, /* force */ true);
       } catch (err) {
@@ -884,7 +921,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
         setInflight(false);
       }
     },
-    [performConnect, setInflight],
+    [applyState, hydrateTxFromState, performConnect, setBoardId, setConnectedProtocol, setInflight, setLastConnectedEndpoint],
   );
 
   const handleManualConnect = useCallback(
@@ -936,8 +973,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
           applyState(fresh);
           hydrateTxFromState(fresh);
         } else if (protocol === 'P2') {
-          await apiConnectP2({ endpoint: ep, sampleRate, force });
-          const fresh = await fetchState();
+          const fresh = await connectP2OrReuse({ endpoint: ep, sampleRate, force });
           applyState(fresh);
           hydrateTxFromState(fresh);
         } else {
@@ -991,6 +1027,25 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
       setInflight(true);
       setManualError(null);
       try {
+        if (snap.protocol === 'P2') {
+          const fresh = await fetchState();
+          if (isReusableProtocol2State(fresh, ep)) {
+            applyState(fresh);
+            hydrateTxFromState(fresh);
+            setBoardId(null);
+            setConnectedProtocol('P2');
+            setLastConnectedEndpoint(ep);
+            applyPostConnectEffects();
+            if (snap.label) {
+              saveEndpoint(snap);
+            }
+            setManualFormDefaults({ ...snap, label: snap.label ?? '' });
+            setPendingManualTakeover(null);
+            inflightRef.current = false;
+            setInflight(false);
+            return;
+          }
+        }
         await reclaimRadio(ep, snap.protocol === 'P2' ? 'P2' : 'P1');
       } catch (err) {
         setManualError(errorMessage(err));
@@ -1003,7 +1058,17 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
       inflightRef.current = false;
       await handleManualConnect(snap, /* force */ true);
     },
-    [handleManualConnect, setInflight],
+    [
+      applyState,
+      handleManualConnect,
+      hydrateTxFromState,
+      saveEndpoint,
+      setBoardId,
+      setConnectedProtocol,
+      setInflight,
+      setLastConnectedEndpoint,
+      setManualFormDefaults,
+    ],
   );
 
   const doDisconnect = useCallback(async () => {

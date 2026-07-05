@@ -642,7 +642,6 @@ function TxFidelityAutoTune({ targetSpectralDensity }: { targetSpectralDensity: 
     // finally block can restore blocked/error runs without disturbing a
     // Preview the operator turned on themselves.
     let startedSilentPreview = false;
-    let leaveStartedPreviewOn = false;
 
     try {
       if (status !== 'Connected') {
@@ -778,24 +777,18 @@ function TxFidelityAutoTune({ targetSpectralDensity }: { targetSpectralDensity: 
         throw new Error('Auto tune did not collect samples');
       }
       setLastRunActions(appliedActions);
-      leaveStartedPreviewOn = startedSilentPreview && finalPlan.blockers.length === 0;
-
       setProgress(1);
       setPhase('applied');
-      setMessage(
-        leaveStartedPreviewOn
-          ? `${autoTuneRunMessage(finalPlan, passCount, appliedActions)} / Preview metering stays on`
-          : autoTuneRunMessage(finalPlan, passCount, appliedActions),
-      );
+      setMessage(autoTuneRunMessage(finalPlan, passCount, appliedActions));
     } catch (err) {
       if (controller.signal.aborted) return;
       setPhase('error');
       setMessage(err instanceof Error ? err.message : 'Auto tune failed');
     } finally {
-      // Keep a successful Auto Tune's meter-only Preview alive so the fidelity
-      // gauges can prove the post-tune state. Blocked/error runs restore the
-      // prior off-air state.
-      if (startedSilentPreview && !leaveStartedPreviewOn) {
+      // Auto Tune may arm meter-only Preview to sample the TX chain while the
+      // operator is not keyed. Always restore that temporary monitor path so a
+      // completed tune cannot leave audible TX monitor latched on later.
+      if (startedSilentPreview) {
         void setPreviewEnabled(false);
       }
       if (abortRef.current === controller) {

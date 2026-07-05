@@ -1418,6 +1418,7 @@ public static class ZeusEndpoints
         app.MapPost("/api/connect/p2", async (
             ConnectRequest req,
             DspPipelineService dsp,
+            RadioService radio,
             WdspWisdomInitializer wisdom,
             Zeus.Protocol2.Discovery.IRadioDiscovery p2Discovery,
             HttpContext ctx) =>
@@ -1431,6 +1432,21 @@ public static class ZeusEndpoints
 
             if (!TryParseIpEndpoint(req.Endpoint, out var ipEndpoint))
                 return Results.BadRequest(new { error = $"Invalid endpoint '{req.Endpoint}'." });
+
+            var currentState = radio.Snapshot();
+            if (string.Equals(currentState.ConnectedProtocol, "P2", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(currentState.Endpoint)
+                && TryParseIpEndpoint(currentState.Endpoint, out var currentEndpoint)
+                && currentEndpoint.Address.Equals(ipEndpoint.Address))
+            {
+                return Results.Ok(new
+                {
+                    protocol = "P2",
+                    endpoint = currentState.Endpoint ?? req.Endpoint,
+                    sampleRateKhz = Math.Max(1, currentState.SampleRate / 1000),
+                    alreadyConnected = true,
+                });
+            }
 
             // HARDWARE-SAFETY GUARD (relay chatter / PSU brown-out).
             // Before opening the relay-bearing high-priority stream, unicast-probe

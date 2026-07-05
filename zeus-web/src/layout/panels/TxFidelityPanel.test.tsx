@@ -365,7 +365,7 @@ describe('TxFidelityPanel', () => {
     expect(vi.mocked(setMicGain)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(fetchTxDiagnostics).mock.calls.length).toBeGreaterThan(20);
     expect(useTxStore.getState().micGainDb).toBeGreaterThan(-12);
-    expect(useAudioSuiteStore.getState().previewEnabled).toBe(true);
+    expect(useAudioSuiteStore.getState().previewEnabled).toBe(false);
     expect(container.textContent).toContain('Auto tune locked after 2 passes');
 
     unmount();

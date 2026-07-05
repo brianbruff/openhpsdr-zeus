@@ -1114,11 +1114,14 @@ public class DspPipelineService : BackgroundService,
     // audio-client both produce audible clicks under some setups (audio
     // interfaces, USB-DAC headphones). Smoothing here is cheap insurance: the
     // first ~5 ms after each edge gets a linear ramp applied before the
-    // AudioFrame is broadcast. Both flags are pipeline-thread-only after the
-    // initial volatile read in OnRadioMoxChanged sets them.
+    // AudioFrame is broadcast. MOX-off fade-in is armed by the DSP/audio
+    // thread after the short post-TX mute drain, so it lands on clean RX.
     private const int RxFadeSamples = 240;          // 5 ms @ 48 kHz
+    private const int RxPostTxMuteBlocks = 3;       // ~100 ms at the 30 Hz audio cadence
     private volatile bool _rxFadeOutPending;        // first RX block after MOX↑
     private volatile bool _rxFadeInPending;         // first RX block after MOX↓
+    private volatile bool _rxAudioSuppressedForTx;  // publish silence/sidetone instead of RX while TX is keyed
+    private int _rxPostTxMuteBlocksRemaining;       // RXA transition-drain blocks after MOX↓
 
     // ---- iter5 single-DSP-thread scaffolding -----------------------------
     // The pipeline now owns its hot path via IRxPacketSink: when a radio
@@ -1967,6 +1970,70 @@ public class DspPipelineService : BackgroundService,
             _audioSinks[i].PublishExempt(in frame);
     }
 
+    private void PublishTxSuppressedAudio(float[] audioBuf, int sampleCount, double nowMs, SquelchConfig squelch)
+    {
+        int count = sampleCount > 0
+            ? Math.Min(sampleCount, audioBuf.Length)
+            : Math.Min(audioBuf.Length, MonitorInjectSilentBlockSamples);
+        if (count <= 0) return;
+
+        var span = audioBuf.AsSpan(0, count);
+        span.Clear();
+        bool sidetoneWrote = _sidetone?.RenderInto(span) ?? false;
+        if (sidetoneWrote)
+            LimitRxAudioBuffer(span);
+
+        double finalAudioRms = Rms(span);
+        double finalAudioPeak = PeakAbs(span);
+        var frame = new AudioFrame(
+            Seq: ++_audioSeq,
+            TsUnixMs: nowMs,
+            RxId: 0,
+            Channels: 1,
+            SampleRateHz: (uint)AudioOutputRateHz,
+            SampleCount: (ushort)count,
+            Samples: new ReadOnlyMemory<float>(audioBuf, 0, count));
+
+        CaptureAudioDiagnostics(
+            sidetoneWrote ? "cw-sidetone" : "tx-rx-muted",
+            in frame,
+            finalAudioRms,
+            finalAudioPeak,
+            txMonitorRequested: false,
+            squelch);
+        PublishAudio(in frame);
+        if (sidetoneWrote)
+            RxAudioAvailable?.Invoke(0, AudioOutputRateHz, new ReadOnlyMemory<float>(audioBuf, 0, count));
+    }
+
+    internal static bool ShouldPublishNormalRxAudio(bool txMonitorOn, bool txAudioSuppressed) =>
+        !txMonitorOn && !txAudioSuppressed;
+
+    private bool ShouldSuppressRxAudioForCurrentTick() =>
+        _rxAudioSuppressedForTx || Volatile.Read(ref _rxPostTxMuteBlocksRemaining) > 0;
+
+    private void MarkTxSuppressedAudioBlockPublished()
+    {
+        // While actively keyed, the suppression latch stays high and the
+        // post-TX drain counter must not tick down. The counter is only for
+        // the short MOX-off settle window before real RX resumes.
+        if (_rxAudioSuppressedForTx) return;
+
+        while (true)
+        {
+            int remaining = Volatile.Read(ref _rxPostTxMuteBlocksRemaining);
+            if (remaining <= 0) return;
+
+            int next = remaining - 1;
+            if (Interlocked.CompareExchange(ref _rxPostTxMuteBlocksRemaining, next, remaining) != remaining)
+                continue;
+
+            if (next == 0)
+                _rxFadeInPending = true;
+            return;
+        }
+    }
+
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         OpenSynthetic();
@@ -2054,13 +2121,28 @@ public class DspPipelineService : BackgroundService,
         // tolerates concurrent state edges from the HTTP thread vs the RX
         // sink thread via its own internal locking, and SetMox/SetTxTune
         // are rare operator-edge events (not the per-frame hot path).
-        lock (_engineLock) { _engine?.SetMox(on); }
+        if (on)
+        {
+            Volatile.Write(ref _rxPostTxMuteBlocksRemaining, 0);
+            _rxAudioSuppressedForTx = true;
+            _rxFadeOutPending = true;
+            lock (_engineLock) { _engine?.SetMox(true); }
+        }
+        else
+        {
+            lock (_engineLock) { _engine?.SetMox(false); }
+            Volatile.Write(ref _rxPostTxMuteBlocksRemaining, RxPostTxMuteBlocks);
+            _rxAudioSuppressedForTx = false;
+        }
     }
 
     public virtual void SetTxTune(bool on)
     {
         lock (_engineLock) { _engine?.SetTxTune(on); }
     }
+
+    internal bool RxAudioSuppressedForTx => _rxAudioSuppressedForTx;
+    internal int RxPostTxMuteBlocksRemaining => Volatile.Read(ref _rxPostTxMuteBlocksRemaining);
 
     /// <summary>Current engine snapshot (may be <see cref="OfflinePreviewDspEngine"/>
     /// or <see cref="SyntheticDspEngine"/> while disconnected). TxAudioIngest calls ProcessTxBlock on this; the
@@ -5068,7 +5150,16 @@ public class DspPipelineService : BackgroundService,
         string? firmware = null)
     {
         if (_p2Client is not null)
+        {
+            var snap = _radio.Snapshot();
+            if (string.Equals(snap.ConnectedProtocol, "P2", StringComparison.OrdinalIgnoreCase)
+                && RadioService.TryParseEndpoint(snap.Endpoint ?? string.Empty, out var currentEndpoint)
+                && currentEndpoint.Address.Equals(radioEndpoint.Address))
+            {
+                return Math.Max(1, snap.SampleRate / 1000);
+            }
             throw new InvalidOperationException("Already connected (P2).");
+        }
         if (_radio.ActiveClient is not null)
             throw new InvalidOperationException("Already connected (P1). Disconnect first.");
 
@@ -5358,12 +5449,6 @@ public class DspPipelineService : BackgroundService,
         // Measurement-only: stamp the MOX edge for TX-turnaround latency. No
         // effect on the TX IQ path — pure observation.
         _txTurnaround?.OnMoxEdge(on);
-        // Arm a one-shot fade envelope on the first audio block Tick reads
-        // after this edge. Rising edge → ramp current audio out so the post-
-        // MOX silent stretch isn't a hard cut. Falling edge → ramp the resume
-        // audio in so the dmp=0 RXA up doesn't pop through to the browser.
-        if (on) _rxFadeOutPending = true;
-        else _rxFadeInPending = true;
         _p2Client?.SetMox(on);
         // Reset the FreeDV RECEIVER on both MOX edges so it resumes empty and
         // unsynced. WDSP RX is drained every tick regardless of MOX, so without
@@ -6832,6 +6917,7 @@ public class DspPipelineService : BackgroundService,
         // do NOT mix it into the RX frame here and instead route it, recorder-only,
         // through the mute-exempt lane after the RX-publish block (see below).
         bool rxAudioMuted = _rxAudioMute?.IsMuted ?? false;
+        bool suppressRxAudioForTx = ShouldSuppressRxAudioForCurrentTick();
 
         if (audioSampleCount > 0)
         {
@@ -6874,7 +6960,7 @@ public class DspPipelineService : BackgroundService,
             // rx.post-demod manifest slot, wired through _rxAudioPluginHandler
             // below. The two never share plugin instances or IIR state.
 
-            if (!txMonitorOn)
+            if (ShouldPublishNormalRxAudio(txMonitorOn, suppressRxAudioForTx))
             {
                 var squelch = state.Squelch ?? new SquelchConfig();
                 UpdateAdaptiveSquelchMeter(
@@ -6967,8 +7053,26 @@ public class DspPipelineService : BackgroundService,
                 PublishAudio(in audioFrame);
                 RxAudioAvailable?.Invoke(0, AudioOutputRateHz, new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
             }
+            else if (!txMonitorOn && suppressRxAudioForTx)
+            {
+                PublishTxSuppressedAudio(
+                    audioBuf,
+                    audioSampleCount,
+                    nowMs,
+                    state.Squelch ?? new SquelchConfig());
+                MarkTxSuppressedAudioBlockPublished();
+            }
         }
-        else if (!txMonitorOn && !rxAudioMuted && MonitorBacklog > 0)
+        else if (!txMonitorOn && suppressRxAudioForTx)
+        {
+            PublishTxSuppressedAudio(
+                audioBuf,
+                MonitorInjectSilentBlockSamples,
+                nowMs,
+                state.Squelch ?? new SquelchConfig());
+            MarkTxSuppressedAudioBlockPublished();
+        }
+        else if (ShouldPublishNormalRxAudio(txMonitorOn, suppressRxAudioForTx) && !rxAudioMuted && MonitorBacklog > 0)
         {
             // FIX 4: RX produced no audio this tick (RX1 muted, or no band audio)
             // yet a local clip is playing back through the monitor-inject ring.
@@ -7008,7 +7112,7 @@ public class DspPipelineService : BackgroundService,
         // is drained exactly once per tick — no double-drain, no starvation. Like
         // FIX 4 it deliberately does NOT fire RxAudioAvailable: the RX-capture tap
         // (TCI / Recorder RX capture) must stay recorder-free and byte-identical.
-        if (rxAudioMuted && !txMonitorOn && MonitorBacklog > 0)
+        if (rxAudioMuted && ShouldPublishNormalRxAudio(txMonitorOn, suppressRxAudioForTx) && MonitorBacklog > 0)
         {
             int monBlock = Math.Min(audioBuf.Length, MonitorInjectSilentBlockSamples);
             Array.Clear(audioBuf, 0, monBlock);
@@ -7049,7 +7153,13 @@ public class DspPipelineService : BackgroundService,
                     SampleRateHz: (uint)AudioOutputRateHz,
                     SampleCount: (ushort)monCount,
                     Samples: new ReadOnlyMemory<float>(audioBuf, 0, monCount));
-                CaptureAudioDiagnostics("tx-monitor", in monFrame, finalAudioRms, finalAudioPeak, txMonitorOn, state.Squelch ?? new SquelchConfig());
+                CaptureAudioDiagnostics(
+                    _txMonitorMeterOnly ? "tx-monitor-meter-only" : "tx-monitor",
+                    in monFrame,
+                    finalAudioRms,
+                    finalAudioPeak,
+                    txMonitorOn,
+                    state.Squelch ?? new SquelchConfig());
                 // Meter-only monitor (Auto Tune): the chain ran and the stage
                 // meters animated above, but suppress the broadcast so the
                 // operator hears nothing while the sample is captured in the

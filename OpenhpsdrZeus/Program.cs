@@ -453,6 +453,7 @@ public partial class Program
         // stacking duplicates. Tracked only for clean shutdown — unlike detached
         // workspaces these are not persisted or re-opened next launch.
         var detachedAudioSuiteWindows = new Dictionary<string, PhotinoWindow>();
+        var desktopShutdown = CreateDesktopShutdown(app);
 
         // The dark placeholder loaded as StartString carries a tiny script that,
         // once the page is live (i.e. WebView2 has finished initialising), posts a
@@ -691,6 +692,12 @@ public partial class Program
             {
                 Console.Error.WriteLine($"workspace.windows.save failed: {ex.Message}");
             }
+            // AppKit's last-window heuristic can miss when a detached, minimized,
+            // menu, tooltip or WebKit helper window is alive at the close instant.
+            // Give Windows/Linux a short chance to return from WaitForClose and
+            // close child frames, then make this main-window close authoritative.
+            SupportSidecar.MarkCleanExit();
+            StartWindowCloseShutdown(desktopShutdown);
             return false; // allow the window to close
         });
 
@@ -770,7 +777,7 @@ public partial class Program
         // native window was still alive. We deliberately do NOT save here — the
         // window is torn down and its size getters are unsafe to read.
         Console.WriteLine("Window closed; stopping backend.");
-        ShutdownDesktopHost(app);
+        desktopShutdown.Run();
         return 0;
     }
 
@@ -793,14 +800,16 @@ public partial class Program
     // MessageQueue::post -> pthread_mutex_lock at NULL; main-thread proof:
     // -[NSApplication terminate:] -> exit -> __cxa_finalize_ranges ->
     // ~WCBIClientWithWLSThread (the Waves variant). Because terminate: preempts
-    // the runloop, WaitForClose() never returns and the _exit(0) in
-    // ShutdownDesktopHost is never reached on the quit path. The vendor-agnostic
-    // cure is to stop exit() from ever running: replace -[NSApplication
-    // terminate:] so it calls _exit(2) directly. _exit skips __cxa_finalize, so
-    // no plugin static destructor can run under a live plugin thread — closing
-    // both the Timer and Waves-WLS faces of the crash for ANY plugin the operator
-    // loads. Window geometry + open detached windows are already committed
-    // synchronously by the window-closing handler before this fires.
+    // the runloop, WaitForClose() never returns and the post-WaitForClose
+    // shutdown runner is never reached on the quit path. The vendor-agnostic cure
+    // is to stop exit() from ever running: replace -[NSApplication terminate:] so
+    // it calls _exit(2) directly. _exit skips __cxa_finalize, so no plugin static
+    // destructor can run under a live plugin thread — closing both the Timer and
+    // Waves-WLS faces of the crash for ANY plugin the operator loads. Window
+    // geometry + open detached windows are already committed synchronously by the
+    // window-closing handler before this fires. The clean-exit marker is written
+    // in the swizzled IMP too because AppKit can preempt the bounded shutdown
+    // runner on deliberate quit paths.
     [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib")]
     private static extern IntPtr objc_getClass(string name);
     [System.Runtime.InteropServices.DllImport("/usr/lib/libobjc.A.dylib")]
@@ -828,7 +837,11 @@ public partial class Program
             var sel = sel_registerName("terminate:");
             var method = class_getInstanceMethod(cls, sel);
             if (method == IntPtr.Zero) return;
-            _safeTerminateImp = static (_, _, _) => LibcImmediateExit(0);
+            _safeTerminateImp = static (_, _, _) =>
+            {
+                try { SupportSidecar.MarkCleanExit(); } catch { }
+                LibcImmediateExit(0);
+            };
             var imp = System.Runtime.InteropServices.Marshal.GetFunctionPointerForDelegate(_safeTerminateImp);
             method_setImplementation(method, imp);
             StartupDiagnostics.Log("[shutdown] macOS: -[NSApplication terminate:] routed to _exit(2) (skips plugin static-dtor race)");
@@ -876,28 +889,59 @@ public partial class Program
     // so skipping graceful disposal is durability-safe. Windows hosts no in-process
     // AU bridge, so it returns normally (and avoids the WebView2 ProcessExit
     // deadlock noted above).
-    private static void ShutdownDesktopHost(WebApplication app)
+    private static BoundedShutdown CreateDesktopShutdown(WebApplication app)
     {
-        // Deliberate shutdown — tell any supervising sidecar this is a clean exit,
-        // not a crash, BEFORE we stop the host or _exit(2).
-        SupportSidecar.MarkCleanExit();
+        return new BoundedShutdown(
+            new[]
+            {
+                // Deliberate shutdown — tell any supervising sidecar this is a
+                // clean exit, not a crash, BEFORE we stop the host or _exit(2).
+                BoundedShutdownStep.Run("mark clean exit", SupportSidecar.MarkCleanExit),
 
-        // Stop hosted services WITHOUT disposing the host (see why above).
-        try { app.StopAsync().GetAwaiter().GetResult(); }
-        catch { /* best effort — never block the exit */ }
+                // Stop hosted services WITHOUT disposing the host (see why above).
+                // Queue it so a synchronously blocking StopAsync implementation
+                // cannot pin the shutdown runner past the wait budget.
+                BoundedShutdownStep.WaitFor("stop host", () => Task.Run(() => app.StopAsync()), TimeSpan.FromSeconds(5)),
 
-        // Kill the out-of-process TX VST engine explicitly (it would otherwise only
-        // be torn down by the host DisposeAsync we deliberately skip). No in-process
-        // JUCE, so this cannot trigger the plugin-thread race.
-        try
+                // Kill the out-of-process TX VST engine explicitly (it would
+                // otherwise only be torn down by the host DisposeAsync we
+                // deliberately skip). No in-process JUCE, so this cannot trigger
+                // the plugin-thread race.
+                BoundedShutdownStep.WaitFor("dispose TX VST engine", () => Task.Run(async () =>
+                {
+                    if (app.Services.GetService(typeof(Zeus.Plugins.Host.Audio.VstEngineController)) is IAsyncDisposable engine)
+                        await engine.DisposeAsync().AsTask().ConfigureAwait(false);
+                }), TimeSpan.FromSeconds(3)),
+
+                BoundedShutdownStep.WaitFor("flush console", FlushConsoleAsync, TimeSpan.FromSeconds(1)),
+            },
+            ExitDesktopProcess);
+    }
+
+    private static async Task FlushConsoleAsync()
+    {
+        await Console.Out.FlushAsync().ConfigureAwait(false);
+        await Console.Error.FlushAsync().ConfigureAwait(false);
+    }
+
+    private static void StartWindowCloseShutdown(BoundedShutdown shutdown)
+    {
+        var thread = new Thread(() =>
         {
-            if (app.Services.GetService(typeof(Zeus.Plugins.Host.Audio.VstEngineController)) is IAsyncDisposable engine)
-                engine.DisposeAsync().AsTask().GetAwaiter().GetResult();
-        }
-        catch { /* best effort */ }
+            Thread.Sleep(TimeSpan.FromMilliseconds(250));
+            shutdown.Run();
+        })
+        {
+            IsBackground = true,
+            Name = "Zeus window-close shutdown",
+        };
 
-        Console.Out.Flush();
-        Console.Error.Flush();
+        try { thread.Start(); }
+        catch { shutdown.Run(); }
+    }
+
+    private static void ExitDesktopProcess()
+    {
         if (OperatingSystem.IsWindows())
         {
             // Skip CLR/CRT shutdown + DLL detach: the in-process VST3 bridge has
@@ -1480,6 +1524,7 @@ public partial class Program
         var app = ZeusHost.Build(args, hostOptions);
         ZeusHost.InitializeAsync(app).GetAwaiter().GetResult();
         app.StartAsync().GetAwaiter().GetResult();
+        var statusShutdown = CreateDesktopShutdown(app);
 
         // Collect URLs to show the operator. Local always works; LAN entries
         // depend on whether there's a NIC up.
@@ -1596,6 +1641,12 @@ public partial class Program
             {
                 if (msg == "stop" && sender is PhotinoWindow w) w.Close();
             })
+            .RegisterWindowClosingHandler((_, _) =>
+            {
+                SupportSidecar.MarkCleanExit();
+                StartWindowCloseShutdown(statusShutdown);
+                return false;
+            })
             .LoadRawString(statusHtml);
 
         // See RunDesktop for why we don't hook AppDomain.ProcessExit — calling
@@ -1606,7 +1657,7 @@ public partial class Program
         window.WaitForClose();
 
         Console.WriteLine("Status window closed; stopping backend.");
-        ShutdownDesktopHost(app);
+        statusShutdown.Run();
         return 0;
     }
 }

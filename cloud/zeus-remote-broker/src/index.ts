@@ -15,6 +15,7 @@ import {
   handleBillingWebhook,
   handleUserSession,
 } from './billing-api';
+import { adminRateLimitedResponse } from './admin-rate-limit-response';
 
 export { SignalRoom } from './signal-room';
 export { RateLimiter } from './rate-limiter';
@@ -52,7 +53,7 @@ export default {
     // per-callsign throttle.
     if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
       if (request.method !== 'OPTIONS' && (await rateLimited(env, clientIp(request)))) {
-        return new Response('rate limited', { status: 429, headers: corsHeaders(env) });
+        return adminRateLimitedResponse(env, request);
       }
       // /admin/crashes lives in index.ts (it reaches the CrashStore DO, not the
       // D1 admin store), but reuses the SAME credential-based admin auth as the

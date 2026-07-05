@@ -8,7 +8,7 @@
 // Licensed under the GNU General Public License v2.0-or-later. See the LICENSE
 // file at the repository root for the full text.
 
-import { useMemo, type CSSProperties, type ReactNode } from 'react';
+import { useMemo } from 'react';
 import type { LogEntry } from '../../api/log';
 import {
   bandHistogram,
@@ -19,44 +19,77 @@ import {
   type ModeCount,
 } from './logbook-stats';
 import { countryToFlag } from './logbook-flag';
-import { ZeusGlobe } from './ZeusGlobe';
+import { LogbookAwardDial, LogbookRingGauge, sliceColor, type InstrumentSlice } from './LogbookInstrumentSvg';
 
-// Ordered, token-only palette for the mode/breakdown slices (no raw hex — the
-// global palette owns these). Slice N gets colour N; "Other" lands on the muted
-// tail colour.
-const SLICE_COLORS = [
-  'var(--accent-bright)',
-  'var(--power)',
-  'var(--ok)',
-  'var(--tx)',
-  'var(--orange)',
-  'var(--fg-3)',
-];
+const DAY_MS = 86_400_000;
+const HEATMAP_WEEKS = 26;
 
-function sliceColor(index: number): string {
-  return SLICE_COLORS[Math.min(index, SLICE_COLORS.length - 1)] ?? 'var(--fg-3)';
+type ActivityCell = {
+  key: string;
+  count: number;
+  level: number;
+};
+
+function ringSlices<T extends { count: number }>(
+  rows: T[],
+  keyOf: (row: T) => string,
+  labelOf: (row: T) => string,
+  pctOf?: (row: T) => number,
+): InstrumentSlice[] {
+  return rows.map((row) => ({
+    key: keyOf(row),
+    label: labelOf(row),
+    value: row.count,
+    pct: pctOf?.(row),
+  }));
 }
 
-/** Build a conic-gradient ring background from percentage slices. */
-function ringBackground(slices: { pct: number }[]): string {
-  if (slices.length === 0) return 'var(--line-strong)';
-  const stops: string[] = [];
-  let acc = 0;
-  slices.forEach((s, i) => {
-    const start = acc;
-    acc += s.pct;
-    stops.push(`${sliceColor(i)} ${start}% ${acc}%`);
+function utcDay(value: Date): number {
+  return Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate());
+}
+
+function activityCells(entries: LogEntry[], now: Date): ActivityCell[] {
+  const days = HEATMAP_WEEKS * 7;
+  const end = utcDay(now);
+  const start = end - (days - 1) * DAY_MS;
+  const counts = new Map<number, number>();
+
+  for (const entry of entries) {
+    const day = utcDay(new Date(entry.qsoDateTimeUtc));
+    if (!Number.isFinite(day) || day < start || day > end) continue;
+    counts.set(day, (counts.get(day) ?? 0) + 1);
+  }
+
+  const max = Math.max(1, ...counts.values());
+  return Array.from({ length: days }, (_, index) => {
+    const day = start + index * DAY_MS;
+    const count = counts.get(day) ?? 0;
+    return {
+      key: new Date(day).toISOString().slice(0, 10),
+      count,
+      level: count === 0 ? 0 : Math.max(1, Math.ceil((count / max) * 4)),
+    };
   });
-  // Pad any rounding gap to 100% with the last colour so there's no seam.
-  if (acc < 100) stops.push(`${sliceColor(slices.length - 1)} ${acc}% 100%`);
-  return `conic-gradient(${stops.join(', ')})`;
 }
 
-function Donut({ slices, center }: { slices: { pct: number }[]; center: ReactNode }) {
-  const style: CSSProperties = { background: ringBackground(slices) };
+function ActivityHeatmap({ entries }: { entries: LogEntry[] }) {
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const cells = useMemo(() => activityCells(entries, new Date()), [entries, todayKey]);
+  const total = cells.reduce((sum, cell) => sum + cell.count, 0);
+
   return (
-    <div className="lb-donut" style={style}>
-      <div className="lb-donut-hole">{center}</div>
+    <div className="lb-dash-tile lb-dash-activity">
+      <div className="lb-dash-title">Activity · 26 Weeks</div>
+      <div className="lb-heatmap-grid" aria-label={`${total} QSOs in the last 26 weeks`}>
+        {cells.map((cell) => (
+          <span
+            key={cell.key}
+            className="lb-heat-cell"
+            data-level={cell.level}
+            title={`${cell.key}: ${cell.count} QSO${cell.count === 1 ? '' : 's'}`}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -75,18 +108,29 @@ export function LogbookDashboard({
   const countries = useMemo(() => topCountries(entries, 5), [entries]);
   const thisMonth = useMemo(() => countThisMonth(entries, new Date()), [entries]);
   const awards = useMemo(() => awardStats(entries), [entries]);
-
-  const maxBand = bands.reduce((m, b) => Math.max(m, b.count), 1);
-  // The "total" ring is decorative — it mirrors the mode mix so the headline
-  // number sits inside a live sparkline of how the operator works.
-  const totalRing = modes.length > 0 ? modes : [{ pct: 100 }];
+  const bandSlices = useMemo(
+    () => ringSlices(bands, (band) => band.band, (band) => band.band),
+    [bands],
+  );
+  const modeSlices = useMemo(
+    () => ringSlices(modes, (mode) => mode.mode, (mode) => mode.mode, (mode) => mode.pct),
+    [modes],
+  );
+  const totalRing = modeSlices.length > 0 ? modeSlices : bandSlices;
+  const topMode = modes[0] ?? null;
 
   return (
     <div className="lb-dash">
       <div className="lb-dash-tile lb-dash-total">
-        <Donut
+        <LogbookRingGauge
           slices={totalRing}
-          center={<span className="lb-total-num">{totalCount.toLocaleString()}</span>}
+          ariaLabel="Total QSO mix"
+          center={
+            <>
+              <span className="lb-total-num">{totalCount.toLocaleString()}</span>
+              <span className="lb-ring-caption">Total QSOs</span>
+            </>
+          }
         />
         <div className="lb-dash-total-labels">
           <div className="lb-stat">
@@ -102,26 +146,45 @@ export function LogbookDashboard({
 
       <div className="lb-dash-tile lb-dash-bands">
         <div className="lb-dash-title">Bands</div>
-        <div className="lb-bandbars">
-          {bands.length === 0 && <div className="lb-dash-empty">No bands yet</div>}
-          {bands.map((b) => (
-            <div key={b.band} className="lb-bandbar" title={`${b.band}: ${b.count} QSO${b.count === 1 ? '' : 's'}`}>
-              <div className="lb-bandbar-track">
-                <div
-                  className="lb-bandbar-fill"
-                  style={{ height: `${Math.max(6, (b.count / maxBand) * 100)}%` }}
-                />
+        <div className="lb-ring-row">
+          <LogbookRingGauge
+            slices={bandSlices}
+            ariaLabel="QSO bands"
+            size={90}
+            center={
+              <>
+                <span className="lb-total-num">{entries.length.toLocaleString()}</span>
+                <span className="lb-ring-caption">Loaded</span>
+              </>
+            }
+          />
+          <div className="lb-modes-legend">
+            {bands.length === 0 && <div className="lb-dash-empty">No bands yet</div>}
+            {bands.slice(0, 5).map((band, index) => (
+              <div key={band.band} className="lb-legend-row">
+                <span className="lb-legend-sw" style={{ background: sliceColor(index) }} />
+                <span className="lb-legend-name">{band.band}</span>
+                <span className="lb-legend-pct mono">{band.count}</span>
               </div>
-              <div className="lb-bandbar-label">{b.band.replace(/M$/i, '')}</div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </div>
 
       <div className="lb-dash-tile lb-dash-modes">
         <div className="lb-dash-title">Modes</div>
-        <div className="lb-modes-row">
-          <Donut slices={modes} center={null} />
+        <div className="lb-ring-row">
+          <LogbookRingGauge
+            slices={modeSlices}
+            ariaLabel="QSO modes"
+            size={90}
+            center={
+              <>
+                <span className="lb-total-num">{topMode ? `${topMode.pct}%` : '0%'}</span>
+                <span className="lb-ring-caption">{topMode?.mode ?? 'Modes'}</span>
+              </>
+            }
+          />
           <div className="lb-modes-legend">
             {modes.length === 0 && <div className="lb-dash-empty">No modes yet</div>}
             {modes.map((m, i) => (
@@ -134,6 +197,8 @@ export function LogbookDashboard({
           </div>
         </div>
       </div>
+
+      <ActivityHeatmap entries={entries} />
 
       <div className="lb-dash-tile lb-dash-countries">
         <div className="lb-dash-title">Top Countries</div>
@@ -152,26 +217,28 @@ export function LogbookDashboard({
       <div className="lb-dash-tile lb-dash-awards">
         <div className="lb-dash-title">Awards</div>
         <div className="lb-awards-grid">
-          <div className="lb-award">
-            <span className="lb-award-num">{awards.dxccWorked}</span>
-            <span className="lb-award-label">DXCC worked</span>
-            <small>{awards.dxccConfirmed} confirmed</small>
-          </div>
-          <div className="lb-award">
-            <span className="lb-award-num">{awards.statesWorked}/50</span>
-            <span className="lb-award-label">WAS</span>
-            <small>US states</small>
-          </div>
-          <div className="lb-award">
-            <span className="lb-award-num">{awards.gridsWorked}</span>
-            <span className="lb-award-label">Grids</span>
-            <small>4-char squares</small>
-          </div>
+          <LogbookAwardDial
+            label="DXCC"
+            value={awards.dxccWorked.toLocaleString()}
+            detail={`${awards.dxccConfirmed.toLocaleString()} confirmed`}
+            progressPct={(awards.dxccWorked / 340) * 100}
+            toneIndex={0}
+          />
+          <LogbookAwardDial
+            label="WAS"
+            value={`${awards.statesWorked}/50`}
+            detail="US states"
+            progressPct={(awards.statesWorked / 50) * 100}
+            toneIndex={1}
+          />
+          <LogbookAwardDial
+            label="Grids"
+            value={awards.gridsWorked.toLocaleString()}
+            detail="4-char squares"
+            progressPct={awards.gridsWorked}
+            toneIndex={3}
+          />
         </div>
-      </div>
-
-      <div className="lb-dash-tile lb-dash-map">
-        <ZeusGlobe entries={entries} />
       </div>
 
       {!fullyLoaded && (

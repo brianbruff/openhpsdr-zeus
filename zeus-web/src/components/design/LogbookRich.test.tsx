@@ -83,9 +83,9 @@ describe('LogbookDetail', () => {
 describe('LogbookDashboard', () => {
   it('renders totals, bands, modes and countries from the entry set', () => {
     const entries = [
-      entry({ id: '1', callsign: 'A', band: '20m', mode: 'FT8', country: 'United States' }),
-      entry({ id: '2', callsign: 'B', band: '40m', mode: 'SSB', country: 'Canada' }),
-      entry({ id: '3', callsign: 'C', band: '20m', mode: 'FT8', country: 'United States' }),
+      entry({ id: '1', callsign: 'A', band: '20m', mode: 'FT8', country: 'United States', dxcc: 291, state: 'CT' }),
+      entry({ id: '2', callsign: 'B', band: '40m', mode: 'SSB', country: 'Canada', dxcc: 1, state: 'CA', grid: 'CM87' }),
+      entry({ id: '3', callsign: 'C', band: '20m', mode: 'FT8', country: 'United States', dxcc: 291, state: 'NY', grid: 'FN30' }),
     ];
     const { container, unmount } = render(
       createElement(LogbookDashboard, { entries, totalCount: 1248, fullyLoaded: true }),
@@ -96,10 +96,11 @@ describe('LogbookDashboard', () => {
     expect(text).toContain('Bands');
     expect(text).toContain('Modes');
     expect(text).toContain('United States');
-    // A conic-gradient ring is built for the mode mix.
-    expect(container.querySelector('.lb-donut')).not.toBeNull();
-    // The rich workspace mounts the offline globe; canvas drawing is a browser concern.
-    expect(container.querySelector('.zeus-globe')).not.toBeNull();
+    // The dashboard now uses SVG instruments; the globe lives in the hero row.
+    expect(container.querySelectorAll('path[data-slice]').length).toBeGreaterThan(0);
+    expect(container.querySelectorAll('.lb-heat-cell')).toHaveLength(26 * 7);
+    expect(container.querySelectorAll('path[data-award-progress]')).toHaveLength(3);
+    expect(container.querySelector('.zeus-globe')).toBeNull();
     unmount();
   });
 

@@ -540,15 +540,12 @@ function PluginSidebar({
   vstMode,
   embedded,
 }: PluginSidebarProps) {
-  // In flow (embedded) mode the host has no bounded height, so the
-  // browser sticks to the top of the scroll viewport and caps its own
-  // height; in the floating window it simply fills the panel.
+  // In embedded detached-window mode the host is bounded, so the browser fills
+  // the available height and lets its list scroll internally.
   const stickyStyle: React.CSSProperties = embedded
     ? {
-        position: 'sticky',
-        top: 0,
-        alignSelf: 'flex-start',
-        maxHeight: 'calc(100vh - 160px)',
+        alignSelf: 'stretch',
+        minHeight: 0,
       }
     : {};
 
@@ -1608,16 +1605,16 @@ export function AudioSuiteWindow({
   if (!embedded && !isOpen) return null;
 
   // Outer container differs by mode: a fixed, draggable, resizable
-  // floating window vs. a normal-flow block that fills the host panel's
-  // width (so plugin GUIs get real room instead of being clipped).
+  // floating window vs. a bounded embedded block that fills the detached
+  // native popout.
   const containerStyle: React.CSSProperties = embedded
     ? {
-        // Flow at natural height inside the settings pane (which is the
-        // scroll container). The old fixed 76vh + inner scroll nested two
-        // scroll regions and clipped the lower rack slots ("chopped off");
-        // flowing lets the pane scroll the whole rack as one surface.
         position: 'relative',
         width: '100%',
+        height: '100%',
+        flex: '1 1 auto',
+        minHeight: 0,
+        boxSizing: 'border-box',
         display: 'flex',
         flexDirection: 'column',
         background: 'linear-gradient(180deg, var(--panel-top), var(--panel-bot))',
@@ -1626,7 +1623,7 @@ export function AudioSuiteWindow({
         boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.04)',
         color: 'var(--fg-0)',
         fontFamily: 'var(--font-sans, Inter, system-ui, sans-serif)',
-        overflow: 'visible',
+        overflow: 'hidden',
       }
     : {
         position: 'fixed',
@@ -1954,7 +1951,7 @@ export function AudioSuiteWindow({
       <div
         style={{
           display: 'flex',
-          flex: embedded ? 'none' : 1,
+          flex: 1,
           minHeight: 0,
           alignItems: 'stretch',
         }}
@@ -1991,6 +1988,7 @@ export function AudioSuiteWindow({
             flexDirection: 'column',
             flex: 1,
             minWidth: 0,
+            minHeight: 0,
           }}
         >
         {/* Centred rack column. Caps the working width so plugin editors
@@ -2004,7 +2002,7 @@ export function AudioSuiteWindow({
             margin: '0 auto',
             display: 'flex',
             flexDirection: 'column',
-            flex: embedded ? 'none' : 1,
+            flex: 1,
             minHeight: 0,
           }}
         >
@@ -2081,12 +2079,10 @@ export function AudioSuiteWindow({
           separate native window opened by the bridge. */}
       <div
         style={{
-          // Floating window: bounded, scrolls internally. Embedded: flows
-          // at natural height and lets the settings pane scroll it.
-          flex: embedded ? 'none' : 1,
-          overflowY: embedded ? 'visible' : 'auto',
+          flex: 1,
+          overflowY: 'auto',
           padding: '14px 16px',
-          minHeight: embedded ? 160 : 0,
+          minHeight: 0,
         }}
       >
         {SelectedComponent ? (

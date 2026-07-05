@@ -1264,7 +1264,7 @@ export default function App() {
 
   // Detached Audio Suite window — the TX/RX rack popped out into its own
   // independent OS window (like a hosted VST plugin editor). Renders the suite
-  // in embedded (full-window flow) mode; the OS window chrome owns close/resize.
+  // in embedded full-window mode; the OS window chrome owns close/resize.
   if (detachedAudioSuiteRoute) {
     return (
       <BandPlanProvider>
@@ -1273,13 +1273,11 @@ export default function App() {
         className="detached-workspace-app detached-audio-suite-app"
         data-screen-label={`Detached ${detachedAudioSuiteRoute.toUpperCase()} Audio Suite`}
       >
-        {/* Embedded mode flows at natural height and expects its host to be
-            the scroll container; .workspace-area is overflow:hidden, so wrap
-            the suite in a scroll pane or a tall rack would clip in a short
-            window. */}
+        {/* The Audio Suite owns its own internal scrolling. The detached host
+            should not add workspace padding or it leaves an empty bottom band. */}
         <div
           className="workspace-area detached-workspace-area"
-          style={{ overflow: 'auto' }}
+          style={{ overflow: 'hidden', padding: 0, gap: 0 }}
         >
           <AppErrorBoundary scope="Audio Suite">
             <AudioSuiteWindow route={detachedAudioSuiteRoute} embedded />

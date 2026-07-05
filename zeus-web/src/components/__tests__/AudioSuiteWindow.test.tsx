@@ -121,7 +121,7 @@ describe('AudioSuiteWindow — stays visible when opened from Settings (#1274 re
     act(() => {
       useLayoutStore.setState({ settingsViewOpen: true });
     });
-    // Embedded needs no txOpen — it is the settings pane content itself.
+    // Embedded needs no txOpen — it is the detached popout content itself.
     const { container, unmount } = render(
       <AudioSuiteWindow route="tx" embedded />,
     );
@@ -129,6 +129,26 @@ describe('AudioSuiteWindow — stays visible when opened from Settings (#1274 re
     expect(el).not.toBeNull();
     expect(el!.getAttribute('role')).toBe('group');
     expect(el!.style.display).not.toBe('none');
+    unmount();
+  });
+
+  it('lets the embedded popout instance fill its host instead of leaving a bottom gap', () => {
+    const { container, unmount } = render(
+      <AudioSuiteWindow route="tx" embedded />,
+    );
+    const el = suiteEl(container, 'TX Audio Suite');
+    expect(el).not.toBeNull();
+    expect(el!.style.height).toBe('100%');
+    expect(el!.style.flex).toBe('1 1 auto');
+    expect(el!.style.overflow).toBe('hidden');
+
+    const body = Array.from(el!.children).find((child) => {
+      const node = child as HTMLElement;
+      return node.style.alignItems === 'stretch';
+    }) as HTMLElement | undefined;
+    expect(body).not.toBeUndefined();
+    expect(body!.style.flex).toBe('1 1 0%');
+    expect(body!.style.minHeight).toBe('0');
     unmount();
   });
 });

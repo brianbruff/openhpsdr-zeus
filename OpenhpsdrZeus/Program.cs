@@ -423,6 +423,7 @@ public partial class Program
         // size (and maximized state). Position is not restored — see
         // WindowGeometryStore for why (off-screen / monitor-layout safety).
         var geometryStore = app.Services.GetRequiredService<WindowGeometryStore>();
+        var audioSuiteGeometryStore = app.Services.GetRequiredService<AudioSuiteWindowGeometryStore>();
         var openWindowsStore = app.Services.GetRequiredService<OpenWorkspaceWindowsStore>();
         var savedGeometry = geometryStore.Get();
         var initialWidth = savedGeometry.Width;
@@ -450,8 +451,8 @@ public partial class Program
         PhotinoWindow? detachedSettingsWindow = null;
         // At most one detached window per audio-suite route (tx / rx), keyed by
         // route so a second click on the same button re-focuses instead of
-        // stacking duplicates. Tracked only for clean shutdown — unlike detached
-        // workspaces these are not persisted or re-opened next launch.
+        // stacking duplicates. Open state is not restored next launch, but each
+        // route's normal frame size is persisted by AudioSuiteWindowGeometryStore.
         var detachedAudioSuiteWindows = new Dictionary<string, PhotinoWindow>();
         var desktopShutdown = CreateDesktopShutdown(app);
 
@@ -536,7 +537,7 @@ public partial class Program
                 }
                 if (TryReadAudioSuiteWindowRequest(msg, out var audioSuiteRequest))
                 {
-                    OpenAudioSuiteWindow(owner, detachedAudioSuiteWindows, audioSuiteRequest, iconPath);
+                    OpenAudioSuiteWindow(owner, detachedAudioSuiteWindows, audioSuiteRequest, iconPath, audioSuiteGeometryStore);
                     return;
                 }
                 // External links (e.g. the "Report a problem" → GitHub button):
@@ -1248,7 +1249,8 @@ public partial class Program
         PhotinoWindow owner,
         Dictionary<string, PhotinoWindow> detachedAudioSuiteWindows,
         WorkspaceWindowRequest request,
-        string iconPath)
+        string iconPath,
+        AudioSuiteWindowGeometryStore audioSuiteGeometryStore)
     {
         if (!Uri.TryCreate(request.Url, UriKind.Absolute, out var uri)) return;
         var route = request.Route ?? "tx";
@@ -1260,20 +1262,53 @@ public partial class Program
         // not stack a duplicate; the existing window stays up.
         if (detachedAudioSuiteWindows.ContainsKey(route)) return;
 
-        // Same footprint as the former in-app floating suite (see
-        // AUDIO_SUITE_WINDOW_WIDTH/HEIGHT in workspace-windows.ts) so popping
-        // out doesn't resize the operator's rack.
+        var savedGeometry = audioSuiteGeometryStore.Get(route);
+        var initialWidth = savedGeometry.Width;
+        var initialHeight = savedGeometry.Height;
+        var lastNormalWidth = initialWidth;
+        var lastNormalHeight = initialHeight;
+        var isMaximized = savedGeometry.Maximized;
+        var isMinimized = false;
+
+        void SaveAudioSuiteGeometry(PhotinoWindow target)
+        {
+            try
+            {
+                if (target.Maximized)
+                {
+                    audioSuiteGeometryStore.Save(route, lastNormalWidth, lastNormalHeight, maximized: true);
+                    return;
+                }
+
+                var w = target.Width;
+                var h = target.Height;
+                if (isMinimized ||
+                    w < AudioSuiteWindowGeometryStore.MinWidth ||
+                    h < AudioSuiteWindowGeometryStore.MinHeight)
+                {
+                    w = lastNormalWidth;
+                    h = lastNormalHeight;
+                }
+                audioSuiteGeometryStore.Save(route, w, h, maximized: false);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"detached audio suite geometry save failed: {ex.Message}");
+            }
+        }
+
         var child = new PhotinoWindow(owner)
             .SetTitle($"Zeus - {title}")
             .SetUseOsDefaultLocation(true)
-            .SetMinWidth(600)
-            .SetMinHeight(520)
-            .SetSize(860, 760)
+            .SetMinWidth(AudioSuiteWindowGeometryStore.MinWidth)
+            .SetMinHeight(AudioSuiteWindowGeometryStore.MinHeight)
+            .SetSize(initialWidth, initialHeight)
             .SetIconFile(iconPath)
             .RegisterWindowClosingHandler((sender, _) =>
             {
                 if (sender is PhotinoWindow closed)
                 {
+                    SaveAudioSuiteGeometry(closed);
                     foreach (var kv in detachedAudioSuiteWindows.ToArray())
                     {
                         if (ReferenceEquals(kv.Value, closed))
@@ -1283,6 +1318,39 @@ public partial class Program
                 return false;
             })
             .Load(uri);
+
+        if (savedGeometry.Maximized)
+            child.Maximized = true;
+
+        child.RegisterWindowCreatedHandler((_, _) =>
+        {
+            try
+            {
+                PlaceWindowOnVisibleWorkArea(child, initialWidth, initialHeight);
+                if (savedGeometry.Maximized)
+                    child.Maximized = true;
+                if (child.Minimized)
+                    child.Minimized = false;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"detached audio suite geometry restore failed: {ex.Message}");
+            }
+        });
+        child.RegisterMaximizedHandler((_, _) => { isMaximized = true; isMinimized = false; });
+        child.RegisterMinimizedHandler((_, _) => isMinimized = true);
+        child.RegisterRestoredHandler((_, _) => { isMaximized = false; isMinimized = false; });
+        child.RegisterSizeChangedHandler((_, size) =>
+        {
+            if (!isMaximized &&
+                !isMinimized &&
+                size.Width >= AudioSuiteWindowGeometryStore.MinWidth &&
+                size.Height >= AudioSuiteWindowGeometryStore.MinHeight)
+            {
+                lastNormalWidth = size.Width;
+                lastNormalHeight = size.Height;
+            }
+        });
 
         detachedAudioSuiteWindows[route] = child;
         try

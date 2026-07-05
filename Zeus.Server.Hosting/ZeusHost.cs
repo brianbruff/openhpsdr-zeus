@@ -765,6 +765,9 @@ public static class ZeusHost
         // Desktop main-window geometry (Photino). Only RunDesktop reads it; the
         // store is harmless to register in service/headless modes (no consumer).
         builder.Services.AddSingleton<WindowGeometryStore>();
+        // Detached TX/RX Audio Suite child-window geometry. Same desktop-only /
+        // harmless-elsewhere note as WindowGeometryStore above.
+        builder.Services.AddSingleton<AudioSuiteWindowGeometryStore>();
         // Detached workspace windows the operator left open at shutdown, reopened
         // on the next desktop launch. Same desktop-only / harmless-elsewhere note
         // as WindowGeometryStore above.

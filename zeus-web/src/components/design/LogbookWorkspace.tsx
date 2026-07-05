@@ -13,6 +13,7 @@ import { useLoggerStore } from '../../state/logger-store';
 import { LogbookLive } from './LogbookLive';
 import { LogbookDetail } from './LogbookDetail';
 import { LogbookDashboard } from './LogbookDashboard';
+import { LogbookHero } from './LogbookHero';
 
 // Responsive shell for the Logbook. Docked as a narrow panel it is exactly the
 // compact table it has always been — just restyled. Given real estate (the
@@ -99,6 +100,7 @@ export function LogbookWorkspace({ searchText, hideQrzPublished }: Props) {
             onActivate={setActiveId}
           />
         </div>
+        <LogbookHero entries={entries} totalCount={totalCount} />
         <div className="lb-detail">
           <LogbookDetail entry={activeEntry} />
         </div>

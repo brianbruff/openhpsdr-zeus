@@ -13,6 +13,7 @@ import {
   countThisMonth,
   geoPoints,
   awardStats,
+  heroStats,
 } from './logbook-stats';
 import { countryToFlag, flagEmoji } from './logbook-flag';
 
@@ -146,6 +147,26 @@ describe('awardStats', () => {
       dxccConfirmed: 3,
       statesWorked: 2,
       gridsWorked: 3,
+    });
+  });
+});
+
+describe('heroStats', () => {
+  it('uses the hydrated total and de-duplicates grids, DXCC entities and bands', () => {
+    const stats = heroStats(
+      [
+        entry({ id: '1', callsign: 'A', band: '20m', grid: 'FN31', dxcc: 291 }),
+        entry({ id: '2', callsign: 'B', band: '40m', grid: 'FN31aa', dxcc: 291 }),
+        entry({ id: '3', callsign: 'C', band: '20m', grid: 'CM87', dxcc: 110 }),
+      ],
+      1248,
+    );
+
+    expect(stats).toEqual({
+      qsos: 1248,
+      grids: 2,
+      dxcc: 2,
+      bands: 2,
     });
   });
 });

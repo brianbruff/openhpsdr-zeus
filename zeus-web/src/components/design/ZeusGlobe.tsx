@@ -13,7 +13,7 @@ import type { LogEntry } from '../../api/log';
 import { useOperatorStore } from '../../state/operator-store';
 import { useQrzStore } from '../../state/qrz-store';
 import { bearingDeg, destinationPoint, distanceKm, gridToLatLon } from './geo';
-import { geoPoints } from './logbook-stats';
+import { geoPoints, type GeoPoint } from './logbook-stats';
 import { WORLD_LAND_RINGS } from './world-land-110m';
 import {
   clampView,
@@ -33,6 +33,17 @@ type Props = {
 };
 
 const SIGNAL_AMBER = '#FFA028';
+
+type GlobeTarget = LonLat & { callsign: string };
+type WorkedRoute = { key: string; count: number; arc: LonLat[] };
+type GlobeData = {
+  workedRoutes: WorkedRoute[];
+  points: GeoPoint[];
+  targetArc: LonLat[] | null;
+  target: GlobeTarget | null;
+  home: LonLat | null;
+  maxCount: number;
+};
 
 function ringToLonLat(ring: number[]): LonLat[] {
   const out: LonLat[] = [];
@@ -75,6 +86,11 @@ function token(name: string): string {
   return value || 'CanvasText';
 }
 
+function prefersReducedMotion(): boolean {
+  return typeof window !== 'undefined'
+    && Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+}
+
 export function ZeusGlobe({ entries }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -83,6 +99,15 @@ export function ZeusGlobe({ entries }: Props) {
   const dragRef = useRef<{ x: number; y: number; view: GlobeView; t: number } | null>(null);
   const rafRef = useRef<number | null>(null);
   const minuteRef = useRef<number | null>(null);
+  const reducedMotionRef = useRef(prefersReducedMotion());
+  const dataRef = useRef<GlobeData>({
+    workedRoutes: [],
+    points: [],
+    targetArc: null,
+    target: null,
+    home: null,
+    maxCount: 1,
+  });
   const animationRef = useRef<{
     start: number;
     from: GlobeView;
@@ -93,19 +118,47 @@ export function ZeusGlobe({ entries }: Props) {
   const [readout, setReadout] = useState<string>('');
 
   const points = useMemo(() => geoPoints(entries), [entries]);
-  const qrzHome = useQrzStore((s) => s.home);
-  const lastLookup = useQrzStore((s) => s.lastLookup);
+  const qrzHomeLat = useQrzStore((s) => s.home?.lat ?? null);
+  const qrzHomeLon = useQrzStore((s) => s.home?.lon ?? null);
+  const lastLookupLat = useQrzStore((s) => s.lastLookup?.lat ?? null);
+  const lastLookupLon = useQrzStore((s) => s.lastLookup?.lon ?? null);
+  const lastLookupCallsign = useQrzStore((s) => s.lastLookup?.callsign ?? null);
   const resolvedGrid = useOperatorStore((s) => s.resolvedGrid);
   const home = useMemo<LonLat | null>(() => {
-    if (qrzHome?.lat != null && qrzHome.lon != null) return { lat: qrzHome.lat, lon: qrzHome.lon };
+    if (qrzHomeLat != null && qrzHomeLon != null) return { lat: qrzHomeLat, lon: qrzHomeLon };
     const ll = resolvedGrid ? gridToLatLon(resolvedGrid) : null;
     return ll ? { lat: ll.lat, lon: ll.lon } : null;
-  }, [qrzHome?.lat, qrzHome?.lon, resolvedGrid]);
-  const target = lastLookup?.lat != null && lastLookup.lon != null
-    ? { lat: lastLookup.lat, lon: lastLookup.lon, callsign: lastLookup.callsign }
-    : null;
+  }, [qrzHomeLat, qrzHomeLon, resolvedGrid]);
+  const target = useMemo<GlobeTarget | null>(
+    () => lastLookupLat != null && lastLookupLon != null
+      ? { lat: lastLookupLat, lon: lastLookupLon, callsign: lastLookupCallsign ?? '' }
+      : null,
+    [lastLookupLat, lastLookupLon, lastLookupCallsign],
+  );
+  const workedRoutes = useMemo(() => {
+    if (!home) return [];
+    return points
+      .map((point) => {
+        const km = distanceKm(home.lat, home.lon, point.lat, point.lon);
+        if (km < 5) return null;
+        return {
+          key: `${Math.round(point.lat * 10)}:${Math.round(point.lon * 10)}`,
+          count: point.count,
+          arc: greatCircleArc(home, { lat: point.lat, lon: point.lon }, 72),
+        };
+      })
+      .filter((route): route is WorkedRoute => route != null);
+  }, [home, points]);
+  const targetArc = useMemo(
+    () => (home && target ? greatCircleArc(home, target, 96) : null),
+    [home, target?.lat, target?.lon],
+  );
+  const maxCount = useMemo(() => points.reduce((m, p) => Math.max(m, p.count), 1), [points]);
+
+  dataRef.current = { workedRoutes, points, targetArc, target, home, maxCount };
 
   const schedule = () => {
+    if (typeof requestAnimationFrame === 'undefined') return;
     if (rafRef.current != null) return;
     rafRef.current = requestAnimationFrame(draw);
   };
@@ -132,17 +185,34 @@ export function ZeusGlobe({ entries }: Props) {
     const cx = rect.width / 2;
     const cy = rect.height / 2;
     const r = size * 0.42;
-    const panelTop = token('--panel-top');
-    const panelBot = token('--panel-bot');
     const fg2 = token('--fg-2');
     const fg3 = token('--fg-3');
     const bg0 = token('--bg-0');
+    const oceanDeep = token('--bg-inset');
+    const oceanLit = token('--accent-bright');
+    const landFill = token('--ok');
+    const landHighlight = token('--power');
     const accent = token('--accent');
-    const view = viewRef.current;
+    const reducedMotion = reducedMotionRef.current;
+    const data = dataRef.current;
+    const { workedRoutes, points, targetArc, target, home, maxCount } = data;
+    let view = viewRef.current;
+    let keepAnimating = false;
+    let arcProgress = 1;
+    const anim = animationRef.current;
+    if (anim) {
+      const t = Math.min(1, (now - anim.start) / anim.duration);
+      viewRef.current = interpolateView(anim.from, anim.to, easeInOutCubic(t));
+      view = viewRef.current;
+      arcProgress = Math.min(1, (now - anim.start) / anim.arcUntil);
+      keepAnimating = t < 1 || arcProgress < 1;
+      if (!keepAnimating) animationRef.current = null;
+    }
 
     const sphere = ctx.createRadialGradient(cx - r * 0.35, cy - r * 0.45, r * 0.15, cx, cy, r * 1.15);
-    sphere.addColorStop(0, panelTop);
-    sphere.addColorStop(1, panelBot);
+    sphere.addColorStop(0, oceanLit);
+    sphere.addColorStop(0.5, accent);
+    sphere.addColorStop(1, oceanDeep);
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.fillStyle = sphere;
@@ -171,7 +241,6 @@ export function ZeusGlobe({ entries }: Props) {
     }
     ctx.globalAlpha = 1;
 
-    ctx.fillStyle = token('--bg-2');
     ctx.strokeStyle = fg2;
     ctx.lineWidth = 0.7;
     for (const ring of LAND_RINGS) {
@@ -180,7 +249,11 @@ export function ZeusGlobe({ entries }: Props) {
         ctx.beginPath();
         drawProjectedPath(ctx, segment, view, cx, cy, r);
         ctx.closePath();
-        ctx.globalAlpha = 0.8;
+        ctx.globalAlpha = 0.46;
+        ctx.fillStyle = landFill;
+        ctx.fill();
+        ctx.globalAlpha = 0.16;
+        ctx.fillStyle = landHighlight;
         ctx.fill();
         ctx.globalAlpha = 0.55;
         ctx.stroke();
@@ -218,7 +291,24 @@ export function ZeusGlobe({ entries }: Props) {
     ctx.stroke();
     ctx.globalAlpha = 1;
 
-    const maxCount = points.reduce((m, p) => Math.max(m, p.count), 1);
+    if (home && workedRoutes.length > 0) {
+      const routeGradient = ctx.createLinearGradient(cx - r, cy - r * 0.25, cx + r, cy + r * 0.35);
+      routeGradient.addColorStop(0, SIGNAL_AMBER);
+      routeGradient.addColorStop(1, accent);
+      ctx.strokeStyle = routeGradient;
+      ctx.shadowColor = SIGNAL_AMBER;
+      ctx.shadowBlur = 5;
+      ctx.lineWidth = 1.15;
+      for (const route of workedRoutes) {
+        ctx.globalAlpha = 0.16 + Math.min(1, route.count / maxCount) * 0.14;
+        ctx.beginPath();
+        drawProjectedPath(ctx, route.arc, view, cx, cy, r);
+        ctx.stroke();
+      }
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
+    }
+
     ctx.fillStyle = SIGNAL_AMBER;
     ctx.shadowColor = SIGNAL_AMBER;
     ctx.shadowBlur = 12;
@@ -237,7 +327,7 @@ export function ZeusGlobe({ entries }: Props) {
     if (home) {
       const p = projectOrthographic(home, view);
       if (p.visible) {
-        const pulse = 1 + Math.sin(now / 500) * 0.18;
+        const pulse = reducedMotion ? 1 : 1 + Math.sin(now / 500) * 0.18;
         ctx.strokeStyle = accent;
         ctx.lineWidth = 2;
         ctx.beginPath();
@@ -246,48 +336,36 @@ export function ZeusGlobe({ entries }: Props) {
       }
     }
 
-    let keepAnimating = false;
-    let arcProgress = 1;
-    const anim = animationRef.current;
-    if (anim) {
-      const t = Math.min(1, (now - anim.start) / anim.duration);
-      viewRef.current = interpolateView(anim.from, anim.to, easeInOutCubic(t));
-      arcProgress = Math.min(1, (now - anim.start) / anim.arcUntil);
-      keepAnimating = t < 1 || arcProgress < 1;
-      if (!keepAnimating) animationRef.current = null;
-    }
-
-    if (home && target) {
-      const arc = greatCircleArc(home, target, 96);
-      const drawCount = Math.max(2, Math.floor(arc.length * arcProgress));
+    if (home && target && targetArc) {
+      const drawCount = Math.max(2, Math.floor(targetArc.length * arcProgress));
       ctx.strokeStyle = SIGNAL_AMBER;
       ctx.shadowColor = SIGNAL_AMBER;
       ctx.shadowBlur = 14;
       ctx.lineWidth = 2;
       ctx.beginPath();
-      drawProjectedPath(ctx, arc.slice(0, drawCount), viewRef.current, cx, cy, r);
+      drawProjectedPath(ctx, targetArc.slice(0, drawCount), view, cx, cy, r);
       ctx.stroke();
-      const head = arc[Math.min(drawCount - 1, arc.length - 1)];
+      const head = targetArc[Math.min(drawCount - 1, targetArc.length - 1)];
       if (head) {
-        const hp = projectOrthographic(head, viewRef.current);
+        const hp = projectOrthographic(head, view);
         if (hp.visible) {
           ctx.fillStyle = SIGNAL_AMBER;
           ctx.beginPath();
-          ctx.arc(cx + hp.x * r * viewRef.current.zoom, cy - hp.y * r * viewRef.current.zoom, 4.5, 0, Math.PI * 2);
+          ctx.arc(cx + hp.x * r * view.zoom, cy - hp.y * r * view.zoom, 4.5, 0, Math.PI * 2);
           ctx.fill();
         }
       }
       ctx.shadowBlur = 0;
-      const tp = projectOrthographic(target, viewRef.current);
+      const tp = projectOrthographic(target, view);
       if (tp.visible) {
         ctx.strokeStyle = SIGNAL_AMBER;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.arc(cx + tp.x * r * viewRef.current.zoom, cy - tp.y * r * viewRef.current.zoom, 10 + Math.sin(now / 450) * 2, 0, Math.PI * 2);
+        ctx.arc(cx + tp.x * r * view.zoom, cy - tp.y * r * view.zoom, 10 + (reducedMotion ? 0 : Math.sin(now / 450) * 2), 0, Math.PI * 2);
         ctx.stroke();
         ctx.fillStyle = token('--fg-0');
         ctx.font = '600 12px Archivo Narrow, sans-serif';
-        ctx.fillText(target.callsign, cx + tp.x * r * viewRef.current.zoom + 12, cy - tp.y * r * viewRef.current.zoom - 8);
+        ctx.fillText(target.callsign, cx + tp.x * r * view.zoom + 12, cy - tp.y * r * view.zoom - 8);
       }
     }
 
@@ -298,7 +376,9 @@ export function ZeusGlobe({ entries }: Props) {
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.stroke();
 
-    if (velocityRef.current.lon || velocityRef.current.lat) {
+    if (reducedMotion) {
+      velocityRef.current = { lon: 0, lat: 0 };
+    } else if (velocityRef.current.lon || velocityRef.current.lat) {
       viewRef.current = clampView({
         ...viewRef.current,
         lon: viewRef.current.lon + velocityRef.current.lon,
@@ -314,15 +394,50 @@ export function ZeusGlobe({ entries }: Props) {
     if (keepAnimating) schedule();
   };
 
+  useEffect(() => () => {
+    if (rafRef.current != null && typeof cancelAnimationFrame !== 'undefined') {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = (event?: MediaQueryListEvent) => {
+      reducedMotionRef.current = event?.matches ?? mq.matches;
+      schedule();
+    };
+    update();
+    if (typeof mq.addEventListener === 'function') {
+      mq.addEventListener('change', update);
+      return () => mq.removeEventListener('change', update);
+    }
+    mq.addListener(update);
+    return () => mq.removeListener(update);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     const root = rootRef.current;
     if (!root || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(schedule);
     ro.observe(root);
     schedule();
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      if (rafRef.current != null && typeof cancelAnimationFrame !== 'undefined') {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    schedule();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workedRoutes, targetArc]);
 
   useEffect(() => {
     if (minuteRef.current != null) window.clearInterval(minuteRef.current);
@@ -336,9 +451,7 @@ export function ZeusGlobe({ entries }: Props) {
   useEffect(() => {
     if (!home || !target) return;
     const next = frameViewForPoints([home, target], viewRef.current);
-    const reduced = typeof window !== 'undefined'
-      && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    if (reduced) {
+    if (reducedMotionRef.current) {
       viewRef.current = next;
       animationRef.current = null;
     } else {
@@ -373,11 +486,15 @@ export function ZeusGlobe({ entries }: Props) {
       lon: drag.view.lon - dx * 0.35 / drag.view.zoom,
       lat: drag.view.lat + dy * 0.25 / drag.view.zoom,
     });
-    const dt = Math.max(16, performance.now() - drag.t);
-    velocityRef.current = {
-      lon: (next.lon - viewRef.current.lon) / (dt / 16),
-      lat: (next.lat - viewRef.current.lat) / (dt / 16),
-    };
+    if (reducedMotionRef.current) {
+      velocityRef.current = { lon: 0, lat: 0 };
+    } else {
+      const dt = Math.max(16, performance.now() - drag.t);
+      velocityRef.current = {
+        lon: (next.lon - viewRef.current.lon) / (dt / 16),
+        lat: (next.lat - viewRef.current.lat) / (dt / 16),
+      };
+    }
     viewRef.current = next;
     schedule();
   };

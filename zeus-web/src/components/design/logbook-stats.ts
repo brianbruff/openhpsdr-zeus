@@ -37,6 +37,12 @@ export type AwardStats = {
   statesWorked: number;
   gridsWorked: number;
 };
+export type HeroStats = {
+  qsos: number;
+  grids: number;
+  dxcc: number;
+  bands: number;
+};
 
 function normBand(band: string | null | undefined): string {
   return (band ?? '').trim().toUpperCase();
@@ -173,5 +179,15 @@ export function awardStats(entries: LogEntry[]): AwardStats {
     dxccConfirmed: dxccConfirmed.size,
     statesWorked: states.size,
     gridsWorked: grids.size,
+  };
+}
+
+export function heroStats(entries: LogEntry[], totalCount: number): HeroStats {
+  const awards = awardStats(entries);
+  return {
+    qsos: totalCount,
+    grids: awards.gridsWorked,
+    dxcc: awards.dxccWorked,
+    bands: bandHistogram(entries).length,
   };
 }

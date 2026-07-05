@@ -144,6 +144,13 @@ import type { Contact } from './components/design/data';
 import { qrzStationToContact } from './components/design/qrz-contact';
 import { reloadInstalledPluginUis } from './plugins/runtime/pluginRuntime';
 import { usePluginsStore } from './plugins/state/plugins-store';
+import { PluginUpdatePrompt } from './plugins/components/PluginUpdatePrompt';
+import {
+  filterUnseen,
+  findPluginUpdates,
+  loadSeenPluginVersions,
+  recordSeenPluginVersions,
+} from './plugins/updates';
 import { useDigitalPluginStore } from './state/digital-plugin-store';
 import { useFreeDvPluginStore } from './state/freedv-plugin-store';
 
@@ -190,6 +197,7 @@ export default function App() {
   );
   const refreshAccessSession = useUserAccessStore((s) => s.refreshSession);
   const appShellEnabled = appAccessAllowed && !adminRoute;
+  const startupRegistryRefreshStarted = useRef(false);
 
   useEffect(() => {
     void refreshAccessSession();
@@ -208,6 +216,13 @@ export default function App() {
     void (async () => {
       try {
         await usePluginsStore.getState().refreshInstalled();
+        if (!startupRegistryRefreshStarted.current) {
+          startupRegistryRefreshStarted.current = true;
+          // Fire-and-forget: the update prompt renders whenever the catalog
+          // lands; a slow or unreachable registry must not hold up plugin UI
+          // reload or the mode probes below.
+          void usePluginsStore.getState().refreshRegistry();
+        }
         await reloadInstalledPluginUis();
         await useDigitalPluginStore.getState().probe();
         await useFreeDvPluginStore.getState().probe();
@@ -244,10 +259,26 @@ export default function App() {
   const [installUpdate, setInstallUpdate] = useState<(() => Promise<void>) | null>(null);
   const [startupUpdate, setStartupUpdate] = useState<RepoUpdateStatus | null>(null);
   const [startupUpdateDismissed, setStartupUpdateDismissed] = useState(false);
+  const [pluginUpdateDismissed, setPluginUpdateDismissed] = useState(false);
   const [confirmResetLayout, setConfirmResetLayout] = useState<{
     id: string;
     name: string;
   } | null>(null);
+  const installedPlugins = usePluginsStore((s) => s.installed);
+  const registryCatalog = usePluginsStore((s) => s.registry);
+  const pluginUpdates = useMemo(
+    () =>
+      filterUnseen(
+        findPluginUpdates(installedPlugins, registryCatalog),
+        loadSeenPluginVersions(),
+      ),
+    [installedPlugins, registryCatalog],
+  );
+  const startupUpdateVisible = Boolean(startupUpdate && !startupUpdateDismissed);
+  const dismissPluginUpdates = useCallback(() => {
+    recordSeenPluginVersions(pluginUpdates);
+    setPluginUpdateDismissed(true);
+  }, [pluginUpdates]);
   const status = useConnectionStore((s) => s.status);
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   const mode = useConnectionStore((s) => s.mode);
@@ -1544,6 +1575,16 @@ export default function App() {
         status={!startupUpdateDismissed ? startupUpdate : null}
         onDismiss={() => setStartupUpdateDismissed(true)}
         onOpenSettings={() => setSettingsView(true, 'updates')}
+      />
+      <PluginUpdatePrompt
+        updates={
+          !startupUpdateVisible && !pluginUpdateDismissed ? pluginUpdates : []
+        }
+        onDismiss={dismissPluginUpdates}
+        onOpenPlugins={() => {
+          setSettingsView(true, 'plugins');
+          dismissPluginUpdates();
+        }}
       />
       <UpdatePrompt show={updateAvailable} onUpdate={installUpdate} />
       <ReportProblemModal />

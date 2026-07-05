@@ -1539,7 +1539,7 @@ public static class ZeusEndpoints
             if (radio.IsConnected)
             {
                 var currentState = radio.Snapshot();
-                if (radio.IsProtocol3Active && SameIpEndpoint(currentState.Endpoint, ipEndpoint))
+                if (radio.IsProtocol3Active && SameIpAddress(currentState.Endpoint, ipEndpoint.Address))
                 {
                     return Results.Ok(new
                     {
@@ -5241,6 +5241,14 @@ public static class ZeusEndpoints
         return TryParseIpEndpoint(current, out var parsed) &&
                parsed.Address.Equals(requested.Address) &&
                parsed.Port == requested.Port;
+    }
+
+    internal static bool SameIpAddress(string? current, IPAddress requested)
+    {
+        if (string.IsNullOrWhiteSpace(current))
+            return false;
+        return TryParseIpEndpoint(current, out var parsed) &&
+               parsed.Address.Equals(requested);
     }
 
     internal static int Protocol3RequestedRxStreams(StateDto state, int radioMaxRxStreams)

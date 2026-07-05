@@ -468,6 +468,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private uint _seqCmdTx;
     private uint _seqCmdHp;
     private uint _seqCmdTxIq;
+    private readonly CmdHighPriorityTxLogGate _cmdHpTxLogGate = new();
 
     // TX-DUC IQ accumulator. WDSP TXA emits 1024/2048-sample blocks; the P2
     // wire format wants 240 complex samples per 1444-byte packet on port 1029.
@@ -2832,6 +2833,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     {
         var p = new byte[BufLen];
         WriteBeU32(p, 0, _seqCmdHp++);
+        bool moxOn = _moxOn;
+        bool tuneActive = _tuneActive;
         // PureSignal feedback bytes (DDC0/DDC1 phase mirror + ALEX_PS / bypass
         // coupler bits) may go on the wire ONLY when Zeus reserves the front
         // DDCs for feedback on this board (issue #960). On the single-ADC
@@ -2848,7 +2851,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // pihpsdr new_protocol.c:746-757 both set bit 1 whenever the radio
         // should key — covers both mic-MOX and TUN. Without this bit the
         // radio stays in RX regardless of drive / tune state.
-        p[4] = (byte)((_moxOn || _tuneActive ? 0x02 : 0x00) | (run ? 0x01 : 0x00));
+        p[4] = (byte)((moxOn || tuneActive ? 0x02 : 0x00) | (run ? 0x01 : 0x00));
 
         // Frequency field is a PHASE word (general[37] bit 3 set) — radio
         // reads a 32-bit phase increment, not Hz. pihpsdr computes this as
@@ -2900,7 +2903,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // the actual TX coupler signal. pihpsdr new_protocol.c:827-839.
         // Board-gated via psWire so DDC0's phase is never overwritten on a
         // single-ADC board where DDC0 carries the operator's RX (#960).
-        if (psWire && _moxOn)
+        if (psWire && moxOn)
         {
             // For now mirror the RX freq onto the TX side — the radio's
             // single-VFO assumption today means TX = RX. Multi-VFO support
@@ -2926,7 +2929,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // hand an external amp a confused band-select state during a steady
         // tune carrier.
         UnpackOcMasks(Volatile.Read(ref _ocMasksPacked), out byte ocTxMask, out byte ocRxMask, out byte ocTuneMask);
-        p[1401] = ComposeOcMaskByte1401(_moxOn, _tuneActive, ocTxMask, ocRxMask, ocTuneMask);
+        p[1401] = ComposeOcMaskByte1401(moxOn, tuneActive, ocTxMask, ocRxMask, ocTuneMask);
 
         // Anvelina-PRO3 DX OC extension (USEROUT7..10) at byte 1397, bits
         // [4:1]. EU2AV's Open_Collector_Anvelina_DX for Thetis spec
@@ -2941,7 +2944,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         if (_boardKind == HpsdrBoardKind.OrionMkII
             && _variant == OrionMkIIVariant.AnvelinaPro3)
         {
-            byte dxBits = (_moxOn || _tuneActive) ? _ocDxTxMask : _ocDxRxMask;
+            byte dxBits = (moxOn || tuneActive) ? _ocDxTxMask : _ocDxRxMask;
             p[1397] = (byte)((dxBits & 0x0F) << 1);
         }
 
@@ -2965,7 +2968,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // through the RX filters and DAC images radiate as out-of-band
         // harmonics. Alex1 additionally gets RX_GNDonTX to short the RX input
         // while keyed, protecting the ADC.
-        bool xmit = _moxOn || _tuneActive;
+        bool xmit = moxOn || tuneActive;
         bool rx2Enabled = Volatile.Read(ref _rx2Enabled) != 0;
         // TX-antenna relay select (external-ports plan — antenna slice, #804).
         // Gate the alex0[26:24] emission on the board/variant relay population: a
@@ -3053,11 +3056,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         WriteBeU32(p, 1432, alex0);
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1027));
 
-        _log.LogInformation(
-            "p2.cmd_hp.tx run={Run} mox={Mox} tun={Tun} board={Board} variant={Variant} ocTx=0x{OcTx:X2} ocRx=0x{OcRx:X2} ocTune=0x{OcTune:X2} ocDxTx=0x{OcDxTx:X2} ocDxRx=0x{OcDxRx:X2} -> p[1401]=0x{B1401:X2} p[1397]=0x{B1397:X2}",
-            run, _moxOn, _tuneActive, _boardKind, _variant,
-            ocTxMask, ocRxMask, ocTuneMask, _ocDxTxMask, _ocDxRxMask,
-            p[1401], p[1397]);
+        if (_cmdHpTxLogGate.ShouldLog(_stopwatch.ElapsedMilliseconds, run, moxOn, tuneActive))
+        {
+            _log.LogInformation(
+                "p2.cmd_hp.tx run={Run} mox={Mox} tun={Tun} board={Board} variant={Variant} ocTx=0x{OcTx:X2} ocRx=0x{OcRx:X2} ocTune=0x{OcTune:X2} ocDxTx=0x{OcDxTx:X2} ocDxRx=0x{OcDxRx:X2} -> p[1401]=0x{B1401:X2} p[1397]=0x{B1397:X2}",
+                run, moxOn, tuneActive, _boardKind, _variant,
+                ocTxMask, ocRxMask, ocTuneMask, _ocDxTxMask, _ocDxRxMask,
+                p[1401], p[1397]);
+        }
     }
 
     // ANAN-7000 / Orion-II / Saturn (G2 MkII) BPF board constants. Copied

@@ -258,6 +258,18 @@ describe('Ft8TxController', () => {
     expect(ctrl.getState().enableTx).toBe(false);
   });
 
+  it('forceLocalDisarm flips local arm state without POSTing /arm', () => {
+    const { fn, calls } = makeFetch();
+    const ctrl = new Ft8TxController({ myCall: 'KB2UKA', fetchFn: fn });
+    ctrl.enableTx();
+    calls.length = 0;
+
+    ctrl.forceLocalDisarm();
+
+    expect(ctrl.getState().enableTx).toBe(false);
+    expect(arm(calls)).toHaveLength(0);
+  });
+
   it('startCq() preserves arm/hold/slot so pressing CQ while armed does not silently disarm (#1223)', () => {
     const { fn, calls } = makeFetch();
     const ctrl = new Ft8TxController({ myCall: 'KB2UKA', myGrid4: 'FN12', fetchFn: fn });

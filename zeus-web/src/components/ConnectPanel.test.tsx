@@ -136,7 +136,7 @@ describe('ConnectPanel', () => {
     unmount();
   });
 
-  it('accepts an already-connected Protocol 3 session for the same endpoint', async () => {
+  it('accepts an already-connected Protocol 3 session for the same radio IP', async () => {
     const p3Radio: RadioInfoDto = {
       macAddress: '',
       ipAddress: '192.168.1.25',
@@ -156,7 +156,7 @@ describe('ConnectPanel', () => {
       .mockImplementationOnce(async () => ({
         ...stateSnapshot(),
         status: 'Connected',
-        endpoint: '192.168.1.25:1030',
+        endpoint: '192.168.1.25:1024',
         connectedProtocol: 'P3',
       }));
 
@@ -178,9 +178,32 @@ describe('ConnectPanel', () => {
       sampleRate: 1_536_000,
     });
     expect(useConnectionStore.getState().status).toBe('Connected');
-    expect(useConnectionStore.getState().endpoint).toBe('192.168.1.25:1030');
+    expect(useConnectionStore.getState().endpoint).toBe('192.168.1.25:1024');
     expect(container.textContent).not.toContain('Already connected. Disconnect first.');
     expect(audioMocks.start).toHaveBeenCalled();
+    unmount();
+  });
+
+  it('does not offer takeover for a busy Protocol 3 discovery row', async () => {
+    const p3Radio: RadioInfoDto = {
+      macAddress: '',
+      ipAddress: '192.168.1.25',
+      boardId: 'G2',
+      firmwareVersion: '0x024001BF',
+      busy: true,
+      details: {
+        protocol: 'P3',
+        protocol3Available: 'true',
+        protocol3Port: '1030',
+      },
+    };
+    apiMocks.fetchRadios.mockResolvedValue([p3Radio]);
+
+    const { container, unmount } = render(createElement(ConnectPanel));
+    await flushEffects();
+
+    expect(exactButtons(container, 'Take over')).toHaveLength(0);
+    expect(exactButtons(container, 'Connect')).toHaveLength(1);
     unmount();
   });
 

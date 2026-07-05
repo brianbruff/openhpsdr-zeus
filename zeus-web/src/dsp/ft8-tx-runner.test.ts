@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, renderHook } from '../components/meters/__tests__/harness';
 import {
   beaconDisarm,
   decodesForSlot,
@@ -9,11 +10,62 @@ import {
   slotMsFor,
   slotParity,
   startFt8SlotDriver,
+  useFt8TxRunner,
 } from './ft8-tx-runner';
 import { Ft8TxController } from './ft8-tx-controller';
 import { startCq, type Slot } from './ft8-sequencer';
 import { DIGITAL_PLUGIN_BASE } from '../api/digital-plugin';
 import type { Ft8Row } from '../state/ft8-store';
+import { useFt8TxStore, type Ft8TxStatus } from '../state/ft8-tx-store';
+
+interface PostCall {
+  url: string;
+  body: Record<string, unknown>;
+}
+
+function makeFetch(): { fn: typeof fetch; calls: PostCall[] } {
+  const calls: PostCall[] = [];
+  const fn = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+    calls.push({ url: String(url), body });
+    return {} as Response;
+  }) as unknown as typeof fetch;
+  return { fn, calls };
+}
+
+const armPosts = (calls: PostCall[]) => calls.filter((c) => c.url === `${DIGITAL_PLUGIN_BASE}/ft8/tx/arm`);
+
+function installBeaconSpy(): { calls: Array<{ url: string; data?: BodyInit }>; restore: () => void } {
+  const calls: Array<{ url: string; data?: BodyInit }> = [];
+  const orig = navigator.sendBeacon;
+  (navigator as unknown as { sendBeacon: (u: string, d?: BodyInit) => boolean }).sendBeacon = (
+    url: string,
+    data?: BodyInit,
+  ) => {
+    calls.push({ url: String(url), data });
+    return true;
+  };
+  return {
+    calls,
+    restore: () => {
+      (navigator as unknown as { sendBeacon?: unknown }).sendBeacon = orig;
+    },
+  };
+}
+
+function txStatus(armed: boolean): Ft8TxStatus {
+  return {
+    armed,
+    transmitting: false,
+    mode: 'FT8',
+    message: null,
+    audioHz: 1500,
+    slot: '',
+    watchdogSecsRemaining: 0,
+    lastTxSlotMs: null,
+    nativeAvailable: true,
+  };
+}
 
 function row(slotStartUnixMs: number, text: string, i = 0, snrDb = -10): Ft8Row {
   return {
@@ -28,6 +80,15 @@ function row(slotStartUnixMs: number, text: string, i = 0, snrDb = -10): Ft8Row 
     text,
   };
 }
+
+beforeEach(() => {
+  useFt8TxStore.setState({ status: null, txEcho: [] });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  useFt8TxStore.setState({ status: null, txEcho: [] });
+});
 
 describe('ft8-tx-runner slot helpers', () => {
   it('slotMsFor: FT8 = 15 s, FT4 = 7.5 s', () => {
@@ -217,5 +278,269 @@ describe('beaconDisarm', () => {
     }
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url).toBe(`${DIGITAL_PLUGIN_BASE}/ft8/tx/arm`);
+  });
+});
+
+describe('useFt8TxRunner lifecycle safety', () => {
+  it('unmount of a never-armed runner does not POST /arm or send a beacon', () => {
+    const { fn, calls } = makeFetch();
+    const beacon = installBeaconSpy();
+    try {
+      const hook = renderHook(() =>
+        useFt8TxRunner({ myCall: 'KB2UKA', myGrid: 'FN12', mode: 'FT8', active: false, fetchFn: fn }),
+      );
+
+      hook.unmount();
+
+      expect(armPosts(calls)).toHaveLength(0);
+      expect(beacon.calls).toHaveLength(0);
+    } finally {
+      beacon.restore();
+    }
+  });
+
+  it('unmount of an armed runner disarms the backend and sends the safety beacon', () => {
+    const { fn, calls } = makeFetch();
+    const beacon = installBeaconSpy();
+    try {
+      const hook = renderHook(() =>
+        useFt8TxRunner({ myCall: 'KB2UKA', myGrid: 'FN12', mode: 'FT8', active: false, fetchFn: fn }),
+      );
+      act(() => hook.result.current.enableTx());
+      calls.length = 0;
+      beacon.calls.length = 0;
+
+      hook.unmount();
+
+      expect(armPosts(calls)).toEqual([
+        expect.objectContaining({ body: { enabled: false } }),
+      ]);
+      expect(beacon.calls).toHaveLength(1);
+      expect(beacon.calls[0]?.url).toBe(`${DIGITAL_PLUGIN_BASE}/ft8/tx/arm`);
+    } finally {
+      beacon.restore();
+    }
+  });
+
+  it('pagehide only beacons from a locally armed runner', () => {
+    const { fn } = makeFetch();
+    const beacon = installBeaconSpy();
+    try {
+      const hook = renderHook(() =>
+        useFt8TxRunner({ myCall: 'KB2UKA', myGrid: 'FN12', mode: 'FT8', active: false, fetchFn: fn }),
+      );
+
+      act(() => window.dispatchEvent(new Event('pagehide')));
+      expect(beacon.calls).toHaveLength(0);
+
+      act(() => hook.result.current.enableTx());
+      beacon.calls.length = 0;
+      act(() => window.dispatchEvent(new Event('pagehide')));
+
+      expect(beacon.calls).toHaveLength(1);
+      expect(beacon.calls[0]?.url).toBe(`${DIGITAL_PLUGIN_BASE}/ft8/tx/arm`);
+      hook.unmount();
+    } finally {
+      beacon.restore();
+    }
+  });
+});
+
+describe('useFt8TxRunner backend arm reconcile', () => {
+  it('flips local state disarmed on backend armed true→false outside the arm grace window without POSTing', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const { fn, calls } = makeFetch();
+    const hook = renderHook(() =>
+      useFt8TxRunner({ myCall: 'KB2UKA', myGrid: 'FN12', mode: 'FT8', active: false, fetchFn: fn }),
+    );
+
+    act(() => hook.result.current.enableTx());
+    act(() => useFt8TxStore.setState({ status: txStatus(true) }));
+    vi.advanceTimersByTime(5_001);
+    calls.length = 0;
+
+    act(() => useFt8TxStore.setState({ status: txStatus(false) }));
+
+    expect(hook.result.current.qso.enableTx).toBe(false);
+    expect(armPosts(calls)).toHaveLength(0);
+    hook.unmount();
+  });
+
+  it('keeps local state armed on backend true→false inside the local arm grace window', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const { fn, calls } = makeFetch();
+    const hook = renderHook(() =>
+      useFt8TxRunner({ myCall: 'KB2UKA', myGrid: 'FN12', mode: 'FT8', active: false, fetchFn: fn }),
+    );
+
+    act(() => hook.result.current.enableTx());
+    act(() => useFt8TxStore.setState({ status: txStatus(true) }));
+    vi.advanceTimersByTime(4_999);
+    calls.length = 0;
+
+    act(() => useFt8TxStore.setState({ status: txStatus(false) }));
+
+    expect(hook.result.current.qso.enableTx).toBe(true);
+    expect(armPosts(calls)).toHaveLength(0);
+    hook.unmount();
+  });
+
+  it('rechecks an inside-grace backend disarm when the grace window expires', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const { fn, calls } = makeFetch();
+    const hook = renderHook(() =>
+      useFt8TxRunner({ myCall: 'KB2UKA', myGrid: 'FN12', mode: 'FT8', active: false, fetchFn: fn }),
+    );
+
+    act(() => hook.result.current.enableTx());
+    act(() => useFt8TxStore.setState({ status: txStatus(true) }));
+    act(() => vi.advanceTimersByTime(3_000));
+    calls.length = 0;
+
+    act(() => useFt8TxStore.setState({ status: txStatus(false) }));
+    expect(hook.result.current.qso.enableTx).toBe(true);
+    expect(armPosts(calls)).toHaveLength(0);
+
+    act(() => vi.advanceTimersByTime(2_001));
+
+    expect(hook.result.current.qso.enableTx).toBe(false);
+    expect(armPosts(calls)).toHaveLength(0);
+    hook.unmount();
+  });
+
+  it('ignores a pending inside-grace recheck after a newer local arm starts', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const { fn, calls } = makeFetch();
+    const hook = renderHook(() =>
+      useFt8TxRunner({ myCall: 'KB2UKA', myGrid: 'FN12', mode: 'FT8', active: false, fetchFn: fn }),
+    );
+
+    act(() => hook.result.current.enableTx());
+    act(() => useFt8TxStore.setState({ status: txStatus(true) }));
+    act(() => vi.advanceTimersByTime(3_000));
+    act(() => useFt8TxStore.setState({ status: txStatus(false) }));
+    act(() => vi.advanceTimersByTime(1_000));
+    act(() => hook.result.current.enableTx());
+    calls.length = 0;
+
+    act(() => vi.advanceTimersByTime(1_001));
+
+    expect(hook.result.current.qso.enableTx).toBe(true);
+    expect(armPosts(calls)).toHaveLength(0);
+    hook.unmount();
+  });
+
+  it('reconciles a null stream resume to backend disarmed while locally armed outside grace', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const { fn, calls } = makeFetch();
+    const hook = renderHook(() =>
+      useFt8TxRunner({ myCall: 'KB2UKA', myGrid: 'FN12', mode: 'FT8', active: false, fetchFn: fn }),
+    );
+
+    act(() => hook.result.current.enableTx());
+    act(() => useFt8TxStore.setState({ status: null }));
+    act(() => vi.advanceTimersByTime(5_001));
+    calls.length = 0;
+
+    act(() => useFt8TxStore.setState({ status: txStatus(false) }));
+
+    expect(hook.result.current.qso.enableTx).toBe(false);
+    expect(armPosts(calls)).toHaveLength(0);
+    hook.unmount();
+  });
+
+  it('defers a null stream resume to backend disarmed inside grace, then reconciles at expiry', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const { fn, calls } = makeFetch();
+    const hook = renderHook(() =>
+      useFt8TxRunner({ myCall: 'KB2UKA', myGrid: 'FN12', mode: 'FT8', active: false, fetchFn: fn }),
+    );
+
+    act(() => hook.result.current.enableTx());
+    act(() => useFt8TxStore.setState({ status: null }));
+    act(() => vi.advanceTimersByTime(3_000));
+    calls.length = 0;
+
+    act(() => useFt8TxStore.setState({ status: txStatus(false) }));
+    // Inside grace: the resume must defer, not disarm immediately.
+    expect(hook.result.current.qso.enableTx).toBe(true);
+
+    act(() => vi.advanceTimersByTime(2_001));
+
+    expect(hook.result.current.qso.enableTx).toBe(false);
+    expect(armPosts(calls)).toHaveLength(0);
+    hook.unmount();
+  });
+
+  it('leaves local state unchanged when a null stream resumes backend armed', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const { fn, calls } = makeFetch();
+    const hook = renderHook(() =>
+      useFt8TxRunner({ myCall: 'KB2UKA', myGrid: 'FN12', mode: 'FT8', active: false, fetchFn: fn }),
+    );
+
+    act(() => hook.result.current.enableTx());
+    act(() => vi.advanceTimersByTime(5_001));
+    calls.length = 0;
+
+    act(() => useFt8TxStore.setState({ status: txStatus(true) }));
+
+    expect(hook.result.current.qso.enableTx).toBe(true);
+    expect(armPosts(calls)).toHaveLength(0);
+    hook.unmount();
+  });
+
+  it('cleans up a pending inside-grace recheck on unmount', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { fn, calls } = makeFetch();
+      const hook = renderHook(() =>
+        useFt8TxRunner({ myCall: 'KB2UKA', myGrid: 'FN12', mode: 'FT8', active: false, fetchFn: fn }),
+      );
+
+      act(() => hook.result.current.enableTx());
+      act(() => useFt8TxStore.setState({ status: txStatus(true) }));
+      act(() => vi.advanceTimersByTime(3_000));
+      act(() => useFt8TxStore.setState({ status: txStatus(false) }));
+      expect(vi.getTimerCount()).toBe(1);
+
+      hook.unmount();
+      expect(vi.getTimerCount()).toBe(0);
+      calls.length = 0;
+      act(() => vi.advanceTimersByTime(3_000));
+
+      expect(calls).toHaveLength(0);
+      expect(consoleError).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it('does not reconcile on initial backend disarmed status with no prior armed state', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    act(() => useFt8TxStore.setState({ status: txStatus(false) }));
+    const { fn, calls } = makeFetch();
+    const hook = renderHook(() =>
+      useFt8TxRunner({ myCall: 'KB2UKA', myGrid: 'FN12', mode: 'FT8', active: false, fetchFn: fn }),
+    );
+
+    act(() => hook.result.current.enableTx());
+    vi.advanceTimersByTime(5_001);
+    calls.length = 0;
+    act(() => useFt8TxStore.setState({ status: txStatus(false) }));
+
+    expect(hook.result.current.qso.enableTx).toBe(true);
+    expect(armPosts(calls)).toHaveLength(0);
+    hook.unmount();
   });
 });

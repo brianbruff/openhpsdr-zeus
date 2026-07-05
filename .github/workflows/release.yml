@@ -1630,7 +1630,10 @@ jobs:
           set -euo pipefail
           echo "Ensuring private archive bucket exists: ${ARCHIVE_BUCKET}"
           set +e
-          CREATE_OUT=$(npx --yes wrangler@4.103.0 r2 bucket create "${ARCHIVE_BUCKET}" --remote 2>&1)
+          # `r2 bucket create` is always a remote operation and rejects the
+          # `--remote` flag (that flag belongs to the `r2 object` commands);
+          # passing it makes wrangler print usage help and exit 1.
+          CREATE_OUT=$(npx --yes wrangler@4.103.0 r2 bucket create "${ARCHIVE_BUCKET}" 2>&1)
           CREATE_RC=$?
           set -e
           echo "$CREATE_OUT"

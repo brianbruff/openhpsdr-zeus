@@ -610,6 +610,28 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
         int prebufferTarget = ComputePrebufferTarget(totalFrames);
         _effectivePrebufferSamples = prebufferTarget;
 
+        // Elastic-buffer latency cap (issue: P3 sidecar over-delivery). The
+        // producer can flood the ring — a burst backlog drained from the P3
+        // audio poll, or the radio sample clock running slightly faster than
+        // the soundcard — and once full the ring PINS near capacity, adding up
+        // to ~1.3 s of playback latency (measured) plus overrun drops. Nothing
+        // brought it back down between rebuffers. Here the consumer trims the
+        // oldest excess down to the cushion whenever the depth exceeds ~2×,
+        // bounding latency to the cushion while leaving hysteresis so steady
+        // state never trims. One O(1) skip corrects a flood or a drift step;
+        // the discarded samples are tallied as overruns. Protocol-agnostic —
+        // P2 keeps the ring near-empty so this never fires there.
+        if (!_rebuffering)
+        {
+            int latencyCeiling = Math.Min(prebufferTarget * 2, RingCapacity - totalFrames);
+            if (_ring.Count > latencyCeiling)
+            {
+                int trimmed = _ring.Skip(_ring.Count - prebufferTarget);
+                Interlocked.Add(ref _overrunSamples, trimmed);
+                Interlocked.Add(ref _overrunSamplesTotal, trimmed);
+            }
+        }
+
         bool rxSilence = false;
         int queued = _ring.Count;
         if (_rebuffering)

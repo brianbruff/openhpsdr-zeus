@@ -63,11 +63,16 @@ export const FIXED_DB_MAX = -50;
 
 // TX panadapter defaults — kept separate from RX so the user can drag the
 // scale while keyed without disturbing their RX noise-floor view. Matches
-// Thetis's `TXSpectrumGridMin = -80` / `TXSpectrumGridMax = 20` (Display.cs:
-// 1881-1897). Speech peaks land inside this window; a user who wants to
-// hide silence-time floor pumping raises TX_DB_MIN via the drag gesture.
+// Thetis's `TXSpectrumGridMin = -80` / `TXSpectrumGridMax = 20`.
 export const TX_FIXED_DB_MIN = -80;
 export const TX_FIXED_DB_MAX = 20;
+
+// TX waterfall defaults. Thetis deliberately uses a separate keyed waterfall
+// scale (`TXWFAmpMin = -70`, `TXWFAmpMax = 30`) instead of mirroring the TX
+// panadapter scale; the extra 10 dB of ceiling keeps voice peaks from rendering
+// as a white slab while preserving a dark keyed floor.
+export const TX_WF_FIXED_DB_MIN = -70;
+export const TX_WF_FIXED_DB_MAX = 30;
 
 // TX display analyzer params (live TX waterfall). Display-only — they shape the
 // transmitted-signal panadapter/waterfall, never the air. Defaults mirror the
@@ -345,18 +350,16 @@ function writeSavedWfRange(wfDbMin: number, wfDbMax: number): void {
 
 function readSavedWfTxRange(): { wfTxDbMin: number; wfTxDbMax: number } {
   try {
-    if (typeof localStorage === 'undefined') return { wfTxDbMin: TX_FIXED_DB_MIN, wfTxDbMax: TX_FIXED_DB_MAX };
+    if (typeof localStorage === 'undefined') return { wfTxDbMin: TX_WF_FIXED_DB_MIN, wfTxDbMax: TX_WF_FIXED_DB_MAX };
     const raw = localStorage.getItem(WF_TX_STORAGE_KEY);
-    if (!raw) return { wfTxDbMin: TX_FIXED_DB_MIN, wfTxDbMax: TX_FIXED_DB_MAX };
+    if (!raw) return { wfTxDbMin: TX_WF_FIXED_DB_MIN, wfTxDbMax: TX_WF_FIXED_DB_MAX };
     const parsed = JSON.parse(raw);
-    const wfTxDbMin = typeof parsed?.wfTxDbMin === 'number' ? parsed.wfTxDbMin : TX_FIXED_DB_MIN;
-    const wfTxDbMax = typeof parsed?.wfTxDbMax === 'number' ? parsed.wfTxDbMax : TX_FIXED_DB_MAX;
-    if (!(wfTxDbMin < wfTxDbMax) || !Number.isFinite(wfTxDbMin) || !Number.isFinite(wfTxDbMax)) {
-      return { wfTxDbMin: TX_FIXED_DB_MIN, wfTxDbMax: TX_FIXED_DB_MAX };
-    }
-    return { wfTxDbMin, wfTxDbMax };
+    const wfTxDbMin = typeof parsed?.wfTxDbMin === 'number' ? parsed.wfTxDbMin : TX_WF_FIXED_DB_MIN;
+    const wfTxDbMax = typeof parsed?.wfTxDbMax === 'number' ? parsed.wfTxDbMax : TX_WF_FIXED_DB_MAX;
+    const next = sanitizeTxWfRange(wfTxDbMin, wfTxDbMax);
+    return { wfTxDbMin: next.min, wfTxDbMax: next.max };
   } catch {
-    return { wfTxDbMin: TX_FIXED_DB_MIN, wfTxDbMax: TX_FIXED_DB_MAX };
+    return { wfTxDbMin: TX_WF_FIXED_DB_MIN, wfTxDbMax: TX_WF_FIXED_DB_MAX };
   }
 }
 
@@ -492,8 +495,9 @@ export type DisplaySettingsState = {
   wfDbMin: number;
   wfDbMax: number;
   // Separate dB range for TX waterfall (rendered during MOX/TUN). Mirrors
-  // the TX panadapter pair so the operator can darken/brighten the keyed
-  // waterfall window independently of their RX waterfall view.
+  // Thetis's independent TXWFAmpMin/Max scale so the operator can
+  // darken/brighten the keyed waterfall independently of both RX waterfall
+  // and TX panadapter.
   wfTxDbMin: number;
   wfTxDbMax: number;
   // Separate dB range for TX panadapter (rendered during MOX/TUN). Thetis
@@ -642,6 +646,22 @@ function sanitizeRange(
   return { min, max };
 }
 
+function sanitizeTxWfRange(
+  min: number | null | undefined,
+  max: number | null | undefined,
+): { min: number; max: number } {
+  const next = sanitizeRange(min, max, TX_WF_FIXED_DB_MIN, TX_WF_FIXED_DB_MAX);
+  // Legacy TX auto-fit could persist a window that lived entirely below the
+  // useful keyed display range; normal voice TX then rendered as solid white
+  // because every bin was above the stored top. Thetis's default TX waterfall
+  // low threshold is -70 dB, so a saved top at or below that is not a useful
+  // keyed waterfall scale. Reset it to the Thetis-parity window.
+  if (next.max <= TX_WF_FIXED_DB_MIN) {
+    return { min: TX_WF_FIXED_DB_MIN, max: TX_WF_FIXED_DB_MAX };
+  }
+  return next;
+}
+
 const initialRange = readSavedRange();
 const initialTxRange = readSavedTxRange();
 const initialWfRange = readSavedWfRange();
@@ -674,8 +694,8 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   // shouldTxAutoRange(). TUNE and two-tone are deliberately excluded: their
   // narrow carrier / twin-tone fools the percentile fit into collapsing the dB
   // window onto the noise floor, rendering the clean carrier as "grass". Those
-  // fall back to the Thetis-parity fixed TX_FIXED_DB_MIN/MAX (-80..+20) window
-  // via restoreSavedTxWindows().
+  // fall back to the Thetis-parity fixed TX panadapter and TX waterfall
+  // windows via restoreSavedTxWindows().
   txAutoRange: DEFAULT_TX_AUTO_RANGE,
   widebandDisplayEnabled: false,
   displayMaxFrameRateHz: DEFAULT_DISPLAY_MAX_FRAME_RATE_HZ,
@@ -826,7 +846,7 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
     scheduleDbRangeSave();
   },
   setWfTxDbRange: (wfTxDbMin, wfTxDbMax) => {
-    const next = sanitizeRange(wfTxDbMin, wfTxDbMax, TX_FIXED_DB_MIN, TX_FIXED_DB_MAX);
+    const next = sanitizeTxWfRange(wfTxDbMin, wfTxDbMax);
     set({ txAutoRange: false, wfTxDbMin: next.min, wfTxDbMax: next.max });
     writeSavedWfTxRange(next.min, next.max);
     scheduleDbRangeSave();
@@ -1048,13 +1068,13 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
       txDbMax: TX_FIXED_DB_MAX,
       wfDbMin: FIXED_DB_MIN,
       wfDbMax: FIXED_DB_MAX,
-      wfTxDbMin: TX_FIXED_DB_MIN,
-      wfTxDbMax: TX_FIXED_DB_MAX,
+      wfTxDbMin: TX_WF_FIXED_DB_MIN,
+      wfTxDbMax: TX_WF_FIXED_DB_MAX,
     });
     writeSavedRange(FIXED_DB_MIN, FIXED_DB_MAX);
     writeSavedTxRange(TX_FIXED_DB_MIN, TX_FIXED_DB_MAX);
     writeSavedWfRange(FIXED_DB_MIN, FIXED_DB_MAX);
-    writeSavedWfTxRange(TX_FIXED_DB_MIN, TX_FIXED_DB_MAX);
+    writeSavedWfTxRange(TX_WF_FIXED_DB_MIN, TX_WF_FIXED_DB_MAX);
     scheduleDbRangeSave();
   },
   shiftDbRange: (deltaDb) => {
@@ -1224,7 +1244,7 @@ async function hydrateFromServer(): Promise<void> {
     ? sanitizeRange(server.wfDbMin, server.wfDbMax, FIXED_DB_MIN, FIXED_DB_MAX)
     : null;
   const wfTxRange = serverHasDbRange
-    ? sanitizeRange(server.wfTxDbMin, server.wfTxDbMax, TX_FIXED_DB_MIN, TX_FIXED_DB_MAX)
+    ? sanitizeTxWfRange(server.wfTxDbMin, server.wfTxDbMax)
     : null;
   const serverRangeWasCorrupt =
     serverHasDbRange &&

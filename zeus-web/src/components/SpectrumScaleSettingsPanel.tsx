@@ -18,6 +18,8 @@ import {
   TX_DISPLAY_WINDOWS,
   TX_FIXED_DB_MAX,
   TX_FIXED_DB_MIN,
+  TX_WF_FIXED_DB_MAX,
+  TX_WF_FIXED_DB_MIN,
   useDisplaySettingsStore,
 } from '../state/display-settings-store';
 
@@ -193,8 +195,8 @@ export function SpectrumScaleSettingsPanel() {
           detail="Colour-map dB window for keyed waterfall rows."
           minValue={wfTxDbMin}
           maxValue={wfTxDbMax}
-          defaultMin={TX_FIXED_DB_MIN}
-          defaultMax={TX_FIXED_DB_MAX}
+          defaultMin={TX_WF_FIXED_DB_MIN}
+          defaultMax={TX_WF_FIXED_DB_MAX}
           onChange={setWfTxDbRange}
         />
       </div>

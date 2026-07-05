@@ -62,6 +62,8 @@ import {
   WATERFALL_SCROLL_SPEED_MIN,
   TX_FIXED_DB_MAX,
   TX_FIXED_DB_MIN,
+  TX_WF_FIXED_DB_MAX,
+  TX_WF_FIXED_DB_MIN,
   shouldTxAutoRange,
   useDisplaySettingsStore,
 } from './display-settings-store';
@@ -75,8 +77,8 @@ function resetStore() {
     txDbMax: TX_FIXED_DB_MAX,
     wfDbMin: FIXED_DB_MIN,
     wfDbMax: FIXED_DB_MAX,
-    wfTxDbMin: TX_FIXED_DB_MIN,
-    wfTxDbMax: TX_FIXED_DB_MAX,
+    wfTxDbMin: TX_WF_FIXED_DB_MIN,
+    wfTxDbMax: TX_WF_FIXED_DB_MAX,
     waterfallScrollSpeed: DEFAULT_WF_SCROLL_SPEED,
     widebandDisplayEnabled: false,
     displayMaxFrameRateHz: DEFAULT_DISPLAY_MAX_FRAME_RATE_HZ,
@@ -277,8 +279,8 @@ describe('display-settings-store', () => {
       txDbMax: TX_FIXED_DB_MAX,
       wfDbMin: FIXED_DB_MIN,
       wfDbMax: FIXED_DB_MAX,
-      wfTxDbMin: TX_FIXED_DB_MIN,
-      wfTxDbMax: TX_FIXED_DB_MAX,
+      wfTxDbMin: TX_WF_FIXED_DB_MIN,
+      wfTxDbMax: TX_WF_FIXED_DB_MAX,
     });
   });
 });
@@ -364,8 +366,8 @@ describe('TX auto-range', () => {
       txAutoRange: true,
       txDbMin: -80,
       txDbMax: 20,
-      wfTxDbMin: -80,
-      wfTxDbMax: 20,
+      wfTxDbMin: TX_WF_FIXED_DB_MIN,
+      wfTxDbMax: TX_WF_FIXED_DB_MAX,
     });
   });
   afterEach(() => vi.unstubAllGlobals());
@@ -470,10 +472,30 @@ describe('TX auto-range', () => {
     const r = useDisplaySettingsStore.getState();
     expect(r.txDbMin).toBe(TX_FIXED_DB_MIN);
     expect(r.txDbMax).toBe(TX_FIXED_DB_MAX);
-    expect(r.wfTxDbMin).toBe(TX_FIXED_DB_MIN);
-    expect(r.wfTxDbMax).toBe(TX_FIXED_DB_MAX);
+    expect(r.wfTxDbMin).toBe(TX_WF_FIXED_DB_MIN);
+    expect(r.wfTxDbMax).toBe(TX_WF_FIXED_DB_MAX);
     // The auto-range master flag is independent — restore must not touch it.
     expect(r.txAutoRange).toBe(true);
+  });
+
+  it('restoreSavedTxWindows repairs a stale TX waterfall window below the useful keyed range', () => {
+    localStorage.setItem('zeus.display.txDbRange', JSON.stringify({ txDbMin: -80, txDbMax: 20 }));
+    localStorage.setItem(
+      'zeus.display.wfTxDbRange',
+      JSON.stringify({ wfTxDbMin: -164.8, wfTxDbMax: -97.3 }),
+    );
+    useDisplaySettingsStore.setState({
+      txDbMin: -64,
+      txDbMax: -52,
+      wfTxDbMin: -164.8,
+      wfTxDbMax: -97.3,
+    });
+    useDisplaySettingsStore.getState().restoreSavedTxWindows();
+    const r = useDisplaySettingsStore.getState();
+    expect(r.txDbMin).toBe(TX_FIXED_DB_MIN);
+    expect(r.txDbMax).toBe(TX_FIXED_DB_MAX);
+    expect(r.wfTxDbMin).toBe(TX_WF_FIXED_DB_MIN);
+    expect(r.wfTxDbMax).toBe(TX_WF_FIXED_DB_MAX);
   });
 
   it('restoreSavedTxWindows snaps a narrowed window back to the operator-saved range', () => {

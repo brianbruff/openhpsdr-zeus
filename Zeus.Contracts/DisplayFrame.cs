@@ -66,7 +66,12 @@ public readonly record struct DisplayFrame(
     long CenterHz,
     float HzPerPixel,
     ReadOnlyMemory<float> PanDb,
-    ReadOnlyMemory<float> WfDb)
+    ReadOnlyMemory<float> WfDb,
+    // DDC passband width in Hz (the RX stream sample rate). Zeus-internal only
+    // — NOT serialized to the wire, so it defaults to 0 on the deserialize path.
+    // Used by the display edge-guard to mask the true passband edges rather than
+    // a fixed fraction of a (possibly zoomed) view.
+    long SampleRateHz = 0)
 {
     public const int BodyHeaderSize = 1 + 1 + 2 + 8 + 4;
 

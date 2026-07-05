@@ -84,6 +84,44 @@ public class DisplaySettingsPersistenceTests : IDisposable
     }
 
     [Fact]
+    public void SaveMode_StaleLowTxWaterfallRange_RepairsToThetisDefaults()
+    {
+        using var store = BuildStore();
+        store.SaveMode("basic", "fill", "#FFA028",
+            wfTxDbMin: -164.8, wfTxDbMax: -97.3);
+
+        var dto = store.Get();
+        Assert.Equal(-70, dto.WfTxDbMin);
+        Assert.Equal(30, dto.WfTxDbMax);
+    }
+
+    [Fact]
+    public void Get_ExistingStaleLowTxWaterfallRange_ReturnsThetisDefaults()
+    {
+        using (var store = BuildStore())
+        {
+            store.SaveMode("basic", "fill", "#FFA028",
+                wfTxDbMin: -70, wfTxDbMax: 30);
+        }
+
+        // Simulate a row poisoned by an older frontend before the server-side
+        // guard existed.
+        using (var db = Zeus.Data.SharedLiteDatabase.Acquire(_dbPath))
+        {
+            var coll = db.Database.GetCollection<DisplaySettingsEntry>("display_settings");
+            var entry = coll.FindAll().First();
+            entry.WfTxDbMin = -164.8;
+            entry.WfTxDbMax = -97.3;
+            coll.Update(entry);
+        }
+
+        using var fresh = BuildStore();
+        var dto = fresh.Get();
+        Assert.Equal(-70, dto.WfTxDbMin);
+        Assert.Equal(30, dto.WfTxDbMax);
+    }
+
+    [Fact]
     public void SaveMode_NullDbRanges_DoNotOverwriteExistingValues()
     {
         // Write concrete dB values first.

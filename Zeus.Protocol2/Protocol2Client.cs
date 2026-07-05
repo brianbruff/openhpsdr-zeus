@@ -3300,6 +3300,71 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         return alex1;
     }
 
+    /// <summary>
+    /// Compose the three Saturn Alex register images the Protocol-3 RF_PATH
+    /// command carries (offsets 12/16/20), from the same inputs and through the
+    /// same helpers as the live P2 alex0/alex1 path in
+    /// <see cref="SendCmdHighPriority"/> — the P2 wire words ARE the register
+    /// images, just re-sliced the way p2app's InHighPriority.c:170-208 slices
+    /// them for saturnregisters.c:
+    ///   • TX-filter register  = alex0[31:16] (TX word, state-muxed RX/TX ant)
+    ///   • TX-antenna register = alex1[31:16] (TX word, always TX ant)
+    ///   • RX register         = alex0[15:0] (RX1 filters) | alex1[15:0]&lt;&lt;16 (RX2)
+    /// PureSignal bits are deliberately omitted (psEnabled: false) until the P3
+    /// PureSignal path lands — PS feedback routing under P3 is owned by the
+    /// PURESIGNAL_COMMAND, not the RF-path words. Everything else (BPF/LPF band
+    /// splits, state-multiplexed antenna, TX relay + RX-ground on key-down,
+    /// operator RX-aux relays, custom filter matrices) matches P2 bit-for-bit.
+    /// </summary>
+    public static (ushort TxFilterRegister, uint RxRegister, ushort TxAntennaRegister)
+        ComposeSaturnAlexRegisterImages(
+            uint rxFreqHz,
+            uint rx2FreqHz,
+            bool rx2Enabled,
+            uint txFreqHz,
+            bool xmit,
+            int txAntWire,
+            bool hasTxAntennaRelays,
+            int rxAntWire,
+            int rxAuxInput,
+            bool mkiiBpfRxSelect,
+            HpsdrBoardKind board = HpsdrBoardKind.OrionMkII,
+            RfFilterRuntimeSettings? rfFilters = null)
+    {
+        // Mirrors SendCmdHighPriority's alex block in the same order: base
+        // BPF/LPF + antenna, state-muxed alex0 antenna, TX relay, then aux.
+        int wire = hasTxAntennaRelays ? txAntWire : 1;
+        int alex0AntWire = (xmit || rxAuxInput != 0)
+            ? wire
+            : ((rxAntWire is 1 or 2 or 3) ? rxAntWire : 1);
+        uint txLpfFreqHz = xmit ? txFreqHz : rxFreqHz;
+        uint alex0Common = ComputeAlexWord(
+            rxFreqHz,
+            txLpfFreqHz,
+            txAnt: wire,
+            board: board,
+            rfFilters: rfFilters,
+            xmit: xmit,
+            psEnabled: false);
+        uint alex0 = (alex0Common & ~ALEX_TX_ANTENNA_MASK) | EncodeTxAntennaBits(alex0AntWire)
+                     | (xmit ? ALEX_TX_RELAY : 0u);
+        uint alex1 = ComposeAlex1Word(
+            rxFreqHz,
+            rx2FreqHz,
+            txLpfFreqHz,
+            rx2Enabled,
+            xmit,
+            psEnabled: false,
+            board,
+            wire,
+            rfFilters);
+        alex0 |= ComposeRxAuxBits(rxAuxInput, mkiiBpfRxSelect);
+        return (
+            (ushort)(alex0 >> 16),
+            (alex0 & 0xFFFFu) | ((alex1 & 0xFFFFu) << 16),
+            (ushort)(alex1 >> 16));
+    }
+
     internal static uint ComputeAlexWord(
         uint rxFreqHz,
         uint txFreqHz,

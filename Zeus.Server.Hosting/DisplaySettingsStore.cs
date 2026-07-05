@@ -33,6 +33,8 @@ public sealed class DisplaySettingsStore : IDisposable
     // provided in this PUT" and is handled by the caller.
     private const double DbAbsLimit = 200;
     private const double MinSpanDb = 20;
+    private const double TxWfDefaultMinDb = -70.0;
+    private const double TxWfDefaultMaxDb = 30.0;
 
     private static bool IsValidRange(double? min, double? max)
     {
@@ -41,6 +43,30 @@ public sealed class DisplaySettingsStore : IDisposable
         if (double.IsInfinity(min.Value) || double.IsInfinity(max.Value)) return false;
         if (min.Value < -DbAbsLimit || max.Value > DbAbsLimit) return false;
         if (max.Value - min.Value < MinSpanDb) return false;
+        return true;
+    }
+
+    private static bool TryNormalizeTxWaterfallRange(
+        double? min,
+        double? max,
+        out double normalizedMin,
+        out double normalizedMax)
+    {
+        normalizedMin = TxWfDefaultMinDb;
+        normalizedMax = TxWfDefaultMaxDb;
+        if (!IsValidRange(min, max)) return false;
+
+        // Old frontends could persist a TX waterfall window entirely below the
+        // useful keyed range (for example -164..-97 dB). Normal TX then renders
+        // above the top colour and appears as a solid white block. Thetis's TX
+        // waterfall default is -70..+30; if a submitted/saved top is at or
+        // below that low threshold, repair it instead of poisoning preferences.
+        var minValue = min.GetValueOrDefault();
+        var maxValue = max.GetValueOrDefault();
+        if (maxValue <= TxWfDefaultMinDb) return true;
+
+        normalizedMin = minValue;
+        normalizedMax = maxValue;
         return true;
     }
 
@@ -127,6 +153,12 @@ public sealed class DisplaySettingsStore : IDisposable
                     DisplayDecimation: DisplayPerformanceOptions.DefaultDisplayDecimation,
                     WaterfallUpdatePeriod: DisplayPerformanceOptions.DefaultWaterfallUpdatePeriod);
             }
+            var hasTxWfRange = TryNormalizeTxWaterfallRange(
+                e.WfTxDbMin,
+                e.WfTxDbMax,
+                out var txWfMin,
+                out var txWfMax);
+
             return new DisplaySettingsDto(
                 Mode: NormalizeMode(e.Mode),
                 Fit: NormalizeFit(e.Fit),
@@ -139,8 +171,8 @@ public sealed class DisplaySettingsStore : IDisposable
                 TxDbMax: e.TxDbMax,
                 WfDbMin: e.WfDbMin,
                 WfDbMax: e.WfDbMax,
-                WfTxDbMin: e.WfTxDbMin,
-                WfTxDbMax: e.WfTxDbMax,
+                WfTxDbMin: hasTxWfRange ? txWfMin : null,
+                WfTxDbMax: hasTxWfRange ? txWfMax : null,
                 TxDisplayCalOffsetDb: e.TxDisplayCalOffsetDb,
                 TxDisplayFftSize: e.TxDisplayFftSize,
                 TxDisplayWindow: e.TxDisplayWindow,
@@ -183,7 +215,11 @@ public sealed class DisplaySettingsStore : IDisposable
             if (IsValidRange(dbMin, dbMax)) { e.DbMin = dbMin; e.DbMax = dbMax; }
             if (IsValidRange(txDbMin, txDbMax)) { e.TxDbMin = txDbMin; e.TxDbMax = txDbMax; }
             if (IsValidRange(wfDbMin, wfDbMax)) { e.WfDbMin = wfDbMin; e.WfDbMax = wfDbMax; }
-            if (IsValidRange(wfTxDbMin, wfTxDbMax)) { e.WfTxDbMin = wfTxDbMin; e.WfTxDbMax = wfTxDbMax; }
+            if (TryNormalizeTxWaterfallRange(wfTxDbMin, wfTxDbMax, out var txWfMin, out var txWfMax))
+            {
+                e.WfTxDbMin = txWfMin;
+                e.WfTxDbMax = txWfMax;
+            }
             // TX display analyzer params — each validated independently so a
             // caller can update one knob without clobbering the others.
             if (IsValidCalOffset(txDisplayCalOffsetDb)) e.TxDisplayCalOffsetDb = txDisplayCalOffsetDb;

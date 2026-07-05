@@ -46,6 +46,18 @@ public sealed class Protocol3SidecarBridge : IDisposable
     private const int TxIqS24Max = 0x7f_ffff;
     private const int TxIqS24Min = -0x80_0000;
     private const int TxIqSendQueueCapacity = 2048;
+    // TX-IQ egress DAC rate: the radio's DUC consumes interleaved IQ at this
+    // sample rate (ducCompatibleTxRateHz), so each 240-frame packet is 1.25 ms
+    // of transmit audio. RunTxIqSenderAsync meters packets out at this cadence
+    // instead of flushing each 20 ms mic burst all at once — the burst-then-idle
+    // pattern overran then starved the radio's DUC FIFO, which is what produced
+    // the "TX not steady" sequence-gap/drop stutter on voice.
+    private const int TxIqDacRateHz = 192_000;
+    // How far behind the DAC schedule the pacer may fall before it re-anchors
+    // and drains at full speed (a genuine backlog after a burst). Bounds the
+    // in-flight depth well under TxIqSendQueueCapacity so the pacer smooths the
+    // steady stream yet never accumulates unbounded debt or under-delivers.
+    private const int TxIqPacerMaxLeadPackets = 64;
     private const int TxControlKeepalivePeriodMs = 100;
     private const string SidecarPidFileName = "protocol3-sidecar.pid";
 
@@ -80,6 +92,15 @@ public sealed class Protocol3SidecarBridge : IDisposable
     private long _controlPostSuccesses;
     private long _controlPostMissingUrl;
     private int _txIqStreamingArmed;
+
+    /// <summary>
+    /// True while the host TX-IQ path is armed (key-down through unkey). The
+    /// sidecar frame forwarder holds RX display frames while this is set so
+    /// the WDSP TX display owns the panadapter/waterfall during transmit —
+    /// P2-parity behaviour, and it prevents the two frame sources from
+    /// alternating widths (planner-reset smear) while keyed.
+    /// </summary>
+    internal bool TxIqStreamingArmed => Volatile.Read(ref _txIqStreamingArmed) != 0;
     private string? _lastControlPostUrl;
     private int _lastControlPostStatus;
     private string? _lastControlPostError;
@@ -648,14 +669,38 @@ public sealed class Protocol3SidecarBridge : IDisposable
         }
     }
 
-    internal Task PushRfPathAsync(bool paEnabled, CancellationToken ct)
+    /// <summary>
+    /// The three Saturn Alex register images the P3 RF_PATH command carries
+    /// (offsets 12/16/20) — composed via
+    /// Protocol2Client.ComposeSaturnAlexRegisterImages so P2 and P3 share one
+    /// band→relay source of truth. Without these words the radio's BPF/LPF/
+    /// antenna relays never move off their boot defaults (the "no relay clicks
+    /// on band change" bug).
+    /// </summary>
+    internal readonly record struct AlexRegisterImages(
+        ushort TxFilterRegister,
+        uint RxRegister,
+        ushort TxAntennaRegister);
+
+    internal Task PushRfPathAsync(bool paEnabled, AlexRegisterImages? alex, CancellationToken ct)
     {
         var payload = new JsonObject
         {
             ["paEnabled"] = paEnabled,
             ["timeoutMs"] = DefaultControlTimeoutMs,
-        }.ToJsonString();
-        return PostControlAsync("/api/control/rf-path", payload, "RF path", ct);
+        };
+        if (alex is { } a)
+        {
+            payload["alexTxFilterRegister"] = a.TxFilterRegister;
+            payload["alexRxRegister"] = a.RxRegister;
+            payload["alexTxAntennaRegister"] = a.TxAntennaRegister;
+            // Alex 0 present; manual filter select on (Zeus is the filter
+            // authority, exactly as on P2); T/R relay operation enabled.
+            payload["alexEnabledBits"] = 1;
+            payload["alexManualFilterSelect"] = true;
+            payload["alexTrRelayEnabled"] = true;
+        }
+        return PostControlAsync("/api/control/rf-path", payload.ToJsonString(), "RF path", ct);
     }
 
     internal Task PushAudioControlAsync(AudioFrontEndPush push, CancellationToken ct)
@@ -809,6 +854,18 @@ public sealed class Protocol3SidecarBridge : IDisposable
             psi.ArgumentList.Add("--analyzer-process-every");
             psi.ArgumentList.Add(analyzerProcessEvery.ToString(CultureInfo.InvariantCulture));
         }
+        // P3 display calibration (dB offset applied to every analyzer bin in
+        // n9dsp). Default -27 dB: measured 2026-07-04 — the raw dBFS bins sat
+        // ~25-30 dB above the P2/WDSP render for the same antenna, pinning the
+        // waterfall past the fixed color window's dbMax (blown-out white,
+        // "missing" weak signals). Override via ZEUS_PROTOCOL3_ANALYZER_CALIBRATION_DB.
+        var analyzerCalibrationDb = DoubleSetting(
+            "AnalyzerCalibrationDb", "ZEUS_PROTOCOL3_ANALYZER_CALIBRATION_DB", -27.0);
+        if (analyzerCalibrationDb != 0.0)
+        {
+            psi.ArgumentList.Add("--analyzer-calibration-db");
+            psi.ArgumentList.Add(analyzerCalibrationDb.ToString("R", CultureInfo.InvariantCulture));
+        }
         if (BoolSetting("RxIqConjugate", "ZEUS_PROTOCOL3_RX_IQ_CONJUGATE", fallback: false))
             psi.ArgumentList.Add("--rx-iq-conjugate");
         else
@@ -838,6 +895,15 @@ public sealed class Protocol3SidecarBridge : IDisposable
         if (sampleRateHz <= 0) throw new ArgumentOutOfRangeException(nameof(sampleRateHz));
 
         var receivers = state.Receivers ?? Array.Empty<ReceiverDto>();
+
+        // TX DUC (upconverter) NCO frequency — the RF frequency transmit lands
+        // on. Mirrors the P2 DUC tuning (Protocol2Client.SetTxDucFrequency uses
+        // CwOffset.EffectiveLoHz on the TX VFO). Without this the P3 transmit DUC
+        // stays on a stale frequency (observed 21 kHz off the VFO). Carried on
+        // every receiver entry; the sidecar emits it once via NCO_COMMAND DUC0.
+        var (txEngineMode, _, _) = Protocol3EngineFilterFor(ReceiverFor(state, receivers, 0));
+        var txDucFrequencyHz = CwOffset.EffectiveLoHz(txEngineMode, RadioService.TxFrequencyHz(state));
+
         var array = new JsonArray();
         for (var index = 0; index < rxStreams; index++)
         {
@@ -862,6 +928,7 @@ public sealed class Protocol3SidecarBridge : IDisposable
                 ["adcSource"] = rx.AdcSource,
                 ["centerFrequencyHz"] = centerHz,
                 ["tuningOffsetHz"] = tuningOffsetHz,
+                ["txDucFrequencyHz"] = txDucFrequencyHz,
                 ["mode"] = (int)engineMode,
                 ["passbandLowHz"] = passbandLowHz,
                 ["passbandHighHz"] = passbandHighHz,
@@ -1293,6 +1360,15 @@ public sealed class Protocol3SidecarBridge : IDisposable
             : fallback;
     }
 
+    private double DoubleSetting(string key, string env, double fallback)
+    {
+        var value = Setting(key, env);
+        if (string.IsNullOrWhiteSpace(value)) return fallback;
+        return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : fallback;
+    }
+
     private bool BoolSetting(string key, string env, bool fallback = false)
     {
         var value = Setting(key, env);
@@ -1575,6 +1651,26 @@ public sealed class Protocol3SidecarBridge : IDisposable
     {
         using var udp = new UdpClient(AddressFamily.InterNetwork);
 
+        // Pace packets out at the radio's DUC DAC rate so the transmit stream is
+        // steady instead of bursty. The mic path hands us ~16 packets at once
+        // every 20 ms (one WDSP TX block); flushing that burst back-to-back
+        // overfills the radio's ~4096-word DUC FIFO and then starves it for the
+        // rest of the 20 ms — the source of the sequence-gap/drop "TX not steady"
+        // stutter. Metering each 1.25 ms packet against a Stopwatch deadline
+        // keeps the FIFO evenly filled (this is exactly how TxTuneDriver stays
+        // rock-steady). timeBeginPeriod(1) is set process-wide, so Task.Delay
+        // resolves near 1 ms — fine to spread a 16-packet burst across ~20 ms.
+        //
+        // Self-regulating and safe against under-delivery: we only *wait* when
+        // ahead of the DAC clock; when a real backlog builds (production briefly
+        // outruns the DAC, or Task.Delay overshoots) `now` passes the deadline
+        // and packets go out immediately at full speed to catch up. The deadline
+        // is clamped so it can never accumulate more than TxIqPacerMaxLeadPackets
+        // of debt, bounding in-flight depth well under the channel capacity.
+        long ticksPerPacket = Stopwatch.Frequency * TxIqFramesPerPacket / TxIqDacRateHz;
+        long maxDebtTicks = ticksPerPacket * TxIqPacerMaxLeadPackets;
+        long deadline = 0;
+
         try
         {
             while (await reader.WaitToReadAsync(ct).ConfigureAwait(false))
@@ -1582,12 +1678,37 @@ public sealed class Protocol3SidecarBridge : IDisposable
                 while (reader.TryRead(out var packet))
                 {
                     ct.ThrowIfCancellationRequested();
+
+                    long now = Stopwatch.GetTimestamp();
+                    if (deadline == 0) deadline = now;        // anchor the clock on the first packet
+                    long aheadTicks = deadline - now;
+                    if (aheadTicks > 0)
+                    {
+                        int waitMs = (int)(aheadTicks * 1000 / Stopwatch.Frequency);
+                        if (waitMs >= 1)
+                        {
+                            try { await Task.Delay(waitMs, ct).ConfigureAwait(false); }
+                            catch (OperationCanceledException) { return; }
+                        }
+                    }
+
                     SendTxIqPacket(udp, endpoint, packet);
+                    deadline += ticksPerPacket;
+                    // Don't let the schedule fall unboundedly behind real time on a
+                    // sustained backlog — cap the debt so catch-up stays bounded.
+                    long minDeadline = Stopwatch.GetTimestamp() - maxDebtTicks;
+                    if (deadline < minDeadline) deadline = minDeadline;
+
                     lock (_txIqSync)
                     {
                         if (_txIqQueueDepth > 0) _txIqQueueDepth--;
                     }
                 }
+
+                // Queue drained (gap between transmissions / mic bursts): reset the
+                // clock so the next packet re-anchors fresh rather than counting the
+                // idle gap as "behind schedule" and dumping a catch-up burst.
+                deadline = 0;
             }
         }
         catch (OperationCanceledException) { }

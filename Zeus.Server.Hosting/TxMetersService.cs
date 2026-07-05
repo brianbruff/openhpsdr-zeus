@@ -559,7 +559,18 @@ public sealed class TxMetersService : BackgroundService
 
                     bool isTun = _tx.IsTunOn;
                     DateTime keyedAt = (isTun ? _tx.TunStartedAt : _tx.MoxStartedAt) ?? DateTime.UtcNow;
-                    if (EvaluateSwrTrip(swr, DateTime.UtcNow, isTun, keyedAt) is { } tripReason)
+                    // P3 display-only (2026-07): under Protocol 3 the FWD/REF ADCs
+                    // feeding this meter arrive from the sidecar board-health
+                    // telemetry (Protocol3SidecarFrameForwarder), whose raw scale
+                    // has NOT yet been validated against the G2 Protocol-2
+                    // calibration that ComputeMeters assumes. Show the watts/SWR
+                    // readout, but do NOT let an unvalidated SWR figure auto-drop
+                    // the PA — a miscalibrated ratio could nuisance-trip or, worse,
+                    // fail to protect. The TX-timeout guard above still runs under
+                    // P3. Re-enable this trip once the P3 raw→watts calibration is
+                    // confirmed against a known load.
+                    if (!_radio.IsProtocol3Active
+                        && EvaluateSwrTrip(swr, DateTime.UtcNow, isTun, keyedAt) is { } tripReason)
                     {
                         // TryTripForAlert is idempotent — a second caller on the
                         // same tick (e.g. timeout firing concurrently) finds MOX

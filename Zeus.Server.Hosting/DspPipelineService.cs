@@ -1055,6 +1055,10 @@ public class DspPipelineService : BackgroundService,
     // see issue #81. volatile because MoxChanged fires on the caller's thread
     // and Tick reads from the pipeline thread.
     private volatile bool _keyed;
+    // Measurement-only TX-turnaround latency observer (MOX→first-IQ-at-egress
+    // and PTT-release→egress-drain). Pure instrumentation: never gates, delays,
+    // or mutates the TX IQ path and never touches RX. See TxTurnaroundTelemetry.
+    private TxTurnaroundTelemetry? _txTurnaround;
     // Issue #597 Phase 0: display-EMA fast-attack latch. OnRadioStateChanged
     // arms it when RadioLoHz moves (the operator is tuning) and Tick restores
     // the default tau once the LO has been quiet for FastAttackRestoreMs.
@@ -1336,6 +1340,7 @@ public class DspPipelineService : BackgroundService,
         _displaySettings = displaySettings;
         _txIngestFactory = txIngestFactory;
         _log = loggerFactory.CreateLogger<DspPipelineService>();
+        _txTurnaround = new TxTurnaroundTelemetry(_log);
         var persistedDisplaySettings = _displaySettings?.Get();
         _displayMaxFrameRateHz =
             persistedDisplaySettings?.DisplayMaxFrameRateHz ??
@@ -5350,6 +5355,9 @@ public class DspPipelineService : BackgroundService,
     private void OnRadioMoxChanged(bool on)
     {
         _keyed = on;
+        // Measurement-only: stamp the MOX edge for TX-turnaround latency. No
+        // effect on the TX IQ path — pure observation.
+        _txTurnaround?.OnMoxEdge(on);
         // Arm a one-shot fade envelope on the first audio block Tick reads
         // after this edge. Rising edge → ramp current audio out so the post-
         // MOX silent stretch isn't a hard cut. Falling edge → ramp the resume
@@ -5495,7 +5503,24 @@ public class DspPipelineService : BackgroundService,
         _p2Client?.SendTxIq(iqInterleaved);
         if (_radio.IsProtocol3Active)
             _p3Sidecar?.ForwardTxIq(iqInterleaved);
+        // Measurement-only: record the egress instant for TX-turnaround stats
+        // after the IQ has been forwarded, so observation never delays egress.
+        _txTurnaround?.OnTxIqEgress();
     }
+
+    /// <summary>
+    /// Measurement-only TX-turnaround latency snapshot (MOX-assert →
+    /// first-TX-IQ-at-egress and PTT-release → egress-drain), as last value
+    /// plus p50/p95 in milliseconds. Surfaced on the sidecar frame forwarder's
+    /// diagnostics/Status object. Never null; empty until the first over.
+    /// </summary>
+    public object TxTurnaroundStatus =>
+        _txTurnaround?.Snapshot() ?? new
+        {
+            overs = 0L,
+            moxToFirstIq = new { lastMs = (double?)null, p50Ms = (double?)null, p95Ms = (double?)null, samples = 0 },
+            releaseToDrain = new { lastMs = (double?)null, p50Ms = (double?)null, p95Ms = (double?)null, samples = 0 },
+        };
 
     /// <summary>
     /// Protocol 3 RX/display/audio is supplied by the hosted sidecar, but Zeus
@@ -6632,7 +6657,18 @@ public class DspPipelineService : BackgroundService,
                 _diagLastPsFeedbackCorrecting = psFeedbackCorrecting;
             }
 
-            _hub.Broadcast(frame);
+            // Only broadcast when the frame actually carries display pixels. A
+            // frame with no valid payload renders nothing. Under Protocol-3 the
+            // WDSP RX channel is opened (for the local TXA/PureSignal chain) but
+            // never fed RX IQ — RX display comes from the sidecar forwarder — so
+            // TryGetDisplayPixels returns false every tick and this loop would
+            // otherwise broadcast an empty Width-bin frame ~30x/s onto RxId 0.
+            // That interleaves a differently-sized empty frame with the sidecar's
+            // real frames, flipping slice.width on the client and (historically)
+            // storming the waterfall history-texture realloc. Skipping empties
+            // also spares P1/P2 a wasted frame on any stale tick with no fresh FFT.
+            if (flags != DisplayBodyFlags.None)
+                _hub.Broadcast(frame);
 
             // Secondary receivers (RX2..RXn): each open secondary broadcasts its
             // own DisplayFrame (RxId = receiver index) stamped with its DDC centre
@@ -6674,7 +6710,8 @@ public class DspPipelineService : BackgroundService,
                     HzPerPixel: hzPerPixel * displayPlan.Decimation,
                     PanDb: secPanBins,
                     WfDb: secWfBins);
-                _hub.Broadcast(secFrame);
+                if (secFlags != DisplayBodyFlags.None)
+                    _hub.Broadcast(secFrame);
             }
 
             if (anySecondary)
@@ -7031,8 +7068,12 @@ public class DspPipelineService : BackgroundService,
             }
         }
 
-        if (++_rxMeterTickMod >= RxMeterTickModulus)
+        if (++_rxMeterTickMod >= RxMeterTickModulus && !_radio.IsProtocol3Active)
         {
+            // Under P3 the WDSP RX channel is never fed IQ, so this meter block
+            // would broadcast the "no data" floor (the −250 dBm S-meter bug).
+            // The real RX meter rides the sidecar display frames and lands via
+            // PublishProtocol3RxMeters below.
             _rxMeterTickMod = 0;
             double rxCalOffsetDb = RadioCalibrations.RxMeterOffsetDb(
                 _radio.EffectiveBoardKind,
@@ -7108,6 +7149,125 @@ public class DspPipelineService : BackgroundService,
     /// observe the encoded frame without instantiating a WebSocket.
     /// </summary>
     public event Action<int, RxMetersV2Frame>? RxMetersV2Updated;
+
+    /// <summary>
+    /// Protocol-3 RX meter ingress (S-meter fix): the sidecar frame forwarder
+    /// calls this with the n9dsp per-channel meter readings that ride the
+    /// display frames. Publishes through the exact same outputs as the WDSP
+    /// meter tick — 0x14 RxMeterFrame, 0x19 RxMetersV2Frame, the CAT/TCI
+    /// RxMeterUpdated event, Auto-AGC, and the live-diagnostics snapshot — so
+    /// every meter consumer works identically under P3. The WDSP tick's own
+    /// meter block is suppressed while P3 is active.
+    /// <paramref name="dbfsRaw"/> is n9dsp's uncalibrated dBFS reading; the
+    /// per-board RX meter offset is applied here, same as the P2 path.
+    /// </summary>
+    public void PublishProtocol3RxMeters(
+        int channel,
+        double dbfsRaw,
+        double agcGainDb,
+        double adcHeadroomDb)
+    {
+        if (!_radio.IsProtocol3Active) return;
+        double rxCalOffsetDb = RadioCalibrations.RxMeterOffsetDb(
+            _radio.EffectiveBoardKind,
+            _radio.EffectiveOrionMkIIVariant);
+        double dbm = ApplyRxMeterCalibration(dbfsRaw, rxCalOffsetDb);
+        if (!double.IsFinite(dbm)) dbm = -160.0;
+        float adcPk = (float)(double.IsFinite(adcHeadroomDb) ? -adcHeadroomDb : -200.0);
+        float agc = (float)(double.IsFinite(agcGainDb) ? agcGainDb : 0.0);
+        // Post-AGC envelope estimate: signal + inserted AGC gain. n9dsp does
+        // not export a discrete envelope tap yet; this keeps the Meters Panel
+        // fields plausible until one lands.
+        float env = (float)Math.Min(dbm + agc, 0.0);
+        var v2 = new RxMetersV2Frame(
+            SignalPk: (float)dbm,
+            SignalAv: (float)dbm,
+            AdcPk: adcPk,
+            AdcAv: adcPk,
+            AgcGain: agc,
+            AgcEnvPk: env,
+            AgcEnvAv: env);
+
+        _hub.Broadcast(new RxMeterFrame((float)dbm));
+        RxMeterUpdated?.Invoke(channel, dbm);
+        _radio.HandleRxMetersForAutoAgc(dbm, double.NaN, v2.AdcPk, v2.AgcGain, Environment.TickCount64);
+        lock (_rxMeterDiagLock)
+        {
+            _diagRxMetersValid = true;
+            _diagRxMetersMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            _diagRxMetersChannelId = channel;
+            _diagRxDbm = dbm;
+            _diagRxMeters = v2;
+        }
+        _hub.Broadcast(v2);
+        RxMetersV2Updated?.Invoke(channel, v2);
+    }
+
+    /// <summary>
+    /// Protocol-3 final RX audio diagnostics. P3 audio bypasses the WDSP tick and
+    /// is published by <see cref="Protocol3SidecarFrameForwarder"/>, but live DSP
+    /// diagnostics still need the same final-audio freshness/RMS/peak evidence as
+    /// the P2 path. This is read-only telemetry; sinks are still fanned out by the
+    /// P3 forwarder.
+    /// </summary>
+    public void PublishProtocol3RxAudioDiagnostics(in AudioFrame frame)
+    {
+        if (!_radio.IsProtocol3Active) return;
+        if (frame.RxId != 0 ||
+            frame.Channels != 1 ||
+            frame.SampleRateHz != AudioOutputRateHz ||
+            frame.SampleCount == 0)
+        {
+            return;
+        }
+
+        var samples = frame.Samples.Span;
+        int count = Math.Min(frame.SampleCount, samples.Length);
+        if (count <= 0) return;
+        var block = samples[..count];
+        double rms = Rms(block);
+        double peak = PeakAbs(block);
+        bool txMonitorRequested = _radio.Snapshot().TxMonitorEnabled;
+
+        lock (_audioDiagLock)
+        {
+            _diagAudioValid = true;
+            _diagAudioFrameMs = (long)frame.TsUnixMs;
+            _diagAudioSeq = frame.Seq;
+            _diagAudioFrameCount++;
+            _diagAudioSource = "p3-rx";
+            _diagAudioSampleRateHz = checked((int)frame.SampleRateHz);
+            _diagAudioSampleCount = count;
+            _diagAudioRms = rms;
+            _diagAudioPeak = peak;
+            _diagAudioTxMonitorRequested = txMonitorRequested;
+            _diagAudioSquelchEnabled = false;
+            _diagAudioSquelchOpen = true;
+            _diagAudioSquelchTailActive = false;
+            _diagAudioSquelchGain = 1.0;
+            _diagAudioLevelerValid = false;
+            _diagAudioLevelerInputRmsDbfs = double.NaN;
+            _diagAudioLevelerOutputRmsDbfs = double.NaN;
+            _diagAudioLevelerInputPeakDbfs = double.NaN;
+            _diagAudioLevelerOutputPeakDbfs = double.NaN;
+            _diagAudioLevelerDesiredGainDb = double.NaN;
+            _diagAudioLevelerAppliedGainDb = double.NaN;
+            _diagAudioLevelerGainDeltaDb = double.NaN;
+            _diagAudioLevelerPeakHeadroomDb = double.NaN;
+            _diagAudioLevelerPreLimitPeakDbfs = double.NaN;
+            _diagAudioLevelerOutputLimitReductionDb = double.NaN;
+            _diagAudioLevelerOutputLimitSampleCount = 0;
+            _diagAudioLevelerPauseHoldBlocks = 0;
+            _diagAudioLevelerBoostSlewLimited = false;
+            _diagAudioLevelerPeakLimited = false;
+            _diagAudioLevelerOutputLimited = false;
+            _diagAudioSquelchMode = "off";
+            _diagAudioSquelchGateSource = "disabled";
+            _diagAudioSquelchOpenKnown = true;
+            _diagAudioMonitorBacklogSamples = 0;
+            _diagAudioSinkCount = _audioSinks.Length;
+        }
+    }
 
     /// <summary>
     /// Build the wire frame from a raw <see cref="RxStageMeters"/>

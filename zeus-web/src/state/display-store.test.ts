@@ -38,6 +38,66 @@ afterEach(() => {
   });
 });
 
+describe('payload-less frame rejection (P3 keepalive interleave)', () => {
+  const realFrame = (seq: number): DecodedFrame => ({
+    msgType: 0x01,
+    headerFlags: 0,
+    seq,
+    tsUnixMs: 1_700_000_000_000 + seq,
+    rxId: 0,
+    bodyFlags: 0x03, // pan + wf valid
+    panValid: true,
+    wfValid: true,
+    width: 4096,
+    centerHz: 7_205_000n,
+    hzPerPixel: 46.875,
+    panDb: new Float32Array(4096).fill(-100),
+    wfDb: new Float32Array(4096).fill(-100),
+  });
+  // The empty keepalive P3 interleaves: half width, double hz/px, NO payload.
+  const emptyFrame = (seq: number): DecodedFrame => ({
+    msgType: 0x01,
+    headerFlags: 0,
+    seq,
+    tsUnixMs: 1_700_000_000_000 + seq,
+    rxId: 0,
+    bodyFlags: 0x00, // neither pan nor wf valid
+    panValid: false,
+    wfValid: false,
+    width: 2048,
+    centerHz: 7_205_000n,
+    hzPerPixel: 93.75,
+    panDb: new Float32Array(2048),
+    wfDb: new Float32Array(2048),
+  });
+
+  it('ignores an empty frame so it cannot flip the display geometry', () => {
+    useDisplayStore.getState().pushFrame(realFrame(1));
+    expect(useDisplayStore.getState().width).toBe(4096);
+    expect(useDisplayStore.getState().lastSeq).toBe(1);
+
+    // A payload-less keepalive must NOT change width/seq — otherwise the shared
+    // frame planner would see a width change and reset the waterfall history.
+    useDisplayStore.getState().pushFrame(emptyFrame(2));
+    expect(useDisplayStore.getState().width).toBe(4096); // unchanged, not 2048
+    expect(useDisplayStore.getState().lastSeq).toBe(1); // empty frame dropped
+
+    // Alternating real/empty stream stays pinned to the real geometry.
+    for (let seq = 3; seq <= 12; seq++) {
+      useDisplayStore.getState().pushFrame(seq % 2 === 0 ? emptyFrame(seq) : realFrame(seq));
+    }
+    expect(useDisplayStore.getState().width).toBe(4096);
+    expect(useDisplayStore.getState().lastSeq).toBe(11); // last real (odd) seq
+  });
+
+  it('still accepts frames that carry only one valid payload', () => {
+    const panOnly = { ...realFrame(5), bodyFlags: 0x01, wfValid: false };
+    useDisplayStore.getState().pushFrame(panOnly);
+    expect(useDisplayStore.getState().lastSeq).toBe(5);
+    expect(useDisplayStore.getState().width).toBe(4096);
+  });
+});
+
 describe('frame consumer registry', () => {
   it('reports no consumers initially', () => {
     expect(hasActiveFrameConsumers()).toBe(false);

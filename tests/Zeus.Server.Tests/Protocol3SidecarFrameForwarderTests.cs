@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
 using Zeus.Contracts;
+using Zeus.Plugins.Contracts.Extensions;
 using Zeus.Server;
 
 namespace Zeus.Server.Tests;
@@ -48,6 +49,68 @@ public sealed class Protocol3SidecarFrameForwarderTests
         }
     }
 
+    // Edge-guard frequency-absolute masking (zoom bug fix). The guard must mask
+    // only the true DDC passband edges (centre ± sampleRate/2), never a fixed
+    // slice of a zoomed view.
+    private const float EdgeGuardFillDb = -100.0f;
+    private const float DisplayFloorDb = -140.0f;
+
+    private static (float[] pan, float[] wf) MakeGuardBuffers(int width)
+    {
+        var pan = new float[width];
+        var wf = new float[width];
+        Array.Fill(pan, EdgeGuardFillDb);
+        Array.Fill(wf, EdgeGuardFillDb);
+        return (pan, wf);
+    }
+
+    [Fact]
+    public void ApplyDisplayEdgeGuard_FullSpan_MasksTrueBandEdges()
+    {
+        const int width = 4096;
+        const long sampleRateHz = 192_000;
+        var hzPerPixel = (float)sampleRateHz / width; // full DDC span in view
+        var (pan, wf) = MakeGuardBuffers(width);
+
+        Protocol3SidecarFrameForwarder.ApplyDisplayEdgeGuard(pan, wf, hzPerPixel, 6000.0, sampleRateHz);
+
+        Assert.Equal(DisplayFloorDb, pan[0]);          // low edge masked
+        Assert.Equal(DisplayFloorDb, pan[width - 1]);  // high edge masked
+        Assert.Equal(EdgeGuardFillDb, pan[width / 2]); // centre untouched
+    }
+
+    [Fact]
+    public void ApplyDisplayEdgeGuard_ZoomedIntoMidBand_MasksNothing()
+    {
+        const int width = 4096;
+        const long sampleRateHz = 192_000;
+        // 4x zoom: the visible window is ~48 kHz, deep inside the ±96 kHz
+        // passband, so NO bin is within the 6 kHz guard of a true band edge.
+        var hzPerPixel = (float)sampleRateHz / width / 4.0f;
+        var (pan, wf) = MakeGuardBuffers(width);
+
+        Protocol3SidecarFrameForwarder.ApplyDisplayEdgeGuard(pan, wf, hzPerPixel, 6000.0, sampleRateHz);
+
+        Assert.Equal(EdgeGuardFillDb, pan[0]);          // edges NOT eaten
+        Assert.Equal(EdgeGuardFillDb, pan[width - 1]);
+        Assert.All(pan, v => Assert.Equal(EdgeGuardFillDb, v));
+        Assert.All(wf, v => Assert.Equal(EdgeGuardFillDb, v));
+    }
+
+    [Fact]
+    public void ApplyDisplayEdgeGuard_UnknownSampleRate_FallsBackToLegacyGuard()
+    {
+        const int width = 4096;
+        var (pan, wf) = MakeGuardBuffers(width);
+
+        // sampleRateHz = 0 → legacy fixed-fraction guard still masks the edges.
+        Protocol3SidecarFrameForwarder.ApplyDisplayEdgeGuard(pan, wf, 46.875f, 6000.0, 0);
+
+        Assert.Equal(DisplayFloorDb, pan[0]);
+        Assert.Equal(DisplayFloorDb, pan[width - 1]);
+        Assert.Equal(EdgeGuardFillDb, pan[width / 2]);
+    }
+
     [Fact]
     public void ResolvePollCadence_DefaultsToProductionDisplayAndRealtimeAudio()
     {
@@ -65,7 +128,7 @@ public sealed class Protocol3SidecarFrameForwarderTests
 
             Assert.Equal(20, Protocol3SidecarFrameForwarder.ResolveDisplayPollMs(configuration));
             Assert.Equal(4096, Protocol3SidecarFrameForwarder.ResolveDisplayMaxWidth(configuration));
-            Assert.Equal(6000.0, Protocol3SidecarFrameForwarder.ResolveDisplayEdgeGuardHz(configuration));
+            Assert.Equal(10000.0, Protocol3SidecarFrameForwarder.ResolveDisplayEdgeGuardHz(configuration));
             Assert.Equal(10, Protocol3SidecarFrameForwarder.ResolveAudioPollMs(configuration));
         }
         finally
@@ -303,7 +366,8 @@ public sealed class Protocol3SidecarFrameForwarderTests
             pan,
             wf,
             hzPerPixel: 1000.0f,
-            edgeGuardHz: 2000.0);
+            edgeGuardHz: 2000.0,
+            sampleRateHz: 20_000);
 
         Assert.Equal(-140.0f, pan[0]);
         Assert.Equal(-140.0f, pan[1]);
@@ -462,6 +526,142 @@ public sealed class Protocol3SidecarFrameForwarderTests
         Assert.Equal(new[] { 0.125f, -0.25f, 0.5f }, frame.Samples.ToArray());
     }
 
+    [Fact]
+    public void BuildProtocol3MutedAudioFrame_ZerosSamplesWithoutMutatingInput()
+    {
+        var inputSamples = new[] { 0.125f, -0.25f, 0.5f };
+        var frame = new AudioFrame(
+            Seq: 11,
+            TsUnixMs: 2222,
+            RxId: 0,
+            Channels: 1,
+            SampleRateHz: 48_000,
+            SampleCount: checked((ushort)inputSamples.Length),
+            Samples: inputSamples);
+
+        var muted = Protocol3SidecarFrameForwarder.BuildProtocol3MutedAudioFrame(frame);
+
+        Assert.Equal(frame.Seq, muted.Seq);
+        Assert.Equal(frame.TsUnixMs, muted.TsUnixMs);
+        Assert.Equal(frame.RxId, muted.RxId);
+        Assert.Equal(frame.Channels, muted.Channels);
+        Assert.Equal(frame.SampleRateHz, muted.SampleRateHz);
+        Assert.Equal(frame.SampleCount, muted.SampleCount);
+        Assert.Equal(new[] { 0f, 0f, 0f }, muted.Samples.ToArray());
+        Assert.Equal(new[] { 0.125f, -0.25f, 0.5f }, frame.Samples.ToArray());
+    }
+
+    [Fact]
+    public void ProcessProtocol3AudioModem_DecodesFreeDvPrimaryRxBeforePublish()
+    {
+        var modem = new RecordingAudioModem(active: true);
+        double afGain = 1.0;
+        var inputSamples = new[] { 0.125f, -0.25f, 0.5f };
+        var frame = new AudioFrame(
+            Seq: 7,
+            TsUnixMs: 1234,
+            RxId: 0,
+            Channels: 1,
+            SampleRateHz: 48_000,
+            SampleCount: checked((ushort)inputSamples.Length),
+            Samples: inputSamples);
+
+        var processed = Protocol3SidecarFrameForwarder.ProcessProtocol3AudioModem(
+            frame,
+            modem,
+            RxMode.FreeDv,
+            rxAfGainDb: 0.0,
+            ref afGain);
+
+        Assert.Equal(new[] { (byte)RxMode.FreeDv }, modem.SyncModes);
+        Assert.Equal(1, modem.ProcessRxCount);
+        var samples = processed.Samples.ToArray();
+        Assert.InRange(samples[0], 0.839f, 0.841f);
+        Assert.InRange(samples[1], 0.749f, 0.751f);
+        Assert.InRange(samples[2], 0.839f, 0.841f);
+        Assert.Equal(new[] { 0.125f, -0.25f, 0.5f }, frame.Samples.ToArray());
+    }
+
+    [Fact]
+    public void ProcessProtocol3AudioModem_SyncsButDoesNotProcessInactiveModem()
+    {
+        var modem = new RecordingAudioModem(active: false);
+        double afGain = 1.0;
+        var frame = new AudioFrame(
+            Seq: 7,
+            TsUnixMs: 1234,
+            RxId: 0,
+            Channels: 1,
+            SampleRateHz: 48_000,
+            SampleCount: 2,
+            Samples: new[] { 0.25f, -0.5f });
+
+        var processed = Protocol3SidecarFrameForwarder.ProcessProtocol3AudioModem(
+            frame,
+            modem,
+            RxMode.USB,
+            rxAfGainDb: 0.0,
+            ref afGain);
+
+        Assert.Equal(new[] { (byte)RxMode.USB }, modem.SyncModes);
+        Assert.Equal(0, modem.ProcessRxCount);
+        Assert.Equal(new[] { 0.25f, -0.5f }, processed.Samples.ToArray());
+    }
+
+    [Fact]
+    public void ProcessProtocol3AudioModem_LeavesSecondaryRxFramesUntouched()
+    {
+        var modem = new RecordingAudioModem(active: true);
+        double afGain = 1.0;
+        var frame = new AudioFrame(
+            Seq: 7,
+            TsUnixMs: 1234,
+            RxId: 1,
+            Channels: 1,
+            SampleRateHz: 48_000,
+            SampleCount: 2,
+            Samples: new[] { 0.25f, -0.5f });
+
+        var processed = Protocol3SidecarFrameForwarder.ProcessProtocol3AudioModem(
+            frame,
+            modem,
+            RxMode.FreeDv,
+            rxAfGainDb: 0.0,
+            ref afGain);
+
+        Assert.Equal(new[] { (byte)RxMode.FreeDv }, modem.SyncModes);
+        Assert.Equal(0, modem.ProcessRxCount);
+        Assert.Equal(new[] { 0.25f, -0.5f }, processed.Samples.ToArray());
+    }
+
+    [Fact]
+    public void ProcessProtocol3AudioModem_SanitizesAndLimitsDecodedSpeech()
+    {
+        var modem = new RecordingAudioModem(active: true);
+        double afGain = 1.0;
+        var frame = new AudioFrame(
+            Seq: 7,
+            TsUnixMs: 1234,
+            RxId: 0,
+            Channels: 1,
+            SampleRateHz: 48_000,
+            SampleCount: 3,
+            Samples: new[] { 0.95f, float.NaN, -1.1f });
+
+        var processed = Protocol3SidecarFrameForwarder.ProcessProtocol3AudioModem(
+            frame,
+            modem,
+            RxMode.FreeDv,
+            rxAfGainDb: 0.0,
+            ref afGain);
+
+        Assert.Equal(1, modem.ProcessRxCount);
+        var samples = processed.Samples.ToArray();
+        Assert.InRange(samples[0], 0.83f, 0.841f);
+        Assert.InRange(samples[1], 0.83f, 0.841f);
+        Assert.Equal(0f, samples[2]);
+    }
+
     private static JsonArray Values(params double[] values)
     {
         var array = new JsonArray();
@@ -514,5 +714,36 @@ public sealed class Protocol3SidecarFrameForwarderTests
         body.Write(frameHeader);
         body.Write(MemoryMarshal.AsBytes(samples.AsSpan()));
         return body.ToArray();
+    }
+
+    private sealed class RecordingAudioModem : IAudioModemPlugin
+    {
+        private readonly bool _active;
+        private readonly List<byte> _syncModes = new();
+
+        public RecordingAudioModem(bool active)
+        {
+            _active = active;
+        }
+
+        public IReadOnlyList<byte> SyncModes => _syncModes;
+        public int ProcessRxCount { get; private set; }
+        public bool Active => _active;
+        public bool NativeAvailable => true;
+
+        public void SyncMode(byte rxModeByte) => _syncModes.Add(rxModeByte);
+
+        public void ProcessRx(Span<float> block48k)
+        {
+            ProcessRxCount++;
+            for (int i = 0; i < block48k.Length; i++)
+                block48k[i] += 1.0f;
+        }
+
+        public void ProcessTx(Span<float> block48k) { }
+        public void FlushRx() { }
+        public void FlushTx() { }
+        public int FinishTx() => 0;
+        public int DrainTx(Span<float> block48k) => 0;
     }
 }

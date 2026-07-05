@@ -250,6 +250,18 @@ export const useDisplayStore = create<DisplayState>((set) => ({
   setConnected: (connected) => set({ connected }),
   pushFrame: (f) => {
     const clean = cleanFrame(f);
+    // Drop payload-less display frames (neither pan nor waterfall valid). They
+    // carry nothing renderable, yet Protocol-3 interleaves such keepalive frames
+    // between every real frame with a DIFFERENT header geometry (observed: an
+    // empty 2048-bin @ 93.75 Hz/px frame between each real 4096-bin @ 46.875 one).
+    // Letting them through flips slice.width every tick, so the shared frame
+    // planner (frame-plan.ts) reads a width change and emits a 'reset' each frame,
+    // re-seeding the ENTIRE waterfall history texture — a width×HISTORY_ROWS R32F
+    // reallocation across four textures, ~50×/s — which pins the render thread and
+    // drops the waterfall to single-digit fps. Ignoring them keeps the last real
+    // frame's geometry and payload, and keeps the trace and waterfall sourced from
+    // the same (real) frames, so they stay in lockstep (issue #597).
+    if (!clean.panValid && !clean.wfValid) return;
     const nextSlice = sliceFromFrame(clean);
     const rxId = clean.rxId;
 

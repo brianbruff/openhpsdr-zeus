@@ -7,6 +7,8 @@
 
 using System.Threading.Channels;
 using Zeus.Contracts;
+using Zeus.Protocol1;
+using Zeus.Protocol2;
 
 namespace Zeus.Server;
 
@@ -30,6 +32,13 @@ public sealed class Protocol3SidecarControlForwarder : IHostedService, IDisposab
     private Task? _worker;
     private byte _lastDriveByte;
     private bool _lastPaEnabled;
+    // Latest full PA/antenna snapshot + radio state — the inputs to the Saturn
+    // Alex register composition (band→BPF/LPF/antenna relays). Under _controlSync.
+    private PaRuntimeSnapshot? _lastPaSnapshot;
+    private StateDto? _lastState;
+    // Last Alex images actually pushed, to dedupe the state-change path (the
+    // MOX edges always push — the T/R relay flip must never be skipped).
+    private Protocol3SidecarBridge.AlexRegisterImages? _lastAlexPushed;
     private long _txCommandEpoch;
     private long _paSnapshotRefreshes;
     private int _paSnapshotRefreshDepth;
@@ -144,6 +153,7 @@ public sealed class Protocol3SidecarControlForwarder : IHostedService, IDisposab
 
     private void OnRadioStateChanged(StateDto state)
     {
+        lock (_controlSync) _lastState = state;
         if (!_radio.IsProtocol3Active) return;
         _updates.Writer.TryWrite(state);
     }
@@ -154,6 +164,7 @@ public sealed class Protocol3SidecarControlForwarder : IHostedService, IDisposab
         {
             _lastDriveByte = snap.DriveByte;
             _lastPaEnabled = snap.PaEnabled;
+            _lastPaSnapshot = snap;
         }
 
         if (Volatile.Read(ref _paSnapshotRefreshDepth) > 0)
@@ -163,8 +174,63 @@ public sealed class Protocol3SidecarControlForwarder : IHostedService, IDisposab
             PushTxControl();
         else
             FireAndForget(
-                ct => _sidecar.PushRfPathAsync(snap.PaEnabled, ct),
+                ct => PushRfPathWithAlexAsync(snap.PaEnabled, ct),
                 "p3.sidecar.rf-path.forward.failed");
+    }
+
+    /// <summary>
+    /// Compose the Saturn Alex register images (TX filter / RX / TX antenna)
+    /// from the latest radio state + PA/antenna snapshot — the P3 equivalent of
+    /// the P2 alex0/alex1 words SendCmdHighPriority emits every 100 ms. Null
+    /// until the first StateDto arrives (nothing sane to send yet).
+    /// </summary>
+    private Protocol3SidecarBridge.AlexRegisterImages? ComposeAlex()
+    {
+        StateDto? state;
+        PaRuntimeSnapshot snap;
+        lock (_controlSync)
+        {
+            state = _lastState;
+            snap = _lastPaSnapshot ?? new PaRuntimeSnapshot(0, 0, 0, PaEnabled: false);
+        }
+        if (state is null) return null;
+
+        var tune = _latchedTune || _tx.IsTunOn;
+        var xmit = _latchedTxActive || _latchedMox || _tx.IsMoxOn || tune || _tx.IsTwoToneOn;
+        long rx2Hz = 0;
+        var rx2Enabled = state.Rx2Enabled;
+        if (rx2Enabled && state.Receivers is not null)
+        {
+            foreach (var rx in state.Receivers)
+            {
+                if (rx?.Index == 1) { rx2Hz = rx.VfoHz; break; }
+            }
+        }
+        if (rx2Hz <= 0) rx2Enabled = false;
+        var txHz = RadioService.TxFrequencyHz(state);
+
+        var (txFilterReg, rxReg, txAntennaReg) = Protocol2Client.ComposeSaturnAlexRegisterImages(
+            rxFreqHz: (uint)Math.Max(0, state.VfoHz),
+            rx2FreqHz: (uint)Math.Max(0, rx2Hz),
+            rx2Enabled: rx2Enabled,
+            txFreqHz: (uint)Math.Max(0, txHz),
+            xmit: xmit,
+            txAntWire: (int)snap.TxAntenna + 1,
+            hasTxAntennaRelays: snap.HasTxAntennaRelays,
+            rxAntWire: (int)snap.RxAntenna + 1,
+            rxAuxInput: snap.RxAuxInput,
+            mkiiBpfRxSelect: snap.MkiiBpfRxSelect,
+            board: HpsdrBoardKind.OrionMkII,
+            rfFilters: snap.RfFilters);
+        return new Protocol3SidecarBridge.AlexRegisterImages(txFilterReg, rxReg, txAntennaReg);
+    }
+
+    private Task PushRfPathWithAlexAsync(bool paEnabled, CancellationToken ct)
+    {
+        var alex = ComposeAlex();
+        if (alex is not null)
+            lock (_controlSync) _lastAlexPushed = alex;
+        return _sidecar.PushRfPathAsync(paEnabled, alex, ct);
     }
 
     private void OnAudioFrontEndChanged(AudioFrontEndPush push)
@@ -219,7 +285,10 @@ public sealed class Protocol3SidecarControlForwarder : IHostedService, IDisposab
                         RefreshPaSnapshotForTxControl();
                         snapshot = CaptureTxControlSnapshot();
                     }
-                    await _sidecar.PushRfPathAsync(snapshot.PaEnabled, ct).ConfigureAwait(false);
+                    // Key-down edge: the Alex words composed here carry the
+                    // TX LPF + TX antenna + T/R relay + RX-ground bits — the
+                    // P3 equivalent of P2's ALEX_TX_RELAY flip on key.
+                    await PushRfPathWithAlexAsync(snapshot.PaEnabled, ct).ConfigureAwait(false);
                     if (epoch != Interlocked.Read(ref _txCommandEpoch)) return;
                 }
 
@@ -245,7 +314,9 @@ public sealed class Protocol3SidecarControlForwarder : IHostedService, IDisposab
                         ct)
                     .ConfigureAwait(false);
                 if (!snapshot.Active)
-                    await _sidecar.PushRfPathAsync(snapshot.PaEnabled, ct).ConfigureAwait(false);
+                    // Unkey edge: recomposed with xmit=false so the T/R relay
+                    // drops and the RX BPF path is restored.
+                    await PushRfPathWithAlexAsync(snapshot.PaEnabled, ct).ConfigureAwait(false);
             },
             "p3.sidecar.tx-control.forward.failed");
     }
@@ -359,6 +430,35 @@ public sealed class Protocol3SidecarControlForwarder : IHostedService, IDisposab
             catch (Exception ex)
             {
                 _log.LogWarning(ex, "p3.sidecar.receiver-settings.forward.failed");
+            }
+
+            // Frequency/band follow-up: if the state change moved the Alex
+            // words (band change, BPF/LPF boundary crossing, antenna change
+            // via band memory), push the new register images so the radio's
+            // relays track the dial exactly as P2's 100 ms high-priority loop
+            // does. Deduped against the last pushed images — steady-state
+            // tuning inside one filter segment sends nothing.
+            try
+            {
+                var alex = ComposeAlex();
+                bool paEnabled;
+                bool changed;
+                lock (_controlSync)
+                {
+                    paEnabled = _lastPaEnabled;
+                    changed = alex is not null && !alex.Equals(_lastAlexPushed);
+                    if (changed) _lastAlexPushed = alex;
+                }
+                if (changed)
+                    await _sidecar.PushRfPathAsync(paEnabled, alex, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "p3.sidecar.rf-path.forward.failed");
             }
         }
     }

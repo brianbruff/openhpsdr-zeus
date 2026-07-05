@@ -10,6 +10,7 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text.Json.Nodes;
 using Zeus.Contracts;
+using Zeus.Plugins.Contracts.Extensions;
 
 namespace Zeus.Server;
 
@@ -18,7 +19,12 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
     private const float DisplayFloorDb = -140.0f;
     private const int DefaultDisplayPollMs = 20;
     private const int DefaultDisplayMaxWidth = 4096;
-    private const double DefaultDisplayEdgeGuardHz = 6000.0;
+    // Masks the DDC decimation-filter transition band at the true passband
+    // edges (the coloured speckle at the extreme edges of a full-span view).
+    // 10 kHz covers the G2's ~192 kHz DDC rolloff; the frequency-absolute guard
+    // masks nothing once zoomed into mid-band. Tunable via
+    // ZEUS_PROTOCOL3_FRAME_DISPLAY_EDGE_GUARD_HZ.
+    private const double DefaultDisplayEdgeGuardHz = 10000.0;
     private const int DefaultAudioPollMs = 10;
     private const int MaxDisplayWidth = ushort.MaxValue;
     private const int MaxAudioFramesPerPoll = 64;
@@ -36,6 +42,7 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
     private readonly Protocol3SidecarBridge _sidecar;
     private readonly StreamingHub _hub;
     private readonly IRxAudioSink[] _audioSinks;
+    private readonly AudioModemPluginBridge? _audioModem;
     private readonly TxAudioIngest _txIngest;
     private readonly RadioMicReceiver _radioMicReceiver;
     private readonly IHttpClientFactory _httpFactory;
@@ -73,6 +80,28 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
     private int _lastAudioSampleCount;
     private int _running;
     private uint _displaySeq;
+    private double _protocol3FreeDvAfGainLinear = 1.0;
+    private readonly DspPipelineService? _pipeline;
+    // n9dsp RX meter ride-along (S-meter fix): last publish time, to throttle
+    // the 50 Hz display poll down to the ~5 Hz meter cadence the WDSP path uses.
+    private long _lastRxMeterPublishMs;
+    private const int RxMeterPublishIntervalMs = 200;
+    // P3 TX FWD/REF power-meter ride-along (display-only, P2 parity): under
+    // Protocol 3 the radio's forward/reverse power ADCs live in the sidecar
+    // board-health telemetry, not the P1/P2 hi-priority stream TxMetersService
+    // normally listens to — so without this the operator's TX power/SWR meter
+    // sits at 0 during transmit. We poll the sidecar power ADCs while the TX-IQ
+    // egress is armed (MOX or TUN) and feed them through the same OnTelemetryRaw
+    // entry the P2 path uses. RX is untouched (the poll is gated off unless
+    // transmitting, when RX audio is muted anyway).
+    private readonly TxMetersService? _txMeters;
+    private long _lastTxMeterPollMs;
+    // ~4 Hz: fast enough for a live power/SWR needle, but the board-health block
+    // rides the full ~40 KB diagnostics payload, so polling it faster than this
+    // during TX steals sidecar-serialize + app-parse time from the panadapter
+    // frame loop (visible as TX-time display lag). TxMetersService smooths and
+    // rebroadcasts at 10 Hz regardless, so the needle still moves cleanly.
+    private const int TxMeterPollMs = 250;
 
     public Protocol3SidecarFrameForwarder(
         RadioService radio,
@@ -82,11 +111,17 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
         TxAudioIngest txIngest,
         IHttpClientFactory httpFactory,
         IConfiguration configuration,
-        ILogger<Protocol3SidecarFrameForwarder> log)
+        ILogger<Protocol3SidecarFrameForwarder> log,
+        AudioModemPluginBridge? audioModem = null,
+        DspPipelineService? pipeline = null,
+        TxMetersService? txMeters = null)
     {
         _radio = radio;
         _sidecar = sidecar;
         _hub = hub;
+        _pipeline = pipeline;
+        _audioModem = audioModem;
+        _txMeters = txMeters;
         _audioSinks = audioSinks.ToArray();
         _txIngest = txIngest;
         _radioMicReceiver = new RadioMicReceiver(
@@ -168,7 +203,10 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
                     receiverBlocksForwarded = _radioMicReceiver.TotalBlocksForwarded,
                     maxPacketsPerPoll = MaxRadioMicPacketsPerPoll,
                     pollMs = _audioPollMs,
-                }
+                },
+                // Measurement-only TX-turnaround latency (MOX→first-IQ-at-egress
+                // and PTT-release→egress-drain) sourced from the WDSP TX path.
+                txTurnaround = _pipeline?.TxTurnaroundStatus,
             };
         }
     }
@@ -225,6 +263,7 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
                 {
                     await PollAudioAsync(diagnosticsUrl, ct).ConfigureAwait(false);
                     await PollHealthAsync(diagnosticsUrl, ct).ConfigureAwait(false);
+                    await PollTxMetersAsync(diagnosticsUrl, ct).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -270,6 +309,11 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
 
     private async Task PollDisplayAsync(Uri diagnosticsUrl, CancellationToken ct)
     {
+        // The waterfall/panadapter keeps running during TX (P2 parity — you can
+        // watch your own signal). The earlier "hold RX display during TX" tweak
+        // was reverted: the smear it targeted was actually the wrong-frequency
+        // TX bug (DUC 21 kHz off), fixed at its root, so holding the display
+        // only froze the waterfall during transmit.
         var state = _radio.Snapshot();
         var zoom = Math.Clamp(state.ZoomLevel, 1, 64);
         var url = Endpoint(
@@ -302,7 +346,7 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
             {
                 var panDb = frame.PanDb.ToArray();
                 var wfDb = frame.WfDb.ToArray();
-                ApplyDisplayEdgeGuard(panDb, wfDb, frame.HzPerPixel, _displayEdgeGuardHz);
+                ApplyDisplayEdgeGuard(panDb, wfDb, frame.HzPerPixel, _displayEdgeGuardHz, frame.SampleRateHz);
                 frame = frame with { PanDb = panDb, WfDb = wfDb };
             }
             _hub.Broadcast(frame);
@@ -311,7 +355,35 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
             Volatile.Write(ref _lastDisplayRxId, frame.RxId);
             Volatile.Write(ref _lastDisplayWidth, frame.Width);
             Volatile.Write(ref _lastDisplayHzPerPixelBits, BitConverter.SingleToInt32Bits(frame.HzPerPixel));
+
+            PublishRxMetersFromFrame(frameObject, frame.RxId, nowMs);
         }
+    }
+
+    // n9dsp RX meter ride-along (S-meter fix): the sidecar attaches per-channel
+    // meter readings to each display frame; forward them into the pipeline's
+    // shared meter publisher so the S-meter, Meters Panel, CAT and Auto-AGC all
+    // read real n9dsp values under P3 instead of the unfed WDSP channel's
+    // "no data" floor. Throttled to the WDSP path's ~5 Hz cadence.
+    private void PublishRxMetersFromFrame(JsonObject frameObject, int rxId, long nowMs)
+    {
+        if (_pipeline is null) return;
+        if (rxId != 0) return;   // primary RX drives the S-meter, as on P2
+        if (nowMs - Interlocked.Read(ref _lastRxMeterPublishMs) < RxMeterPublishIntervalMs) return;
+        if (frameObject["rxMeterDbfs"] is not JsonValue dbfsNode ||
+            !dbfsNode.TryGetValue<double>(out var dbfs))
+        {
+            return;
+        }
+        if (dbfs <= -199.5) return;   // sidecar "no data" sentinel
+
+        double agcGainDb = frameObject["rxAgcGainDb"] is JsonValue agcNode &&
+            agcNode.TryGetValue<double>(out var agc) ? agc : 0.0;
+        double adcHeadroomDb = frameObject["rxAdcHeadroomDb"] is JsonValue headroomNode &&
+            headroomNode.TryGetValue<double>(out var headroom) ? headroom : 200.0;
+
+        Interlocked.Exchange(ref _lastRxMeterPublishMs, nowMs);
+        _pipeline.PublishProtocol3RxMeters(rxId, dbfs, agcGainDb, adcHeadroomDb);
     }
 
     private async Task PollAudioAsync(Uri diagnosticsUrl, CancellationToken ct)
@@ -328,11 +400,53 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
 
         var frames = ParseAudioFramesPayload(bytes);
         var forwardedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var state = _radio.Snapshot();
+        // Mute RX audio while transmitting (P2 parity). With TX now on-frequency,
+        // the RX DDC demodulates the operator's own transmit and would play it
+        // back ("hearing myself during TX") — the n9dsp RX audio must be gated on
+        // the TX-active state exactly as WDSP RXA is muted on key-down under P2.
+        //
+        // ALSO mute while the TX monitor (preview) is on, even with MOX off. Under
+        // P2 the DSP Tick publishes the monitor audio INSTEAD of RX (single source
+        // into every sink — see WdspDspEngine.SetTxMonitorEnabled: "the operator
+        // still wants to NOT hear the band when monitor is on"). Under P3 the RX
+        // audio arrives here from the sidecar poll, DECOUPLED from the WDSP monitor
+        // Tick, so without this gate BOTH stream into NativeAudioSink at ~48 kHz
+        // each — ~96 kHz into a ring the device drains at 48 kHz. The ring pins at
+        // the latency ceiling and the elastic-buffer Skip() trims it every cycle,
+        // one discontinuity per trim ("preview super choppy"). Muting RX here
+        // restores the P2 single-source invariant: the monitor tick is the only
+        // producer while previewing, so the ring stays rate-matched and smooth.
+        var txMonitorOn = _pipeline?.CurrentEngine?.IsTxMonitorOn ?? false;
+        var muteForTx = _sidecar.TxIqStreamingArmed || txMonitorOn;
         foreach (var frame in frames)
         {
-            foreach (var sink in _audioSinks)
+            if (!muteForTx)
             {
-                sink.Publish(frame);
+                var publishFrame = ProcessProtocol3AudioModem(
+                    frame,
+                    _audioModem?.Current,
+                    state.Mode,
+                    state.RxAfGainDb,
+                    ref _protocol3FreeDvAfGainLinear);
+                _pipeline?.PublishProtocol3RxAudioDiagnostics(in publishFrame);
+                foreach (var sink in _audioSinks)
+                {
+                    sink.Publish(publishFrame);
+                }
+            }
+            else if (!txMonitorOn)
+            {
+                // Keep playback clocked with silence during MOX/TUN so the
+                // native/browser audio rings do not under-run and rebuffer on
+                // the un-key edge. TX monitor preview remains the sole producer
+                // when it is enabled, so it does not get a parallel silence feed.
+                var publishFrame = BuildProtocol3MutedAudioFrame(frame);
+                _pipeline?.PublishProtocol3RxAudioDiagnostics(in publishFrame);
+                foreach (var sink in _audioSinks)
+                {
+                    sink.Publish(publishFrame);
+                }
             }
 
             Interlocked.Increment(ref _audioFramesForwarded);
@@ -341,6 +455,76 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
             Volatile.Write(ref _lastAudioSampleRateHz, checked((int)frame.SampleRateHz));
             Volatile.Write(ref _lastAudioSampleCount, frame.SampleCount);
         }
+    }
+
+    internal static AudioFrame BuildProtocol3MutedAudioFrame(AudioFrame frame)
+    {
+        var count = frame.Samples.Length;
+        return count == 0
+            ? frame
+            : frame with { Samples = new float[count] };
+    }
+
+    internal static AudioFrame ProcessProtocol3AudioModem(
+        AudioFrame frame,
+        IAudioModemPlugin? modem,
+        RxMode mode,
+        double rxAfGainDb,
+        ref double freeDvAfGainLinear)
+    {
+        if (modem is null) return frame;
+
+        modem.SyncMode((byte)mode);
+        if (!modem.Active) return frame;
+
+        // Match the P2/Wdsp path: FreeDV is an RX0 mono 48 kHz post-demod insert.
+        // Other frame shapes are passed through rather than corrupting audio.
+        if (frame.RxId != 0 ||
+            frame.Channels != 1 ||
+            frame.SampleRateHz != DspPipelineService.AudioOutputRateHz ||
+            frame.SampleCount == 0)
+        {
+            return frame;
+        }
+
+        var samples = frame.Samples.ToArray();
+        var block = samples.AsSpan(0, frame.SampleCount);
+        DspPipelineService.SanitizeAudioBuffer(block);
+        modem.ProcessRx(block);
+        ApplyProtocol3FreeDvAfGain(block, rxAfGainDb, ref freeDvAfGainLinear);
+        DspPipelineService.LimitRxAudioBuffer(block);
+        return frame with { Samples = samples };
+    }
+
+    private static void ApplyProtocol3FreeDvAfGain(
+        Span<float> block,
+        double targetDb,
+        ref double freeDvAfGainLinear)
+    {
+        double startGain = freeDvAfGainLinear;
+        double startDb = 20.0 * Math.Log10(Math.Max(startGain, 1e-9));
+        double endDb = StepTowardCappedDb(startDb, targetDb, maxStep: 2.0);
+        double endGain = Math.Pow(10.0, endDb / 20.0);
+        int n = block.Length;
+        if (n == 0)
+        {
+            freeDvAfGainLinear = endGain;
+            return;
+        }
+
+        for (int i = 0; i < n; i++)
+        {
+            double t = (i + 1) / (double)n;
+            double gain = startGain + (endGain - startGain) * t;
+            block[i] = (float)(block[i] * gain);
+        }
+        freeDvAfGainLinear = endGain;
+    }
+
+    private static double StepTowardCappedDb(double current, double target, double maxStep)
+    {
+        double delta = target - current;
+        return Math.Abs(delta) <= maxStep ? target : current + Math.Sign(delta) * maxStep;
     }
 
     private async Task PollRadioMicAsync(Uri diagnosticsUrl, CancellationToken ct)
@@ -361,6 +545,71 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
             Interlocked.Add(ref _radioMicPacketsForwarded, packets);
             Interlocked.Exchange(ref _lastRadioMicPacketUnixMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         }
+    }
+
+    // Feed the sidecar's forward/reverse power ADCs into TxMetersService so the
+    // operator's TX power/SWR meter reads during Protocol 3 transmit (P2 parity).
+    // Only runs while the TX-IQ egress is armed — TxIqStreamingArmed covers both
+    // keyed MOX and TUN, both of which drive the egress — and self-throttles to
+    // ~7 Hz. The power raws live in the full /api/diagnostics/v2 payload (the same
+    // one PollHealthAsync reads at 1 Hz), but the meter wants a livelier cadence,
+    // so this pulls it faster while transmitting. When not transmitting it is a
+    // single volatile read and return, so RX is untouched; during TX the RX audio
+    // this loop shares is muted anyway, so the extra fetch costs nothing audible.
+    // Display-only: TxMetersService gates its SWR auto-trip off under P3 because
+    // this raw scale is not yet validated against the G2 watts calibration.
+    private async Task PollTxMetersAsync(Uri diagnosticsUrl, CancellationToken ct)
+    {
+        if (_txMeters is null || !_sidecar.TxIqStreamingArmed) return;
+
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var last = Interlocked.Read(ref _lastTxMeterPollMs);
+        if (last > 0 && nowMs - last < TxMeterPollMs) return;
+        if (Interlocked.CompareExchange(ref _lastTxMeterPollMs, nowMs, last) != last) return;
+
+        try
+        {
+            using var response = await _http.GetAsync(diagnosticsUrl, ct).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            if (await JsonNode.ParseAsync(stream, cancellationToken: ct).ConfigureAwait(false) is not JsonObject root)
+                return;
+            if (root["p3"] is not JsonObject p3) return;
+            if (!TryReadRawAdc(p3, "forwardPowerRaw", out var fwd)) return;
+            TryReadRawAdc(p3, "reversePowerRaw", out var rev);
+            _txMeters.OnTelemetryRaw(fwd, rev);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Non-critical: a missed sample just leaves the needle briefly stale.
+            // Never let a meter hiccup disturb the audio loop it rides on.
+            LogThrottled(ref _lastAudioFailureLogMs, ex, "p3.sidecar.tx-meters.poll.failed");
+        }
+    }
+
+    // Parse a non-negative integer board-health ADC field into a ushort, clamping
+    // into range. Returns false when the field is absent or non-numeric (older
+    // sidecar without the board-health block) so the caller leaves the meter
+    // untouched rather than feeding it a spurious zero.
+    private static bool TryReadRawAdc(JsonObject obj, string name, out ushort value)
+    {
+        value = 0;
+        if (obj[name] is not JsonValue node) return false;
+        if (node.TryGetValue<long>(out var l))
+        {
+            value = (ushort)Math.Clamp(l, 0L, ushort.MaxValue);
+            return true;
+        }
+        if (node.TryGetValue<double>(out var d) && double.IsFinite(d))
+        {
+            value = (ushort)Math.Clamp((long)Math.Round(d), 0L, ushort.MaxValue);
+            return true;
+        }
+        return false;
     }
 
     private async Task PollHealthAsync(Uri diagnosticsUrl, CancellationToken ct)
@@ -555,7 +804,10 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
             CenterHz: centerHz,
             HzPerPixel: hzPerPixel,
             PanDb: pan,
-            WfDb: wf);
+            WfDb: wf,
+            // DDC passband width, so the edge-guard masks the true band edges
+            // rather than a fixed fraction of a zoomed view (0 = unknown → legacy).
+            SampleRateHz: JsonLong(source, "sampleRateHz", 0));
     }
 
     internal int ForwardRadioMicPacketPayload(ReadOnlySpan<byte> payload)
@@ -768,7 +1020,8 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
         float[] panDb,
         float[] wfDb,
         float hzPerPixel,
-        double edgeGuardHz)
+        double edgeGuardHz,
+        long sampleRateHz)
     {
         if (panDb.Length == 0 || wfDb.Length == 0) return;
         if (!float.IsFinite(hzPerPixel) || hzPerPixel <= 0.0f) return;
@@ -777,7 +1030,29 @@ public sealed class Protocol3SidecarFrameForwarder : BackgroundService
         var width = Math.Min(panDb.Length, wfDb.Length);
         if (width < 4) return;
 
-        var floorBins = (int)Math.Ceiling(edgeGuardHz / hzPerPixel);
+        int floorBins;
+        if (sampleRateHz > 0)
+        {
+            // Mask only the TRUE DDC passband edges, not a fixed fraction of the
+            // (possibly zoomed) view. The passband spans ±sampleRateHz/2 around
+            // the display centre; the guard reaches this far into each display
+            // edge. When zoomed into mid-band the visible window sits well inside
+            // the passband, the reach goes negative, and NOTHING is masked —
+            // fixing the "black edges eat real spectrum when zoomed" bug where a
+            // flat width/10 slice was always blanked.
+            var passbandHalfSpanHz = sampleRateHz / 2.0;
+            var displayHalfSpanHz = (width / 2.0) * hzPerPixel;
+            var overreachHz = edgeGuardHz - (passbandHalfSpanHz - displayHalfSpanHz);
+            if (overreachHz <= 0.0) return;
+            floorBins = (int)Math.Ceiling(overreachHz / hzPerPixel);
+        }
+        else
+        {
+            // Unknown passband geometry (e.g. deserialized frame): legacy
+            // fixed-fraction guard, unchanged for backward compatibility.
+            floorBins = (int)Math.Ceiling(edgeGuardHz / hzPerPixel);
+        }
+
         floorBins = Math.Clamp(floorBins, 1, Math.Max(1, width / 10));
         var fadeBins = Math.Min(floorBins, Math.Max(0, (width / 2) - floorBins));
         ApplyDisplayEdgeGuard(panDb, floorBins, fadeBins);

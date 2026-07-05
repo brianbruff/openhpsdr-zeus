@@ -133,6 +133,26 @@ internal sealed class FloatSpscRing
         return n;
     }
 
+    /// <summary>Consumer-side latency trim. Discards up to
+    /// <paramref name="count"/> of the OLDEST queued samples by advancing the
+    /// read cursor — O(1), no copy, never blocks. Returns the number actually
+    /// skipped (fewer if the ring drained first). Used to cap buffering latency
+    /// when a producer over-delivers (burst backlog or slow clock drift) so the
+    /// ring can't pin near capacity. Consumer thread only.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int Skip(int count)
+    {
+        if (count <= 0) return 0;
+        long head = _cursors.Head;
+        long tail = Volatile.Read(ref _cursors.Tail);
+        long avail = tail - head;
+        if (avail <= 0) return 0;
+        int n = count;
+        if (n > (int)avail) n = (int)avail;
+        Volatile.Write(ref _cursors.Head, head + n);
+        return n;
+    }
+
     /// <summary>Consumer-side reset. Discards every queued sample. Safe to
     /// call only from the consumer thread or while both producer and
     /// consumer are quiesced.</summary>

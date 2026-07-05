@@ -163,7 +163,7 @@ export function SignalIntelligenceSettingsSection() {
       </div>
 
       {sceneStatus && (
-        <div className="smart-nr-status">
+        <div className="smart-nr-status sig-scene-status">
           <span className="mono">{PROFILE_LABEL[sceneStatus.profileId]}</span>
           <span>{sceneStatus.reason}</span>
           <span className="mono">

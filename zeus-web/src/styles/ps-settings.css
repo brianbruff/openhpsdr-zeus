@@ -10,6 +10,7 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-width: 0;
   --ps-good: #4aa04a;
   --ps-warn: var(--power);
   --ps-bad: var(--tx);
@@ -517,6 +518,7 @@
   background: var(--bg-1);
   border-radius: var(--r-md);
   padding: 12px 14px;
+  min-width: 0;
 }
 .ps-card h4 {
   margin: 0 0 8px;
@@ -528,6 +530,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 .ps-card h4 .ps-card-hint {
   margin-left: auto;
@@ -536,6 +539,10 @@
   color: var(--fg-3);
   text-transform: none;
   font-weight: 400;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ── RF filter matrix ───────────────────────────────────── */
@@ -1091,11 +1098,13 @@
 .sig-intel {
   display: grid;
   gap: 12px;
+  min-width: 0;
 }
 
 .smart-nr-settings {
   display: grid;
   gap: 12px;
+  min-width: 0;
 }
 
 .sig-intel-top,
@@ -1113,6 +1122,7 @@
 .sig-profile-row {
   display: flex;
   flex-wrap: wrap;
+  flex: 1 1 260px;
   gap: 5px;
   min-width: 0;
 }
@@ -1144,6 +1154,7 @@
 
 .sig-status {
   flex: 0 0 auto;
+  max-width: 100%;
   border: 1px solid var(--panel-border);
   border-radius: var(--r-xs);
   padding: 4px 7px;
@@ -1151,6 +1162,9 @@
   background: rgba(255, 255, 255, 0.03);
   font-size: 10.5px;
   letter-spacing: 0.08em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sig-toggle-row {
@@ -1171,6 +1185,14 @@
   text-transform: uppercase;
   cursor: pointer;
   user-select: none;
+  min-width: 0;
+}
+
+.sig-switch > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sig-switch input {
@@ -1222,8 +1244,9 @@
 
 .sig-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
   gap: 12px 16px;
+  min-width: 0;
 }
 
 .adc-protection-status {
@@ -1284,7 +1307,7 @@
 
 .sig-tune {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 72px;
+  grid-template-columns: minmax(0, 1fr) minmax(58px, 72px);
   align-items: end;
   gap: 8px;
   min-width: 0;
@@ -1294,8 +1317,20 @@
   min-width: 0;
 }
 
+.sig-tune .slider-head {
+  min-width: 0;
+  gap: 8px;
+}
+
+.sig-tune .label-xs {
+  min-width: 0;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
 .sig-tune-input {
-  width: 72px;
+  width: 100%;
+  min-width: 0;
   height: 24px;
   border: 1px solid var(--panel-border);
   border-radius: var(--r-xs);
@@ -1335,6 +1370,18 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sig-scene-status {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.sig-scene-status > span:nth-child(2) {
+  white-space: normal;
+}
+
+.sig-scene-status > span:nth-child(n + 3) {
+  overflow-wrap: anywhere;
 }
 
 .smart-nr-rx-advice {

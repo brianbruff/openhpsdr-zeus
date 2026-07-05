@@ -23,6 +23,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { digitalPluginBase } from '../api/digital-plugin';
 import { useFt8Store, type Ft8Row } from '../state/ft8-store';
+import { useFt8TxStore } from '../state/ft8-tx-store';
 import { Ft8TxController, type Ft8TxBehavior } from './ft8-tx-controller';
 import { parseFt8Message } from './ft8-message';
 import type { DigitalQsoMode, NewQsoOpts, QsoState, Slot } from './ft8-sequencer';
@@ -148,7 +149,11 @@ export interface UseFt8TxRunnerOpts {
   /** Live behaviour preferences (auto-sequence / disable-after-73 / no-reply
    *  limit / ack token). Applied live whenever they change. */
   behavior?: Ft8TxBehavior;
+  /** Override fetch (tests). Defaults to global fetch. */
+  fetchFn?: typeof fetch;
 }
+
+const ARM_RECONCILE_GRACE_MS = 5_000;
 
 /**
  * Owns the per-slot RX→TX window timing: polls for each UTC slot boundary and,
@@ -203,7 +208,7 @@ export function beaconDisarm(): void {
  * per slot. Returns a reactive view + bound actions for the TX-control cluster.
  */
 export function useFt8TxRunner(opts: UseFt8TxRunnerOpts): Ft8TxRunnerView {
-  const { myCall, myGrid, mode, active, band, onLogQso, seed, seedReady, behavior } = opts;
+  const { myCall, myGrid, mode, active, band, onLogQso, seed, seedReady, behavior, fetchFn } = opts;
 
   // One controller for the lifetime of the workspace. Identity (call/grid) and
   // mode are pushed in via setters so an in-flight QSO survives a re-render.
@@ -215,6 +220,7 @@ export function useFt8TxRunner(opts: UseFt8TxRunnerOpts): Ft8TxRunnerView {
       mode,
       onLogQso,
       audioHz: seed?.audioHz,
+      fetchFn,
       ...behavior,
     });
     // Seed persisted defaults exactly once. Order matters: set the offset (via
@@ -228,6 +234,7 @@ export function useFt8TxRunner(opts: UseFt8TxRunnerOpts): Ft8TxRunnerView {
 
   const [view, setView] = useState(() => snapshot(ctrl));
   const sync = () => setView(snapshot(ctrl));
+  const lastLocalArmAtMs = useRef(Number.NEGATIVE_INFINITY);
 
   // Live behaviour prefs (auto-sequence / disable-after-73 / no-reply / ack):
   // re-apply whenever any change, so a Settings edit takes effect mid-session.
@@ -285,11 +292,91 @@ export function useFt8TxRunner(opts: UseFt8TxRunnerOpts): Ft8TxRunnerView {
   // closes. Without this, navigating away while armed leaves the radio auto-
   // sequencing until only the watchdog (minutes later) catches it.
   useEffect(() => {
-    window.addEventListener('pagehide', beaconDisarm);
+    const beaconDisarmIfArmed = () => {
+      if (ctrl.getState().enableTx) beaconDisarm();
+    };
+    window.addEventListener('pagehide', beaconDisarmIfArmed);
     return () => {
-      window.removeEventListener('pagehide', beaconDisarm);
-      if (ctrl.getState().enableTx) ctrl.disableTx();
-      beaconDisarm();
+      window.removeEventListener('pagehide', beaconDisarmIfArmed);
+      if (ctrl.getState().enableTx) {
+        ctrl.disableTx();
+        beaconDisarm();
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Backend keyer status is authoritative across duplicate FT8 windows. If a
+  // true armed state drops to false somewhere else, mirror that disarm locally
+  // unless it is the expected echo race just after this runner posted arm=true.
+  useEffect(() => {
+    let previousArmed: boolean | null = useFt8TxStore.getState().status?.armed ?? null;
+    let pendingRecheck: ReturnType<typeof setTimeout> | null = null;
+
+    const clearPendingRecheck = () => {
+      if (pendingRecheck == null) return;
+      clearTimeout(pendingRecheck);
+      pendingRecheck = null;
+    };
+
+    const forceLocalDisarmAndSync = () => {
+      clearPendingRecheck();
+      ctrl.forceLocalDisarm();
+      sync();
+    };
+
+    const scheduleDisarmRecheck = (armAtMs: number) => {
+      clearPendingRecheck();
+      const delayMs = Math.max(0, ARM_RECONCILE_GRACE_MS + 1 - (Date.now() - armAtMs));
+      pendingRecheck = setTimeout(() => {
+        pendingRecheck = null;
+        if (lastLocalArmAtMs.current !== armAtMs) return;
+        if (Date.now() - armAtMs <= ARM_RECONCILE_GRACE_MS) {
+          scheduleDisarmRecheck(armAtMs);
+          return;
+        }
+        if (useFt8TxStore.getState().status?.armed !== false) return;
+        if (!ctrl.getState().enableTx) return;
+        ctrl.forceLocalDisarm();
+        sync();
+      }, delayMs);
+    };
+
+    const reconcileDisarmedStatus = () => {
+      if (!ctrl.getState().enableTx) {
+        clearPendingRecheck();
+        return;
+      }
+      const armAtMs = lastLocalArmAtMs.current;
+      if (Date.now() - armAtMs <= ARM_RECONCILE_GRACE_MS) {
+        scheduleDisarmRecheck(armAtMs);
+        return;
+      }
+      forceLocalDisarmAndSync();
+    };
+
+    const unsubscribe = useFt8TxStore.subscribe((state) => {
+      const status = state.status;
+      if (status == null) {
+        previousArmed = null;
+        return;
+      }
+
+      const armed = status.armed;
+      const resumedFromNull = previousArmed === null;
+      const fellDisarmed = previousArmed === true && !armed;
+      previousArmed = armed;
+      if (armed) {
+        clearPendingRecheck();
+        return;
+      }
+      if (!fellDisarmed && !resumedFromNull) return;
+
+      reconcileDisarmedStatus();
+    });
+    return () => {
+      unsubscribe();
+      clearPendingRecheck();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -310,6 +397,7 @@ export function useFt8TxRunner(opts: UseFt8TxRunnerOpts): Ft8TxRunnerView {
   return {
     ...view,
     enableTx: () => {
+      lastLocalArmAtMs.current = Date.now();
       ctrl.enableTx();
       sync();
     },

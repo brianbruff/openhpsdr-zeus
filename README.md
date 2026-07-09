@@ -1,3 +1,8 @@
+# Status
+I'm no longer involved in this project or decisions of the current contributors as of June 26.
+this repo is now being archived.
+
+
 # OpenHPSDR Zeus — The King of SDRs
 
 ![OpenHPSDR Zeus](docs/pics/zeus1.webp)

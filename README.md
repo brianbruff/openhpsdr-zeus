@@ -1,5 +1,5 @@
 # Status
-I'm no longer involved in this project or decisions of the current contributors as of June 26.
+Preserving the open source element of this project the code will remain for reference.
 
 
 
